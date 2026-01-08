@@ -60,6 +60,36 @@ const customerSchema = new mongoose.Schema({
   kraPin: { type: String },
   agreementAcceptance: { type: Boolean, default: false },
 
+     // 🔹 New Location Fields
+    market: {
+      type: String,
+      trim: true,
+    },
+
+    town: {
+      type: String,
+      trim: true,
+    },
+
+    // 🔹 Borrower Status
+    status: {
+      type: String,
+      enum: ["Draft", "Active", "Inactive"],
+      default: "Draft",
+    },
+    referredByBorrowerId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Customer",
+  default: null
+},
+referralSource: {
+  type: String,
+  enum: ["existing_borrower", "advertisement", "direct"],
+  required: true
+},
+
+
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   isDeleted: { type: Boolean, default: false },

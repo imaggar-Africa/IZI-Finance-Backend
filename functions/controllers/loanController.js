@@ -11,7 +11,7 @@ const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 // Track loan repayment and send SMS
 const AgentCommission = require('../models/AgentCommission');
-
+const { recalculateCreditScore } = require("../utils/creditScore");
 // Helper: retry function for transient transaction errors
 const runTransactionWithRetry = async (txnFunc, session, maxRetries = 3) => {
   let attempt = 0;
@@ -30,22 +30,27 @@ const runTransactionWithRetry = async (txnFunc, session, maxRetries = 3) => {
   throw new Error("Transaction failed after retries");
 };
 
+// Track loan repayment (INITIATE STK PUSH)
+// Track loan repayment
 exports.trackRepayment = async (req, res) => {
   try {
     const borrowerId = req.borrower._id;
     const { loanId, amount } = req.body;
 
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ message: "Amount is required and must be greater than zero" });
+    /* ---------------- VALIDATION ---------------- */
+    if (!loanId || !amount || amount <= 0) {
+      return res.status(400).json({
+        message: "loanId and valid amount are required"
+      });
     }
 
-    // Find borrower
+    /* ---------------- BORROWER ---------------- */
     const borrower = await Customer.findById(borrowerId);
-    if (!borrower) {
+    if (!borrower || borrower.isDeleted) {
       return res.status(404).json({ message: "Borrower not found" });
     }
 
-    // Find active loan
+    /* ---------------- LOAN ---------------- */
     const loan = await Loan.findOne({
       _id: loanId,
       borrowerId,
@@ -53,66 +58,70 @@ exports.trackRepayment = async (req, res) => {
     });
 
     if (!loan) {
-      return res.status(404).json({ message: "Loan not found or already fully repaid" });
-    }
-
-    // Normalize phone — preparing for STK push
-    const rawPhone = borrower.phone || borrower.phoneNumber;
-    const customerPhone = normalizeToE164(rawPhone, "KE");
-
-    if (!customerPhone) {
-      return res.status(400).json({ message: "Invalid phone number" });
-    }
-
-    // Prevent overpayment
-    if (amount > loan.balance) {
-      return res.status(400).json({
-        message: `Repayment exceeds balance. Remaining balance: KES ${loan.balance}.`
+      return res.status(404).json({
+        message: "Loan not found or already fully paid"
       });
     }
 
-    // Create reference for MPESA statement
-    const accountRef = `${borrower.fullName}-${borrower.idNumber}-${borrower.phone}-Loan-${loan._id}`;
+    if (amount > loan.balance) {
+      return res.status(400).json({
+        message: `Amount exceeds outstanding balance (${loan.balance})`
+      });
+    }
 
-    // Create pending transaction
-    const transaction = new Transaction({
+    /* ---------------- PHONE ---------------- */
+    const normalizedPhone = normalizeToE164(borrower.phone, "KE");
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "Invalid borrower phone number" });
+    }
+
+    /* ---------------- TRANSACTION (PENDING) ---------------- */
+    const transaction = await Transaction.create({
       type: "repayment",
       userId: borrowerId,
       userModel: "Customer",
       loanId: loan._id,
-      clientId: loan.clientId,
-      phone: customerPhone,
       amount,
-      accountReference: accountRef,
       balanceBefore: loan.balance,
-      balanceAfter: loan.balance,
+      balanceAfter: loan.balance, // updated after callback
+      phone: normalizedPhone,
       status: "pending"
     });
 
-    await transaction.save();
+    /* ---------------- STK PUSH ---------------- */
+    const accountReference = `Loan-${loan._id}`;
+    const stkResponse = await initiateSTKPush(
+      normalizedPhone,
+      amount,
+      accountReference
+    );
 
-    /* -------------------------------------------------------
-       LIVE MODE ONLY - Always STK — callback will finalize
-    ------------------------------------------------------- */
-
-    const stkResponse = await initiateSTKPush(customerPhone, amount, accountRef);
+    if (!stkResponse?.CheckoutRequestID) {
+      return res.status(500).json({
+        message: "Failed to initiate STK push"
+      });
+    }
 
     // Save CheckoutRequestID for callback matching
     transaction.checkoutRequestID = stkResponse.CheckoutRequestID;
     await transaction.save();
 
+    /* ---------------- RESPONSE ---------------- */
     return res.status(200).json({
-      message: "Repayment initiated. Complete the payment on your phone.",
-      stkResponse,
-      transaction
+      success: true,
+      message: "STK Push sent. Complete payment on your phone.",
+      checkoutRequestID: stkResponse.CheckoutRequestID,
+      transactionId: transaction._id
     });
 
   } catch (error) {
-    console.error("❌ Error tracking repayment:", error);
-    return res.status(500).json({ message: error.message });
+    console.error("❌ trackRepayment error:", error);
+    return res.status(500).json({
+      message: "Failed to initiate repayment",
+      error: error.message
+    });
   }
 };
-
 
 // Issue a new loan with M-Pesa disbursement
 // Issue Loan
@@ -308,7 +317,7 @@ await Notification.create(
 };
 
 // GET borrower loans (excluding fully paid) by phone
-exports.getActiveLoansByPhone = async (req, res) => {
+exports.  getActiveLoansByPhone = async (req, res) => {
   try {
     const borrower = req.borrower; // Already from token
 
@@ -336,18 +345,21 @@ exports.getActiveLoansByPhone = async (req, res) => {
 // Get fully paid loans
 exports.getFullyPaidLoans = async (req, res) => {
   try {
-    const fullyPaidLoans = await Loan.find({ status: "fully paid" }) .populate('borrowerId')
-    .sort({ paidDate: -1 });
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      status: "fully paid"
+    }).populate("borrowerId");
 
     res.status(200).json({
       message: "Fully paid loans retrieved successfully",
-      loans: fullyPaidLoans,
+      loans
     });
   } catch (error) {
     console.error("Error fetching fully paid loans:", error);
     res.status(500).json({ message: "Error fetching fully paid loans" });
   }
 };
+
 
 
 
@@ -449,15 +461,18 @@ exports.getFullyPaidLoansByCustomer = async (req, res) => {
 
 exports.getOutstandingLoans = async (req, res) => {
   try {
-    const outstandingLoans = await Loan.find({ status: 'active' })
+    const outstandingLoans = await Loan.find({
+      loanRequestStatus: "approved",
+      status: "active"
+    }).populate("borrowerId");
 
-      .populate('borrowerId'); // Get complete borrower object;
-    res.json(outstandingLoans);
+    res.status(200).json(outstandingLoans);
   } catch (error) {
-    console.error('Error fetching outstanding loans:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error fetching outstanding loans:", error);
+    res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 // ----------------------------
@@ -465,21 +480,14 @@ exports.getOutstandingLoans = async (req, res) => {
 // ----------------------------
 exports.getBorrowersWithLoans = async (req, res) => {
   try {
-    // 1️⃣ Get all ACTIVE + OVERDUE loans
     const loans = await Loan.find({
-      status: { $in: ["active", "overdue"] }
-    }).populate("borrowerId"); // Populate borrower details
+      status: "active",
+      loanRequestStatus: "approved"
+    }).populate("borrowerId");
 
-    if (!loans.length) {
-      return res.status(404).json({
-        message: "No active or overdue loans found"
-      });
-    }
-
-    // 2️⃣ Group loans by borrowerId
     const borrowerMap = {};
 
-    loans.forEach((loan) => {
+    loans.forEach(loan => {
       const borrowerId = loan.borrowerId._id.toString();
 
       if (!borrowerMap[borrowerId]) {
@@ -490,29 +498,49 @@ exports.getBorrowersWithLoans = async (req, res) => {
         };
       }
 
-      borrowerMap[borrowerId].loans.push(loan);
       borrowerMap[borrowerId].loanCount++;
+      borrowerMap[borrowerId].loans.push(loan);
     });
 
-    // 3️⃣ Convert object → array
-    const response = Object.values(borrowerMap);
+    const borrowersWithLoans = Object.values(borrowerMap);
+
+    const now = new Date();
+    let totalLoanAmount = 0;
+    let totalCollectedAmount = 0;
+    let totalActiveLoanCount = 0;
+    let totalOverdueLoanCount = 0;
+
+    borrowersWithLoans.forEach(item => {
+      item.loans.forEach(loan => {
+        totalLoanAmount += loan.amount || 0;
+        totalCollectedAmount += loan.repaidAmount || 0;
+
+        if (loan.status === "active") {
+          totalActiveLoanCount++;
+          if (new Date(loan.dueDate) < now) {
+            totalOverdueLoanCount++;
+          }
+        }
+      });
+    });
 
     res.status(200).json({
       success: true,
-      totalBorrowers: response.length,
-      data: response
+      totalBorrowers: borrowersWithLoans.length,
+      summary: {
+        totalLoanAmount,
+        totalCollectedAmount,
+        totalActiveLoanCount,
+        totalOverdueLoanCount
+      },
+      data: borrowersWithLoans
     });
 
   } catch (error) {
-    console.error("❌ Error fetching borrowers with loans:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error"
-    });
+    console.error("Error fetching borrowers with loans:", error);
+    res.status(500).json({ message: "Server error" });
   }
 };
-
-
 
 // ----------------------------
 // API 2: Get All Loans for a Borrower
@@ -521,30 +549,36 @@ exports.getLoansByBorrower = async (req, res) => {
   try {
     const { borrowerId } = req.params;
 
-    // Step 1: Check borrower exists
-    const borrower = await Customer.findById(borrowerId);
+    if (!mongoose.Types.ObjectId.isValid(borrowerId)) {
+      return res.status(400).json({ message: "Invalid borrowerId" });
+    }
+
+    const borrower = await Customer.findById(borrowerId).select(
+      "fullName phone idNumber"
+    );
+
     if (!borrower) {
       return res.status(404).json({ message: "Borrower not found" });
     }
 
-    // Step 2: Get active + overdue loans
     const loans = await Loan.find({
-      borrowerId,
+      borrowerId: new mongoose.Types.ObjectId(borrowerId),
+      loanRequestStatus: "approved", // ✅ CRITICAL
       status: { $in: ["active", "overdue"] }
     }).sort({ createdAt: -1 });
 
-    res.status(200).json({
+    return res.status(200).json({
+      success: true,
       borrower,
-      loans,
-      totalLoans: loans.length
+      totalLoans: loans.length,
+      loans
     });
 
   } catch (error) {
-    console.error("Error fetching loans:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Error fetching loans:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
 
 
 // --- Agent creates a loan request ---
@@ -915,3 +949,98 @@ exports.getActiveLoansByAgent = asyncHandler(async (req, res) => {
     loans,
   });
 });
+
+// ----------------------------
+// MPESA STK REPAYMENT CALLBACK
+// ----------------------------
+exports.stkRepaymentCallback = async (req, res) => {
+  try {
+    const callback = req.body?.Body?.stkCallback;
+    if (!callback) return res.status(200).json({});
+
+    const { CheckoutRequestID, ResultCode } = callback;
+
+    // ❌ Payment failed
+    if (ResultCode !== 0) {
+      return res.status(200).json({ message: "Payment failed" });
+    }
+
+    // 1️⃣ Find transaction
+    const transaction = await Transaction.findOne({
+      checkoutRequestID: CheckoutRequestID
+    });
+
+    if (!transaction) return res.status(404).json({});
+
+    // 2️⃣ Find loan
+    const loan = await Loan.findById(transaction.loanId);
+    if (!loan) return res.status(404).json({});
+
+    const today = new Date();
+
+    // 3️⃣ Expected payment date logic
+    const installmentIndex = loan.repayments.length + 1;
+    const expectedPaymentDate = new Date(
+      loan.issueDate.getTime() +
+      installmentIndex * 24 * 60 * 60 * 1000
+    );
+
+    const wasPaymentLate = today > expectedPaymentDate;
+    const daysLate = wasPaymentLate
+      ? Math.ceil((today - expectedPaymentDate) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    // 4️⃣ Credit score calculation (BASE SCORE = 500)
+    const { scoreDelta, newScore } = await recalculateCreditScore({
+      currentScore: loan.creditScoreAfter || 500,
+      wasPaymentLate,
+      daysLate
+    });
+
+    // 5️⃣ Update loan amounts
+    loan.repaidAmount += transaction.amount;
+    loan.balance -= transaction.amount;
+    loan.creditScoreAfter = newScore;
+
+    // 6️⃣ Push repayment record
+    loan.repayments.push({
+      transactionId: transaction._id,
+      loanId: loan._id,
+      borrowerId: loan.borrowerId,
+      amount: transaction.amount,
+      date: today,
+      expectedPaymentDate,
+      wasPaymentLate,
+      daysLate,
+      creditScoreDelta: scoreDelta
+    });
+
+    // 7️⃣ Update loan status + default logic
+    if (loan.balance <= 0) {
+      loan.status = "fully paid";
+      loan.isDefaulted = false;
+    } else if (wasPaymentLate) {
+      loan.status = "overdue";
+      loan.isDefaulted = daysLate > 30; // ✅ default after 30 days
+    } else {
+      loan.status = "active";
+      loan.isDefaulted = false;
+    }
+
+    // 8️⃣ Update transaction
+    transaction.status = "successful";
+    transaction.balanceAfter = loan.balance;
+
+    await loan.save();
+    await transaction.save();
+
+    return res.status(200).json({ success: true });
+
+  } catch (error) {
+    console.error("❌ STK CALLBACK ERROR:", error);
+    return res.status(500).json({});
+  }
+};
+
+
+

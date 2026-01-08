@@ -92,6 +92,19 @@ app.use("/api/agent", require("./routes/agentRoutes")); // optional
   app.use("/api/lender", jsonParser, require("./routes/lenderRoutes"));
   app.use("/api", jsonParser, require("./routes/activityRoutes"));
   app.use("/api/suggestions", jsonParser, require("./routes/suggestionRoutes"));
+app.use("/api/borrowers", jsonParser, require("./routes/borrowerRoutes"));
+app.use("/api/borrowers",jsonParser,require("./routes/borrowerBusinessProfileRoutes"));
+app.use(
+  "/api/borrowers/next-of-kin",
+  jsonParser,
+  require("./routes/nextOfKinRoutes")
+);
+
+app.use(
+  "/api/guarantor",
+  jsonParser,
+  require("./routes/guarantorRoutes")
+);
 
 // Debug route to confirm secrets loaded
 app.use("/debug", require("./routes/debug"));

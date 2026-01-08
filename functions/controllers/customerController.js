@@ -120,6 +120,8 @@ exports.registerCustomer = async (req, res) => {
       agreementAcceptance,
       preferences,
       savingsBalance,
+      referralSource,
+      referredByBorrowerId
     } = req.body;
 
     // -----------------------------
@@ -130,6 +132,30 @@ exports.registerCustomer = async (req, res) => {
         message: "Full name, phone, ID number and Live Photo are required.",
       });
     }
+
+    // -----------------------------
+// Referral validation
+// -----------------------------
+if (!referralSource) {
+  return res.status(400).json({
+    message: "referralSource is required"
+  });
+}
+
+if (referralSource === "existing_borrower") {
+  if (!referredByBorrowerId) {
+    return res.status(400).json({
+      message: "referredByBorrowerId is required for existing borrower referral"
+    });
+  }
+
+  const referredBorrower = await Borrower.findById(referredByBorrowerId);
+  if (!referredBorrower) {
+    return res.status(404).json({
+      message: "Referred borrower not found"
+    });
+  }
+}
 
     // -----------------------------
     // Check duplicates
@@ -186,6 +212,10 @@ exports.registerCustomer = async (req, res) => {
       agreementAcceptance,
       preferences: preferences || {},
       savingsBalance: savingsBalance || 0,
+      referralSource,
+      referredByBorrowerId: referralSource === "existing_borrower"
+    ? referredByBorrowerId
+    : null,
     });
 
     await borrower.save();

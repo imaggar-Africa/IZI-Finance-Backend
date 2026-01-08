@@ -11,4 +11,6 @@ const { protect } = require("../middleware/authMiddleware");
 
 // GET all borrowers
 router.get("/findAll", protect,borrowerController.getAllBorrowers);
+router.put("/activate/:borrowerId", borrowerController.activateBorrower);
+
 module.exports = router;

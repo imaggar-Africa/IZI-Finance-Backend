@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const BorrowerProfile = require("../models/BorrowerProfile"); // Use BorrowerProfile model
+const Customer = require("../models/customer"); 
 const OTP = require("../models/OTP");
 
 // Borrower registration
@@ -45,19 +45,19 @@ exports.registerBorrower = async (req, res) => {
     const livePhotoUrl = await saveFileLocally("livePhoto", "livePhoto");
 
     // 5️⃣ Check if phone already exists
-    const phoneExists = await BorrowerProfile.findOne({ phone });
+    const phoneExists = await Customer.findOne({ phone });
     if (phoneExists) {
       return res.status(409).json({ error: "Phone number already registered" });
     }
 
     // 6️⃣ Check if ID number already exists
-    const idExists = await BorrowerProfile.findOne({ idNumber });
+    const idExists = await Customer.findOne({ idNumber });
     if (idExists) {
       return res.status(409).json({ error: "ID number already registered" });
     }
 
     // 7️⃣ Save borrower profile to DB and mark as verified
-    const profile = new BorrowerProfile({
+    const profile = new Customer({
       userId,
       fullName,
       phone,
@@ -87,7 +87,7 @@ exports.registerBorrower = async (req, res) => {
 
 exports.getAllBorrowers = async (req, res) => {
   try {
-    const borrowers = await BorrowerProfile.find().sort({ createdAt: -1 });
+    const borrowers = await Customer.find().sort({ createdAt: -1 });
 
     res.status(200).json({
       count: borrowers.length,
@@ -96,5 +96,37 @@ exports.getAllBorrowers = async (req, res) => {
   } catch (error) {
     console.error("Error fetching borrowers:", error);
     res.status(500).json({ error: "Error fetching borrower profiles" });
+  }
+};
+
+exports.activateBorrower = async (req, res) => {
+  try {
+    const { borrowerId } = req.params;
+    const { market, town } = req.body;
+
+    if (!market || !town) {
+      return res.status(400).json({
+        error: "Market and Town are mandatory to activate borrower",
+      });
+    }
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ error: "Borrower not found" });
+    }
+
+    borrower.market = market.trim();
+    borrower.town = town.trim();
+    borrower.status = "Active";
+
+    await borrower.save();
+
+    res.json({
+      message: "Borrower activated successfully",
+      borrower,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
   }
 };

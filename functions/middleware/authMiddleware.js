@@ -64,6 +64,8 @@ const borrowerProtect = asyncHandler(async (req, res, next) => {
     try {
       token = req.headers.authorization.split(" ")[1];
 const decoded = jwt.verify(token, JWT_ACCESS_SECRET.value());
+console.log("JWT_ACCESS_SECRET:", JWT_ACCESS_SECRET.value());
+
 
       const borrowerId = decoded.sub || decoded.borrowerId || decoded.id;
       if (!borrowerId) {

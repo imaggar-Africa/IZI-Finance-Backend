@@ -32,6 +32,11 @@ router.get("/borrowers/active-overdue", loanController.getBorrowersWithLoans);
 router.get('/outstanding/:borrowerId',protect, loanController.getLoansByBorrower);
 
 
+router.post(
+  "/repayment/callback",
+  loanController.stkRepaymentCallback
+);
+
 
 router.post("/request-loan",protect,authorizeRoles("agent"),loanController.requestLoan);
 
