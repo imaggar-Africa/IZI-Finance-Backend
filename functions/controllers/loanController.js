@@ -487,6 +487,20 @@ exports.getBorrowersWithLoans = async (req, res) => {
 
     const borrowerMap = {};
 
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    let totalLoanAmount = 0;
+    let totalCollectedAmount = 0;
+    let totalActiveLoanCount = 0;
+    let totalOverdueLoanCount = 0;
+
+    const paidToday = [];
+    const notPaidToday = [];
+
     loans.forEach(loan => {
       const borrowerId = loan.borrowerId._id.toString();
 
@@ -499,48 +513,87 @@ exports.getBorrowersWithLoans = async (req, res) => {
       }
 
       borrowerMap[borrowerId].loanCount++;
-      borrowerMap[borrowerId].loans.push(loan);
-    });
+      totalActiveLoanCount++;
 
-    const borrowersWithLoans = Object.values(borrowerMap);
+      totalLoanAmount += loan.amount || 0;
+      totalCollectedAmount += loan.repaidAmount || 0;
 
-    const now = new Date();
-    let totalLoanAmount = 0;
-    let totalCollectedAmount = 0;
-    let totalActiveLoanCount = 0;
-    let totalOverdueLoanCount = 0;
+      /* ---------------- LAST PAYMENT ---------------- */
+      let lastPaymentDate = null;
+      let paidTodayFlag = false;
 
-    borrowersWithLoans.forEach(item => {
-      item.loans.forEach(loan => {
-        totalLoanAmount += loan.amount || 0;
-        totalCollectedAmount += loan.repaidAmount || 0;
+      if (Array.isArray(loan.repayments) && loan.repayments.length > 0) {
+        const lastPayment = [...loan.repayments].sort(
+          (a, b) => new Date(b.date) - new Date(a.date)
+        )[0];
 
-        if (loan.status === "active") {
-          totalActiveLoanCount++;
-          if (new Date(loan.dueDate) < now) {
-            totalOverdueLoanCount++;
-          }
-        }
-      });
+        lastPaymentDate = lastPayment.date;
+
+        paidTodayFlag =
+          new Date(lastPayment.date) >= startOfToday &&
+          new Date(lastPayment.date) <= endOfToday;
+      }
+
+      /* ---------------- EXPECTED DAILY AMOUNT ---------------- */
+      const expectedDailyAmount = loan.dailyRepayment || 0;
+
+      /* ---------------- STATUS BADGE ---------------- */
+      const isOverdue = new Date(loan.dueDate) < new Date();
+      if (isOverdue) totalOverdueLoanCount++;
+
+      const statusBadge =
+        isOverdue || !paidTodayFlag ? "At Risk" : "On Track";
+
+      /* ---------------- ENRICH LOAN OBJECT ---------------- */
+      const enrichedLoan = {
+        ...loan.toObject(),
+        expectedDailyAmount,
+        lastPaymentDate,
+        paidToday: paidTodayFlag,
+        statusBadge
+      };
+
+      borrowerMap[borrowerId].loans.push(enrichedLoan);
+
+      /* ---------------- TAB ROWS ---------------- */
+      const tabRow = {
+        borrowerName: loan.borrowerId.fullName,
+        loanId: loan._id,
+        expectedDailyAmount,
+        lastPaymentDate,
+        statusBadge
+      };
+
+      if (paidTodayFlag) {
+        paidToday.push(tabRow);
+      } else {
+        notPaidToday.push(tabRow);
+      }
     });
 
     res.status(200).json({
       success: true,
-      totalBorrowers: borrowersWithLoans.length,
+      totalBorrowers: Object.keys(borrowerMap).length,
       summary: {
         totalLoanAmount,
         totalCollectedAmount,
         totalActiveLoanCount,
         totalOverdueLoanCount
       },
-      data: borrowersWithLoans
+      data: Object.values(borrowerMap), // FULL ORIGINAL DATA (UNCHANGED)
+      tabs: {
+        paidToday,
+        notPaidToday
+      }
     });
-
   } catch (error) {
     console.error("Error fetching borrowers with loans:", error);
     res.status(500).json({ message: "Server error" });
   }
 };
+
+
+
 
 // ----------------------------
 // API 2: Get All Loans for a Borrower
