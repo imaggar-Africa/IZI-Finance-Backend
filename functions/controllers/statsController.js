@@ -3,78 +3,84 @@ const Loan = require("../models/Loan")
 // ✅ Fetch real-time stats from Loan collection
 exports.getStats = async (req, res) => {
   try {
-    /* ----------------------------------------------------
-     * DATE CALCULATIONS
-     * -------------------------------------------------- */
+    /* -------------------------------------------------
+       🟢 STEP 1: GLOBAL STATS (FROM DB)
+    ------------------------------------------------- */
+    const stats = await Stats.findOne();
+
+    /* -------------------------------------------------
+       🟢 STEP 2: DATE RANGES
+    ------------------------------------------------- */
     const now = new Date();
 
-    const startOfToday = new Date();
+    const startOfToday = new Date(now);
     startOfToday.setHours(0, 0, 0, 0);
 
-    // Last 7 days (including today)
-    const last7DaysStart = new Date();
-    last7DaysStart.setDate(now.getDate() - 6);
-    last7DaysStart.setHours(0, 0, 0, 0);
+    const sevenDaysAgo = new Date(startOfToday);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    // This month
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // Last 3 months (rolling)
-    const last3MonthsStart = new Date();
-    last3MonthsStart.setMonth(now.getMonth() - 2);
-    last3MonthsStart.setDate(1);
-    last3MonthsStart.setHours(0, 0, 0, 0);
+    const threeMonthsAgo = new Date(startOfMonth);
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-    /* ----------------------------------------------------
-     * GLOBAL LOAN COUNTS (ISSUED)
-     * -------------------------------------------------- */
-    const totalLoansIssued = await Loan.countDocuments();
-    const activeLoans = await Loan.countDocuments({ status: "active" });
-    const overdueLoans = await Loan.countDocuments({ status: "overdue" });
-    const paidLoans = await Loan.countDocuments({ status: "fully paid" });
+    /* -------------------------------------------------
+       🆕 STEP 3: FETCH ISSUED LOAN DETAILS (LIVE)
+    ------------------------------------------------- */
+    const [
+      last7DaysLoans,
+      thisMonthLoans,
+      last3MonthsLoans
+    ] = await Promise.all([
+      Loan.find({
+        createdAt: { $gte: sevenDaysAgo },
+        loanRequestStatus: "approved"
+      })
+        .populate("borrowerId", "fullName phone")
+        .sort({ createdAt: -1 }),
 
-    /* ----------------------------------------------------
-     * HELPER: ISSUED LOANS BY PERIOD
-     * -------------------------------------------------- */
-    const buildIssuedLoanStats = async (startDate) => {
-      const loans = await Loan.find({
-        createdAt: { $gte: startDate }
-      }).populate("borrowerId");
+      Loan.find({
+        createdAt: { $gte: startOfMonth },
+        loanRequestStatus: "approved"
+      })
+        .populate("borrowerId", "fullName phone")
+        .sort({ createdAt: -1 }),
 
-      return {
-        count: loans.length,
-        totalAmount: loans.reduce((sum, l) => sum + (l.amount || 0), 0),
-        loans
-      };
+      Loan.find({
+        createdAt: { $gte: threeMonthsAgo },
+        loanRequestStatus: "approved"
+      })
+        .populate("borrowerId", "fullName phone")
+        .sort({ createdAt: -1 })
+    ]);
+
+    /* -------------------------------------------------
+       🆕 STEP 4: FORMAT ISSUED LOANS
+    ------------------------------------------------- */
+    const issuedLoans = {
+      last7Days: {
+        count: last7DaysLoans.length,
+        totalAmount: last7DaysLoans.reduce((s, l) => s + (l.amount || 0), 0),
+        loans: last7DaysLoans
+      },
+      thisMonth: {
+        count: thisMonthLoans.length,
+        totalAmount: thisMonthLoans.reduce((s, l) => s + (l.amount || 0), 0),
+        loans: thisMonthLoans
+      },
+      last3Months: {
+        count: last3MonthsLoans.length,
+        totalAmount: last3MonthsLoans.reduce((s, l) => s + (l.amount || 0), 0),
+        loans: last3MonthsLoans
+      }
     };
 
-    /* ----------------------------------------------------
-     * PERIOD-BASED ISSUED LOANS
-     * -------------------------------------------------- */
-    const last7DaysLoansIssued = await buildIssuedLoanStats(last7DaysStart);
-
-    const thisMonthLoansIssued = await buildIssuedLoanStats(startOfMonth);
-
-    const last3MonthsLoansIssued = await buildIssuedLoanStats(last3MonthsStart);
-
-    /* ----------------------------------------------------
-     * RESPONSE (CLEAN & FOCUSED)
-     * -------------------------------------------------- */
-    res.json({
-      success: true,
-
-      totals: {
-        totalLoansIssued,
-        activeLoans,
-        overdueLoans,
-        paidLoans
-      },
-
-      issuedLoans: {
-        last7Days: last7DaysLoansIssued,
-        thisMonth: thisMonthLoansIssued,
-        last3Months: last3MonthsLoansIssued
-      }
+    /* -------------------------------------------------
+       ✅ STEP 5: FINAL RESPONSE (MERGED)
+    ------------------------------------------------- */
+    res.status(200).json({
+      ...(stats ? stats.toObject() : {}),
+      issuedLoans
     });
 
   } catch (error) {
@@ -82,6 +88,9 @@ exports.getStats = async (req, res) => {
     res.status(500).json({ message: "Server error", error });
   }
 };
+
+
+
 
 
 
