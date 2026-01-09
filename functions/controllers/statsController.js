@@ -3,102 +3,78 @@ const Loan = require("../models/Loan")
 // ✅ Fetch real-time stats from Loan collection
 exports.getStats = async (req, res) => {
   try {
-    // 🟢 Step 1: Count loan details (global stats)
+    /* ----------------------------------------------------
+     * DATE CALCULATIONS
+     * -------------------------------------------------- */
+    const now = new Date();
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // Last 7 days (including today)
+    const last7DaysStart = new Date();
+    last7DaysStart.setDate(now.getDate() - 6);
+    last7DaysStart.setHours(0, 0, 0, 0);
+
+    // This month
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // Last 3 months (rolling)
+    const last3MonthsStart = new Date();
+    last3MonthsStart.setMonth(now.getMonth() - 2);
+    last3MonthsStart.setDate(1);
+    last3MonthsStart.setHours(0, 0, 0, 0);
+
+    /* ----------------------------------------------------
+     * GLOBAL LOAN COUNTS (ISSUED)
+     * -------------------------------------------------- */
     const totalLoansIssued = await Loan.countDocuments();
     const activeLoans = await Loan.countDocuments({ status: "active" });
     const overdueLoans = await Loan.countDocuments({ status: "overdue" });
     const paidLoans = await Loan.countDocuments({ status: "fully paid" });
 
-    // 🟢 Step 2: Sum repayments
-    const repayments = await Loan.aggregate([
-      { $match: { status: "fully paid" } },
-      { $group: { _id: null, total: { $sum: "$totalRepayment" } } }
-    ]);
-    const totalRepayments = repayments.length > 0 ? repayments[0].total : 0;
+    /* ----------------------------------------------------
+     * HELPER: ISSUED LOANS BY PERIOD
+     * -------------------------------------------------- */
+    const buildIssuedLoanStats = async (startDate) => {
+      const loans = await Loan.find({
+        createdAt: { $gte: startDate }
+      }).populate("borrowerId");
 
-    // 🟢 Step 3: Loan trends (by month)
-    const loanTrends = await Loan.aggregate([
-      {
-        $group: {
-          _id: { $month: "$createdAt" },
-          value: { $sum: 1 }
-        }
-      },
-      { $sort: { "_id": 1 } }
-    ]);
+      return {
+        count: loans.length,
+        totalAmount: loans.reduce((sum, l) => sum + (l.amount || 0), 0),
+        loans
+      };
+    };
 
-    const months = [
-      "January","February","March","April","May","June",
-      "July","August","September","October","November","December"
-    ];
+    /* ----------------------------------------------------
+     * PERIOD-BASED ISSUED LOANS
+     * -------------------------------------------------- */
+    const last7DaysLoansIssued = await buildIssuedLoanStats(last7DaysStart);
 
-    const formattedTrends = loanTrends.map(item => ({
-      month: months[item._id - 1],
-      value: item.value
-    }));
+    const thisMonthLoansIssued = await buildIssuedLoanStats(startOfMonth);
 
-    // 🟢 Step 4: Lender profits calculation
-    const lenderProfits = await Loan.aggregate([
-      {
-        $group: {
-          _id: "$lenderId",
-          totalInterest: { $sum: "$interest" }
-        }
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "_id",
-          foreignField: "_id",
-          as: "lender"
-        }
-      },
-      { $unwind: "$lender" },
-      {
-        $project: {
-          lenderId: "$_id",
-          lenderName: "$lender.name",
-          totalInterest: 1,
-          _id: 0
-        }
-      }
-    ]);
+    const last3MonthsLoansIssued = await buildIssuedLoanStats(last3MonthsStart);
 
-    // 🟢 Step 5: Save or update stats in DB
-    let stats = await Stats.findOne();
-    if (!stats) {
-      stats = new Stats({
+    /* ----------------------------------------------------
+     * RESPONSE (CLEAN & FOCUSED)
+     * -------------------------------------------------- */
+    res.json({
+      success: true,
+
+      totals: {
         totalLoansIssued,
-        totalRepayments,
         activeLoans,
         overdueLoans,
-        paidLoans,
-        loanTrends: formattedTrends,
-        lenderProfits
-      });
-    } else {
-      stats.totalLoansIssued = totalLoansIssued;
-      stats.totalRepayments = totalRepayments;
-      stats.activeLoans = activeLoans;
-      stats.overdueLoans = overdueLoans;
-      stats.paidLoans = paidLoans;
-      stats.loanTrends = formattedTrends;
-      stats.lenderProfits = lenderProfits;
-    }
+        paidLoans
+      },
 
-    await stats.save();
-
-    // 🟢 Step 6: Return stats (with logged-in lender profit highlighted if needed)
-    let lenderProfit = null;
-    if (req.user) {
-      lenderProfit = lenderProfits.find(
-        lp => lp.lenderId.toString() === req.user._id.toString()
-      ) || { lenderId: req.user._id, lenderName: req.user.name, totalInterest: 0 };
-    }
-
-    res.json({
-      ...stats.toObject(),
-      lenderProfit
+      issuedLoans: {
+        last7Days: last7DaysLoansIssued,
+        thisMonth: thisMonthLoansIssued,
+        last3Months: last3MonthsLoansIssued
+      }
     });
 
   } catch (error) {
@@ -106,4 +82,6 @@ exports.getStats = async (req, res) => {
     res.status(500).json({ message: "Server error", error });
   }
 };
+
+
 
