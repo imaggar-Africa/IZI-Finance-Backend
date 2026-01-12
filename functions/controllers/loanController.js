@@ -621,24 +621,26 @@ exports.getLoansByBorrower = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     /* =====================================================
-       🆕 REPAYMENT SUMMARY (MISSED PAYMENTS REMOVED)
+       🆕 REPAYMENT SUMMARY
        ===================================================== */
 
-    let totalPaidAmount = 0;
-    let totalRemainingPayment = 0;
+    let paymentsMade = 0;
+    let totalPaymentAmount = 0;
+    let remainingPayment = 0;
     let lastPaymentDate = null;
 
     loans.forEach(loan => {
       const paid = loan.repaidAmount || 0;
       const due = loan.totalRepayment || 0;
 
-      totalPaidAmount += paid;
-
-      const remaining = Math.max(0, due - paid);
-      totalRemainingPayment += remaining;
+      remainingPayment += Math.max(0, due - paid);
 
       if (Array.isArray(loan.repayments)) {
+        paymentsMade += loan.repayments.length;
+
         loan.repayments.forEach(r => {
+          totalPaymentAmount += r.amount || 0;
+
           if (!lastPaymentDate || new Date(r.date) > new Date(lastPaymentDate)) {
             lastPaymentDate = r.date;
           }
@@ -646,9 +648,15 @@ exports.getLoansByBorrower = async (req, res) => {
       }
     });
 
+    const averagePayment =
+      paymentsMade > 0
+        ? Math.round(totalPaymentAmount / paymentsMade)
+        : 0;
+
     const repaymentSummary = {
-      totalPaidAmount,
-      remainingPayment: totalRemainingPayment,
+      paymentsMade,
+      averagePayment,
+      remainingPayment,
       lastPaymentDate
     };
 
