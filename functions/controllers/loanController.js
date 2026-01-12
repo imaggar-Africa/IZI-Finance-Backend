@@ -616,15 +616,61 @@ exports.getLoansByBorrower = async (req, res) => {
 
     const loans = await Loan.find({
       borrowerId: new mongoose.Types.ObjectId(borrowerId),
-      loanRequestStatus: "approved", // ✅ CRITICAL
+      loanRequestStatus: "approved",
       status: { $in: ["active", "overdue"] }
     }).sort({ createdAt: -1 });
 
+    /* =====================================================
+       🆕 ADDITION: REPAYMENT BEHAVIOR (NO EXISTING CODE TOUCHED)
+       ===================================================== */
+    let totalPayments = 0;
+    let totalPaidAmount = 0;
+    let lastPaymentDate = null;
+
+    loans.forEach(loan => {
+      if (Array.isArray(loan.repayments)) {
+        totalPayments += loan.repayments.length;
+
+        loan.repayments.forEach(r => {
+          totalPaidAmount += r.amount || 0;
+
+          if (!lastPaymentDate || new Date(r.date) > new Date(lastPaymentDate)) {
+            lastPaymentDate = r.date;
+          }
+        });
+      }
+    });
+
+    const averagePayment =
+      totalPayments > 0 ? Math.round(totalPaidAmount / totalPayments) : 0;
+
+    // Expected payments = days since loan started
+    let expectedPayments = 0;
+    loans.forEach(loan => {
+      const start = new Date(loan.createdAt);
+      const today = new Date();
+      const days = Math.floor((today - start) / (1000 * 60 * 60 * 24));
+      expectedPayments += Math.max(days, 0);
+    });
+
+    const missedPayments = Math.max(expectedPayments - totalPayments, 0);
+
+    const repaymentBehavior = {
+      paymentsMade: totalPayments,
+      missedPayments,
+      averagePayment,
+      lastPaymentDate
+    };
+
+    /* =====================================================
+       ✅ RESPONSE (UNCHANGED + ADDITION)
+       ===================================================== */
     return res.status(200).json({
       success: true,
       borrower,
       totalLoans: loans.length,
-      loans
+      loans,
+      repaymentBehavior
     });
 
   } catch (error) {
@@ -632,6 +678,7 @@ exports.getLoansByBorrower = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 // --- Agent creates a loan request ---
