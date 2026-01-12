@@ -2,6 +2,7 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const { sendMoneyToBorrower } = require("../utils/mpesa");
 const AgentModel = require("../models/AgentModel");
+const Loan = require("../models/Loan");
 
 const Customer = require("../models/customer.js")
 // Send money to borrower (B2C)
@@ -57,9 +58,7 @@ exports.getAllCustomersForLender = async (req, res) => {
     const agents = await AgentModel.find({ lenderId }).select("_id");
     const agentIds = agents.map(agent => agent._id);
 
-    // 2️⃣ Get all customers:
-    //    - registered directly by lender
-    //    - registered by lender's agents
+    // 2️⃣ Get all customers
     const customers = await Customer.find({
       isDeleted: false,
       $or: [
@@ -73,14 +72,40 @@ exports.getAllCustomersForLender = async (req, res) => {
         }
       ]
     })
-    .populate("assignedAgent", "name phone status")
-    .populate("agentId", "name phone status")
-    .sort({ createdAt: -1 });
+      .populate("assignedAgent", "name phone status")
+      .populate("agentId", "name phone status")
+      .sort({ createdAt: -1 });
+
+    // 3️⃣ Attach outstanding loan per borrower (ADD-ON ONLY)
+    const customersWithOutstandingLoans = await Promise.all(
+      customers.map(async (customer) => {
+        const outstandingLoan = await Loan.findOne({
+          borrowerId: customer._id,
+          loanRequestStatus: "approved",
+          status: { $in: ["active", "overdue"] }
+        })
+          .select("amount balance status dueDate")
+          .sort({ createdAt: -1 });
+
+        return {
+          ...customer.toObject(),
+          outstandingLoan: outstandingLoan
+            ? {
+                loanId: outstandingLoan._id,
+                amount: outstandingLoan.amount,
+                balance: outstandingLoan.balance,
+                status: outstandingLoan.status,
+                dueDate: outstandingLoan.dueDate
+              }
+            : null
+        };
+      })
+    );
 
     res.status(200).json({
       success: true,
-      count: customers.length,
-      customers
+      count: customersWithOutstandingLoans.length,
+      customers: customersWithOutstandingLoans
     });
 
   } catch (error) {
@@ -91,6 +116,7 @@ exports.getAllCustomersForLender = async (req, res) => {
     });
   }
 };
+
 
 
 exports.assignCustomerToAgent = async (req, res) => {
