@@ -621,19 +621,24 @@ exports.getLoansByBorrower = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     /* =====================================================
-       🆕 ADDITION: REPAYMENT BEHAVIOR (NO EXISTING CODE TOUCHED)
+       🆕 REPAYMENT SUMMARY (MISSED PAYMENTS REMOVED)
        ===================================================== */
-    let totalPayments = 0;
+
     let totalPaidAmount = 0;
+    let totalRemainingPayment = 0;
     let lastPaymentDate = null;
 
     loans.forEach(loan => {
+      const paid = loan.repaidAmount || 0;
+      const due = loan.totalRepayment || 0;
+
+      totalPaidAmount += paid;
+
+      const remaining = Math.max(0, due - paid);
+      totalRemainingPayment += remaining;
+
       if (Array.isArray(loan.repayments)) {
-        totalPayments += loan.repayments.length;
-
         loan.repayments.forEach(r => {
-          totalPaidAmount += r.amount || 0;
-
           if (!lastPaymentDate || new Date(r.date) > new Date(lastPaymentDate)) {
             lastPaymentDate = r.date;
           }
@@ -641,36 +646,21 @@ exports.getLoansByBorrower = async (req, res) => {
       }
     });
 
-    const averagePayment =
-      totalPayments > 0 ? Math.round(totalPaidAmount / totalPayments) : 0;
-
-    // Expected payments = days since loan started
-    let expectedPayments = 0;
-    loans.forEach(loan => {
-      const start = new Date(loan.createdAt);
-      const today = new Date();
-      const days = Math.floor((today - start) / (1000 * 60 * 60 * 24));
-      expectedPayments += Math.max(days, 0);
-    });
-
-    const missedPayments = Math.max(expectedPayments - totalPayments, 0);
-
-    const repaymentBehavior = {
-      paymentsMade: totalPayments,
-      missedPayments,
-      averagePayment,
+    const repaymentSummary = {
+      totalPaidAmount,
+      remainingPayment: totalRemainingPayment,
       lastPaymentDate
     };
 
     /* =====================================================
-       ✅ RESPONSE (UNCHANGED + ADDITION)
+       ✅ RESPONSE
        ===================================================== */
     return res.status(200).json({
       success: true,
       borrower,
       totalLoans: loans.length,
       loans,
-      repaymentBehavior
+      repaymentSummary
     });
 
   } catch (error) {
@@ -678,6 +668,7 @@ exports.getLoansByBorrower = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 
