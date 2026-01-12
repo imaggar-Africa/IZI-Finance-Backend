@@ -53,6 +53,7 @@ exports.sendMoneyToBorrower = async (req, res) => {
 exports.getAllCustomersForLender = async (req, res) => {
   try {
     const lenderId = req.user._id;
+    const today = new Date();
 
     // 1️⃣ Get all agents under this lender
     const agents = await AgentModel.find({ lenderId }).select("_id");
@@ -62,50 +63,130 @@ exports.getAllCustomersForLender = async (req, res) => {
     const customers = await Customer.find({
       isDeleted: false,
       $or: [
-        {
-          registeredBy: lenderId,
-          registeredByModel: "User"
-        },
-        {
-          registeredBy: { $in: agentIds },
-          registeredByModel: "Agent"
-        }
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
       ]
     })
       .populate("assignedAgent", "name phone status")
       .populate("agentId", "name phone status")
       .sort({ createdAt: -1 });
 
-    // 3️⃣ Attach outstanding loan per borrower (ADD-ON ONLY)
-    const customersWithOutstandingLoans = await Promise.all(
+    // 3️⃣ Attach outstanding loan + computed status
+    const customersWithStatus = await Promise.all(
       customers.map(async (customer) => {
-        const outstandingLoan = await Loan.findOne({
+        const loan = await Loan.findOne({
           borrowerId: customer._id,
           loanRequestStatus: "approved",
           status: { $in: ["active", "overdue"] }
-        })
-          .select("amount balance status dueDate")
-          .sort({ createdAt: -1 });
+        }).sort({ createdAt: -1 });
+
+        // 🔹 No active loan
+        if (!loan) {
+          return {
+            ...customer.toObject(),
+            outstandingLoan: null,
+            loanStatus: customer.isVerified
+              ? { badge: "ELIGIBLE", color: "blue", label: "✔ Eligible", allowLend: true }
+              : { badge: "NO_LOAN", color: "gray", label: "No active loan" }
+          };
+        }
+
+        // 🔹 Calculations
+        const totalDue = loan.totalRepayment;
+        const amountPaid = loan.repaidAmount || 0;
+        const totalOutstanding = totalDue - amountPaid;
+
+        const daysToDue = Math.ceil((loan.dueDate - today) / (1000 * 60 * 60 * 24));
+        const daysOverdue =
+          today > loan.dueDate
+            ? Math.ceil((today - loan.dueDate) / (1000 * 60 * 60 * 24))
+            : 0;
+
+        const repaymentRatio = amountPaid / totalDue;
+
+        const daysElapsed = Math.max(
+          0,
+          Math.ceil((today - loan.issueDate) / (1000 * 60 * 60 * 24))
+        );
+
+        const expectedRatioByToday = Math.min(1, daysElapsed / loan.duration);
+
+        // 🔴 OVERDUE
+        if (today > loan.dueDate && totalOutstanding > 0) {
+          return {
+            ...customer.toObject(),
+            outstandingLoan: loan,
+            loanMetrics: { totalOutstanding, repaymentRatio, daysOverdue },
+            loanStatus: {
+              badge: "OVERDUE",
+              color: "red",
+              label: "⛔ Overdue",
+              daysOverdue,
+              lockNewLoans: true
+            }
+          };
+        }
+
+        // 🟠 AT-RISK
+        if (
+          loan.status === "active" &&
+          ((daysToDue <= 2 && repaymentRatio < 0.8) ||
+            repaymentRatio < expectedRatioByToday)
+        ) {
+          return {
+            ...customer.toObject(),
+            outstandingLoan: loan,
+            loanMetrics: {
+              totalOutstanding,
+              repaymentRatio,
+              expectedRatioByToday,
+              daysToDue
+            },
+            loanStatus: {
+              badge: "AT_RISK",
+              color: "amber",
+              label: "⚠ At-risk",
+              showReminder: true
+            }
+          };
+        }
+
+        // 🟢 ON-TRACK
+        if (repaymentRatio >= expectedRatioByToday) {
+          return {
+            ...customer.toObject(),
+            outstandingLoan: loan,
+            loanMetrics: { totalOutstanding, repaymentRatio, daysToDue },
+            loanStatus: {
+              badge: "ON_TRACK",
+              color: "green",
+              label: "✔ On-track",
+              nextDueDate: loan.dueDate
+            }
+          };
+        }
+
+        // 🟢 CLEARED
+        if (totalOutstanding === 0) {
+          return {
+            ...customer.toObject(),
+            outstandingLoan: null,
+            loanStatus: { badge: "CLEARED", color: "green", label: "✔ Cleared" }
+          };
+        }
 
         return {
           ...customer.toObject(),
-          outstandingLoan: outstandingLoan
-            ? {
-                loanId: outstandingLoan._id,
-                amount: outstandingLoan.amount,
-                balance: outstandingLoan.balance,
-                status: outstandingLoan.status,
-                dueDate: outstandingLoan.dueDate
-              }
-            : null
+          outstandingLoan: loan,
+          loanStatus: { badge: "UNKNOWN", label: "Unknown" }
         };
       })
     );
 
     res.status(200).json({
       success: true,
-      count: customersWithOutstandingLoans.length,
-      customers: customersWithOutstandingLoans
+      count: customersWithStatus.length,
+      customers: customersWithStatus
     });
 
   } catch (error) {
@@ -116,6 +197,7 @@ exports.getAllCustomersForLender = async (req, res) => {
     });
   }
 };
+
 
 
 
