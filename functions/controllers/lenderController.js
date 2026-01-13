@@ -80,10 +80,16 @@ exports.getAllCustomersForLender = async (req, res) => {
           status: { $in: ["active", "overdue"] }
         }).sort({ createdAt: -1 });
 
+        // ✅ Base customer object with CREDIT SCORE exposed
+        const baseCustomer = {
+          ...customer.toObject(),
+          creditScore: loan?.creditScoreAfter ?? null
+        };
+
         // 🔹 No active loan
         if (!loan) {
           return {
-            ...customer.toObject(),
+            ...baseCustomer,
             outstandingLoan: null,
             loanStatus: customer.isVerified
               ? { badge: "ELIGIBLE", color: "blue", label: "✔ Eligible", allowLend: true }
@@ -114,7 +120,7 @@ exports.getAllCustomersForLender = async (req, res) => {
         // 🔴 OVERDUE
         if (today > loan.dueDate && totalOutstanding > 0) {
           return {
-            ...customer.toObject(),
+            ...baseCustomer,
             outstandingLoan: loan,
             loanMetrics: { totalOutstanding, repaymentRatio, daysOverdue },
             loanStatus: {
@@ -134,7 +140,7 @@ exports.getAllCustomersForLender = async (req, res) => {
             repaymentRatio < expectedRatioByToday)
         ) {
           return {
-            ...customer.toObject(),
+            ...baseCustomer,
             outstandingLoan: loan,
             loanMetrics: {
               totalOutstanding,
@@ -154,7 +160,7 @@ exports.getAllCustomersForLender = async (req, res) => {
         // 🟢 ON-TRACK
         if (repaymentRatio >= expectedRatioByToday) {
           return {
-            ...customer.toObject(),
+            ...baseCustomer,
             outstandingLoan: loan,
             loanMetrics: { totalOutstanding, repaymentRatio, daysToDue },
             loanStatus: {
@@ -169,14 +175,14 @@ exports.getAllCustomersForLender = async (req, res) => {
         // 🟢 CLEARED
         if (totalOutstanding === 0) {
           return {
-            ...customer.toObject(),
+            ...baseCustomer,
             outstandingLoan: null,
             loanStatus: { badge: "CLEARED", color: "green", label: "✔ Cleared" }
           };
         }
 
         return {
-          ...customer.toObject(),
+          ...baseCustomer,
           outstandingLoan: loan,
           loanStatus: { badge: "UNKNOWN", label: "Unknown" }
         };
@@ -197,8 +203,6 @@ exports.getAllCustomersForLender = async (req, res) => {
     });
   }
 };
-
-
 
 
 exports.assignCustomerToAgent = async (req, res) => {
