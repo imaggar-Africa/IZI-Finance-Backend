@@ -632,29 +632,21 @@ exports.getLoansByBorrower = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     /* ================================
-       4️⃣ REPAYMENT SUMMARY (AMOUNT BASED)
-       Formula:
-       Remaining Amount = (Principal + Interest) - Total Repaid
+       4️⃣ REPAYMENT SUMMARY (COUNT BASED)
+       Remaining Payments = Duration − Payments Made
        ================================ */
     let paymentsMade = 0;
-    let totalPaymentAmount = 0;
-    let remainingPaymentAmount = 0;
+    let totalExpectedPayments = 0;
     let lastPaymentDate = null;
 
     loans.forEach(loan => {
-      const totalRepayment = loan.totalRepayment || 0; // Principal + Interest
-      const repaidAmount = loan.repaidAmount || 0;
-
-      const remainingAmount = Math.max(0, totalRepayment - repaidAmount);
-
-      remainingPaymentAmount += remainingAmount;
+      const expectedPayments = loan.duration || 0;
+      totalExpectedPayments += expectedPayments;
 
       if (Array.isArray(loan.repayments)) {
         paymentsMade += loan.repayments.length;
 
         loan.repayments.forEach(r => {
-          totalPaymentAmount += r.amount || 0;
-
           if (!lastPaymentDate || new Date(r.date) > new Date(lastPaymentDate)) {
             lastPaymentDate = r.date;
           }
@@ -662,9 +654,17 @@ exports.getLoansByBorrower = async (req, res) => {
       }
     });
 
+    const remainingPaymentsCount = Math.max(
+      totalExpectedPayments - paymentsMade,
+      0
+    );
+
     const averagePayment =
       paymentsMade > 0
-        ? Math.round(totalPaymentAmount / paymentsMade)
+        ? Math.round(
+            loans.reduce((sum, l) => sum + (l.repaidAmount || 0), 0) /
+              paymentsMade
+          )
         : 0;
 
     /* ================================
@@ -677,8 +677,8 @@ exports.getLoansByBorrower = async (req, res) => {
       loans,
       repaymentSummary: {
         paymentsMade,
+        remainingPaymentsCount,
         averagePayment,
-        remainingPaymentAmount,
         lastPaymentDate
       }
     });
@@ -688,6 +688,7 @@ exports.getLoansByBorrower = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 
