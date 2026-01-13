@@ -12,6 +12,8 @@ const AgentModel = require("../models/AgentModel");
 // Track loan repayment and send SMS
 const AgentCommission = require('../models/AgentCommission');
 const { recalculateCreditScore } = require("../utils/creditScore");
+const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
+
 // Helper: retry function for transient transaction errors
 const runTransactionWithRetry = async (txnFunc, session, maxRetries = 3) => {
   let attempt = 0;
@@ -602,10 +604,16 @@ exports.getLoansByBorrower = async (req, res) => {
   try {
     const { borrowerId } = req.params;
 
+    /* ================================
+       1️⃣ VALIDATE BORROWER ID
+       ================================ */
     if (!mongoose.Types.ObjectId.isValid(borrowerId)) {
       return res.status(400).json({ message: "Invalid borrowerId" });
     }
 
+    /* ================================
+       2️⃣ FETCH BORROWER DETAILS
+       ================================ */
     const borrower = await Customer.findById(borrowerId).select(
       "fullName phone idNumber"
     );
@@ -614,26 +622,32 @@ exports.getLoansByBorrower = async (req, res) => {
       return res.status(404).json({ message: "Borrower not found" });
     }
 
+    /* ================================
+       3️⃣ FETCH APPROVED ACTIVE / OVERDUE LOANS
+       ================================ */
     const loans = await Loan.find({
       borrowerId: new mongoose.Types.ObjectId(borrowerId),
       loanRequestStatus: "approved",
       status: { $in: ["active", "overdue"] }
     }).sort({ createdAt: -1 });
 
-    /* =====================================================
-       🆕 REPAYMENT SUMMARY
-       ===================================================== */
-
+    /* ================================
+       4️⃣ REPAYMENT SUMMARY (AMOUNT BASED)
+       Formula:
+       Remaining Amount = (Principal + Interest) - Total Repaid
+       ================================ */
     let paymentsMade = 0;
     let totalPaymentAmount = 0;
-    let remainingPayment = 0;
+    let remainingPaymentAmount = 0;
     let lastPaymentDate = null;
 
     loans.forEach(loan => {
-      const paid = loan.repaidAmount || 0;
-      const due = loan.totalRepayment || 0;
+      const totalRepayment = loan.totalRepayment || 0; // Principal + Interest
+      const repaidAmount = loan.repaidAmount || 0;
 
-      remainingPayment += Math.max(0, due - paid);
+      const remainingAmount = Math.max(0, totalRepayment - repaidAmount);
+
+      remainingPaymentAmount += remainingAmount;
 
       if (Array.isArray(loan.repayments)) {
         paymentsMade += loan.repayments.length;
@@ -653,29 +667,28 @@ exports.getLoansByBorrower = async (req, res) => {
         ? Math.round(totalPaymentAmount / paymentsMade)
         : 0;
 
-    const repaymentSummary = {
-      paymentsMade,
-      averagePayment,
-      remainingPayment,
-      lastPaymentDate
-    };
-
-    /* =====================================================
-       ✅ RESPONSE
-       ===================================================== */
+    /* ================================
+       5️⃣ RESPONSE
+       ================================ */
     return res.status(200).json({
       success: true,
       borrower,
       totalLoans: loans.length,
       loans,
-      repaymentSummary
+      repaymentSummary: {
+        paymentsMade,
+        averagePayment,
+        remainingPaymentAmount,
+        lastPaymentDate
+      }
     });
 
   } catch (error) {
-    console.error("❌ Error fetching loans:", error);
+    console.error("❌ Error fetching loans by borrower:", error);
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 
@@ -851,52 +864,51 @@ exports.reviewLoanRequest = async (req, res) => {
     const agent = loan.requestedByAgentId;
     const lender = loan.lenderId;
 
-    // *** REJECTION FLOW ***
-// *** REJECTION FLOW ***
-if (action === "rejected") {
-  loan.loanRequestStatus = "rejected";
- 
-  await loan.save({ session });
+    /* =========================
+       ❌ REJECTION FLOW (MANUAL)
+       ========================= */
+    if (action === "rejected") {
+      loan.loanRequestStatus = "rejected";
+      await loan.save({ session });
 
-  const notifications = [
-    {
-      userId: borrower._id,
-      userModel: "Customer",
-      title: "Loan Rejected",
-      message: `Sorry ${borrower.fullName}, your loan of KES ${loan.amount} was rejected.`,
-      type: "loan",
-    },
-  ];
+      const notifications = [{
+        userId: borrower._id,
+        userModel: "Customer",
+        title: "Loan Rejected",
+        message: `Sorry ${borrower.fullName}, your loan of KES ${loan.amount} was rejected.`,
+        type: "loan"
+      }];
 
-  // Only notify agent if it exists
-  if (agent) {
-    notifications.push({
-      userId: agent._id,
-      userModel: "Agent",
-      title: "Loan Request Rejected",
-      message: `Loan request for ${borrower.fullName} (KES ${loan.amount}) was rejected.`,
-      type: "loan_rejected",
-    });
-  }
+      if (agent) {
+        notifications.push({
+          userId: agent._id,
+          userModel: "Agent",
+          title: "Loan Request Rejected",
+          message: `Loan request for ${borrower.fullName} (KES ${loan.amount}) was rejected.`,
+          type: "loan_rejected"
+        });
+      }
 
-  await Notification.insertMany(notifications, { session });
+      await Notification.insertMany(notifications, { session });
 
-  await session.commitTransaction();
-  session.endSession();
-  
-  return res.status(200).json({ 
-    message: "Loan rejected.", 
-    loan: {
-      id: loan._id,
-      amount: loan.amount,
-      status: loan.status,
-      loanRequestStatus: loan.loanRequestStatus
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        message: "Loan rejected.",
+        loan: {
+          id: loan._id,
+          amount: loan.amount,
+          loanRequestStatus: loan.loanRequestStatus
+        }
+      });
     }
-  });
-}
 
+    /* =========================
+       ✅ APPROVAL FLOW
+       ========================= */
 
-    // *** APPROVAL FLOW ***
+    // Borrower already has loan
     const borrowerActiveLoan = await Loan.findOne({
       borrowerId: borrower._id,
       status: { $in: ["active", "overdue"] }
@@ -905,25 +917,55 @@ if (action === "rejected") {
     if (borrowerActiveLoan) {
       await session.abortTransaction();
       session.endSession();
-      
       return res.status(400).json({
         message: `Borrower has an existing active loan (${borrowerActiveLoan.status}).`
       });
     }
 
-    // ✅ DON'T DEDUCT LENDER BALANCE IMMEDIATELY - just validate
+    /* =========================
+       🆕 CREDIT SCORE RULES
+       ========================= */
+    const creditScore = borrower.creditScore || loan.creditScoreAfter || 500;
+
+    // ❌ Block low score
+    if (creditScore < 600) {
+      loan.loanRequestStatus = "rejected";
+      await loan.save({ session });
+
+      await Notification.create([{
+        userId: borrower._id,
+        userModel: "Customer",
+        title: "Loan Rejected",
+        message: "Loan rejected due to low credit score.",
+        type: "loan_rejected"
+      }], { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(400).json({
+        message: "Loan rejected due to low credit score",
+        creditScore
+      });
+    }
+
+    // ✅ Increase loan for high score
+    if (creditScore >= 800) {
+      loan.amount = Math.round(loan.amount * 1.2); // +20%
+      loan.totalRepayment = loan.amount + loan.interest;
+      loan.balance = loan.totalRepayment;
+    }
+
+    // Lender balance validation (after adjustment)
     if (lender.walletBalance < loan.amount) {
       await session.abortTransaction();
       session.endSession();
-      
       return res.status(400).json({ message: "Insufficient wallet balance." });
     }
 
-    console.log(`💰 Lender balance validation: ${lender.walletBalance} -> ${lender.walletBalance - loan.amount} (will deduct on M-Pesa success)`);
-
-    // Update loan to approved but NOT active until callback
+    // Approve loan (pending until MPesa callback)
     loan.loanRequestStatus = "approved";
-    loan.status = "pending"; // Will become "active" in callback
+    loan.status = "pending";
     loan.issuedByLenderId = lender._id;
     await loan.save({ session });
 
@@ -938,10 +980,10 @@ if (action === "rejected") {
       phone: borrower.phone,
       description: "Loan disbursement",
       balanceBefore: lender.walletBalance,
-      balanceAfter: lender.walletBalance - loan.amount, // Expected balance after success
+      balanceAfter: lender.walletBalance - loan.amount
     }], { session });
 
-    // Create agent commission with pending status (will be updated in callback)
+    // Agent commission
     if (agent) {
       await AgentCommission.create([{
         agentId: agent._id,
@@ -954,11 +996,10 @@ if (action === "rejected") {
 
     const b2cResponse = await initiateB2C(borrower.phone, loan.amount, transaction._id);
 
-    if (!b2cResponse || !b2cResponse.OriginatorConversationID) {
+    if (!b2cResponse?.OriginatorConversationID) {
       throw new Error("Invalid B2C response from M-Pesa");
     }
 
-    // ✅ CRITICAL FIX: Save ALL relevant IDs for callback matching
     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
     transaction.conversationID = b2cResponse.ConversationID;
     await transaction.save({ session });
@@ -966,60 +1007,28 @@ if (action === "rejected") {
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`📞 Loan B2C Initiated: 
-      OriginatorConversationID: ${b2cResponse.OriginatorConversationID}
-      ConversationID: ${b2cResponse.ConversationID}
-    `);
-    
     return res.status(200).json({
       message: "Loan approved — awaiting M-Pesa confirmation.",
       loan: {
         id: loan._id,
         amount: loan.amount,
-        status: loan.status,
         loanRequestStatus: loan.loanRequestStatus
       },
       transaction: {
         id: transaction._id,
-        amount: transaction.amount,
-        status: transaction.status,
-        checkoutRequestID: transaction.checkoutRequestID
-      },
-      b2cResponse: {
-        ConversationID: b2cResponse.ConversationID,
-        OriginatorConversationID: b2cResponse.OriginatorConversationID,
-        ResponseDescription: b2cResponse.ResponseDescription
+        status: transaction.status
       }
     });
 
   } catch (err) {
-    try {
-      if (session.inTransaction()) {
-        console.log("🔄 Aborting transaction due to error");
-        await session.abortTransaction();
-      }
-    } catch (abortError) {
-      console.error("Error aborting transaction:", abortError);
-    } finally {
-      session.endSession();
-    }
-    
+    if (session.inTransaction()) await session.abortTransaction();
+    session.endSession();
+
     console.error("❌ Review loan error:", err);
-    
-    // ✅ USER-FRIENDLY ERROR MESSAGES
-    let errorMessage = "Error reviewing loan request";
-    if (err.message.includes("insufficient")) {
-      errorMessage = "Insufficient wallet balance";
-    } else if (err.message.includes("M-Pesa")) {
-      errorMessage = "M-Pesa service temporarily unavailable";
-    }
-    
-    return res.status(500).json({ 
-      message: errorMessage, 
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined 
-    });
+    return res.status(500).json({ message: "Error reviewing loan request" });
   }
 };
+
 
 exports.getActiveLoansByAgent = asyncHandler(async (req, res) => {
   const agentId = req.user._id;
