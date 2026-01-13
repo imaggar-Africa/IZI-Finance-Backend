@@ -55,6 +55,19 @@ exports.getStats = async (req, res) => {
     ]);
 
     /* -------------------------------------------------
+   🆕 STEP 3.1: OUTSTANDING LOAN AMOUNT
+------------------------------------------------- */
+const outstandingLoans = await Loan.find({
+  loanRequestStatus: "approved",
+  status: { $in: ["active", "overdue"] }
+}).select("balance");
+
+const outstandingLoanAmount = outstandingLoans.reduce(
+  (sum, loan) => sum + (loan.balance || 0),
+  0
+);
+
+    /* -------------------------------------------------
        🆕 STEP 4: FORMAT ISSUED LOANS
     ------------------------------------------------- */
     const issuedLoans = {
@@ -80,6 +93,7 @@ exports.getStats = async (req, res) => {
     ------------------------------------------------- */
     res.status(200).json({
       ...(stats ? stats.toObject() : {}),
+      outstandingLoanAmount,
       issuedLoans
     });
 
