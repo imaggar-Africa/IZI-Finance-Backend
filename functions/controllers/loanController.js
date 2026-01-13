@@ -604,16 +604,10 @@ exports.getLoansByBorrower = async (req, res) => {
   try {
     const { borrowerId } = req.params;
 
-    /* ================================
-       1️⃣ VALIDATE BORROWER ID
-       ================================ */
     if (!mongoose.Types.ObjectId.isValid(borrowerId)) {
       return res.status(400).json({ message: "Invalid borrowerId" });
     }
 
-    /* ================================
-       2️⃣ FETCH BORROWER DETAILS
-       ================================ */
     const borrower = await Customer.findById(borrowerId).select(
       "fullName phone idNumber"
     );
@@ -622,9 +616,6 @@ exports.getLoansByBorrower = async (req, res) => {
       return res.status(404).json({ message: "Borrower not found" });
     }
 
-    /* ================================
-       3️⃣ FETCH APPROVED ACTIVE / OVERDUE LOANS
-       ================================ */
     const loans = await Loan.find({
       borrowerId: new mongoose.Types.ObjectId(borrowerId),
       loanRequestStatus: "approved",
@@ -632,21 +623,30 @@ exports.getLoansByBorrower = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     /* ================================
-       4️⃣ REPAYMENT SUMMARY (COUNT BASED)
-       Remaining Payments = Duration − Payments Made
+       REPAYMENT BEHAVIOR (AMOUNT BASED)
        ================================ */
     let paymentsMade = 0;
-    let totalExpectedPayments = 0;
+    let totalPaidAmount = 0;
+    let remainingDays = 0;
     let lastPaymentDate = null;
 
     loans.forEach(loan => {
-      const expectedPayments = loan.duration || 0;
-      totalExpectedPayments += expectedPayments;
+      const principal = loan.amount || 0;
+      const totalPayable = loan.totalRepayment || 0;
+      const repaymentDays = loan.duration || 1;
+      const totalPaid = loan.repaidAmount || 0;
+
+      const dailyTarget = totalPayable / repaymentDays;
+      const remainingBalance = Math.max(totalPayable - totalPaid, 0);
+
+      remainingDays += Math.ceil(remainingBalance / dailyTarget);
 
       if (Array.isArray(loan.repayments)) {
         paymentsMade += loan.repayments.length;
 
         loan.repayments.forEach(r => {
+          totalPaidAmount += r.amount || 0;
+
           if (!lastPaymentDate || new Date(r.date) > new Date(lastPaymentDate)) {
             lastPaymentDate = r.date;
           }
@@ -654,31 +654,20 @@ exports.getLoansByBorrower = async (req, res) => {
       }
     });
 
-    const remainingPaymentsCount = Math.max(
-      totalExpectedPayments - paymentsMade,
-      0
-    );
-
     const averagePayment =
       paymentsMade > 0
-        ? Math.round(
-            loans.reduce((sum, l) => sum + (l.repaidAmount || 0), 0) /
-              paymentsMade
-          )
+        ? Math.round(totalPaidAmount / paymentsMade)
         : 0;
 
-    /* ================================
-       5️⃣ RESPONSE
-       ================================ */
     return res.status(200).json({
       success: true,
       borrower,
       totalLoans: loans.length,
       loans,
-      repaymentSummary: {
+      repaymentBehavior: {
         paymentsMade,
-        remainingPaymentsCount,
         averagePayment,
+        remainingDays,
         lastPaymentDate
       }
     });
@@ -688,6 +677,7 @@ exports.getLoansByBorrower = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 
