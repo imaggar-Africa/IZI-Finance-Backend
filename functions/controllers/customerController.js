@@ -273,27 +273,43 @@ if (referralSource === "existing_borrower") {
 // Controller to get all customers
 exports.getAllCustomers = async (req, res) => {
   try {
-    const customers = await Borrower.find().sort({ createdAt: -1 });
+    const customers = await Borrower.find({ isDeleted: false })
+      .sort({ createdAt: -1 });
 
-    if (!customers || customers.length === 0) {
+    if (!customers.length) {
       return res.status(404).json({ message: "No customers found" });
     }
 
-    // Fetch last loan per borrower
     const customersWithExtras = await Promise.all(
       customers.map(async (customer) => {
-        // get latest approved loan
-        const lastLoan = await Loan.findOne({
+
+        // 1️⃣ Fetch all approved loans
+        const loans = await Loan.find({
           borrowerId: customer._id,
-          loanRequestStatus: "approved",
-        })
-          .sort({ issueDate: -1 })
-          .select("amount");
+          loanRequestStatus: "approved"
+        }).sort({ issueDate: -1 });
 
-        // credit score fallback
-        const creditScore = customer.creditScore || 500;
+        // 2️⃣ Identify last loan
+        const lastLoan = loans[0] || null;
 
-        // rating logic (0.0 – 5.0)
+        // 3️⃣ BLOCKLIST LOGIC
+        const hasOverdueLoan = loans.some(
+          l => l.status === "overdue" || l.isDefaulted === true
+        );
+
+        // 4️⃣ REPEATED BORROWER LOGIC
+        const isRepeatedBorrower =
+          loans.length > 0 &&
+          lastLoan &&
+          lastLoan.status === "fully paid";
+
+        // 5️⃣ Borrower type
+        let borrowerType = "NEW";
+        if (hasOverdueLoan) borrowerType = "BLOCKLISTED";
+        else if (isRepeatedBorrower) borrowerType = "REPEATED";
+
+        // 6️⃣ Credit score & rating
+        const creditScore = lastLoan?.creditScoreAfter || 500;
         const rating = Math.min(
           5,
           Math.max(0, Number((creditScore / 100).toFixed(1)))
@@ -302,7 +318,9 @@ exports.getAllCustomers = async (req, res) => {
         return {
           ...customer.toObject(),
           lastLoanAmount: lastLoan ? lastLoan.amount : 0,
-          rating,
+          borrowerType,
+          isBlocked: borrowerType === "BLOCKLISTED",
+          rating
         };
       })
     );
@@ -310,11 +328,15 @@ exports.getAllCustomers = async (req, res) => {
     res.status(200).json({
       success: true,
       count: customersWithExtras.length,
-      customers: customersWithExtras,
+      customers: customersWithExtras
     });
-  } catch (err) {
-    console.error("Error fetching customers:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+
+  } catch (error) {
+    console.error("Error fetching customers:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
   }
 };
 
@@ -450,5 +472,47 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
   } catch (error) {
     console.error("Error fetching customers:", error);
     res.status(500).json({ message: "Server Error", error });
+  }
+};
+
+
+
+exports.getBorrowerSummary = async (req, res) => {
+  try {
+    const borrowers = await Borrower.find();
+
+    const summaries = await Promise.all(
+      borrowers.map(async (b) => {
+        const loans = await Loan.find({
+          borrowerId: b._id,
+          status: "active"
+        });
+
+        const activeLoanBalance = loans.reduce(
+          (sum, l) => sum + (l.balance || 0),
+          0
+        );
+
+        const isDefaulted = loans.some(l => l.isDefaulted === true);
+
+        return {
+          borrowerId: b._id,
+          fullName: b.fullName,
+          creditScore: b.creditScore || 500,
+          activeLoanBalance,
+          isDefaulted
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      count: summaries.length,
+      borrowers: summaries
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
