@@ -273,24 +273,51 @@ if (referralSource === "existing_borrower") {
 // Controller to get all customers
 exports.getAllCustomers = async (req, res) => {
   try {
-    const customers = await Borrower.find()
-      
-      .sort({ createdAt: -1 }); // latest first
+    const customers = await Borrower.find().sort({ createdAt: -1 });
 
     if (!customers || customers.length === 0) {
       return res.status(404).json({ message: "No customers found" });
     }
 
+    // Fetch last loan per borrower
+    const customersWithExtras = await Promise.all(
+      customers.map(async (customer) => {
+        // get latest approved loan
+        const lastLoan = await Loan.findOne({
+          borrowerId: customer._id,
+          loanRequestStatus: "approved",
+        })
+          .sort({ issueDate: -1 })
+          .select("amount");
+
+        // credit score fallback
+        const creditScore = customer.creditScore || 500;
+
+        // rating logic (0.0 – 5.0)
+        const rating = Math.min(
+          5,
+          Math.max(0, Number((creditScore / 100).toFixed(1)))
+        );
+
+        return {
+          ...customer.toObject(),
+          lastLoanAmount: lastLoan ? lastLoan.amount : 0,
+          rating,
+        };
+      })
+    );
+
     res.status(200).json({
       success: true,
-      count: customers.length,
-      customers,
+      count: customersWithExtras.length,
+      customers: customersWithExtras,
     });
   } catch (err) {
     console.error("Error fetching customers:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 
 
 
