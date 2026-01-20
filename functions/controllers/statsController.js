@@ -1,110 +1,90 @@
 const Stats = require('../models/Stats');
-const Loan = require("../models/Loan")
+const Loan = require("../models/Loan");
+
 // ✅ Fetch real-time stats from Loan collection
 exports.getStats = async (req, res) => {
   try {
-    /* -------------------------------------------------
-       🟢 STEP 1: GLOBAL STATS (FROM DB)
-    ------------------------------------------------- */
-    const stats = await Stats.findOne();
-
-    /* -------------------------------------------------
-       🟢 STEP 2: DATE RANGES
-    ------------------------------------------------- */
     const now = new Date();
-
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const sevenDaysAgo = new Date(startOfToday);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
+    const startOfToday = new Date(now.setHours(0, 0, 0, 0));
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
     const threeMonthsAgo = new Date(startOfMonth);
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-    /* -------------------------------------------------
-       🆕 STEP 3: FETCH ISSUED LOAN DETAILS (LIVE)
-    ------------------------------------------------- */
-    const [
-      last7DaysLoans,
-      thisMonthLoans,
-      last3MonthsLoans
-    ] = await Promise.all([
-      Loan.find({
-        createdAt: { $gte: sevenDaysAgo },
-        loanRequestStatus: "approved"
-      })
-        .populate("borrowerId", "fullName phone")
-        .sort({ createdAt: -1 }),
+    /* ================= ALL APPROVED LOANS ================= */
+    const loans = await Loan.find({
+      loanRequestStatus: "approved"
+    }).populate("borrowerId", "fullName phone");
 
-      Loan.find({
-        createdAt: { $gte: startOfMonth },
-        loanRequestStatus: "approved"
-      })
-        .populate("borrowerId", "fullName phone")
-        .sort({ createdAt: -1 }),
+    /* ================= GLOBAL TOTALS ================= */
+    let totalLoanAmount = 0;
+    let totalCollectedAmount = 0;
+    let activeLoans = 0;
+    let overdueLoans = 0;
 
-      Loan.find({
-        createdAt: { $gte: threeMonthsAgo },
-        loanRequestStatus: "approved"
-      })
-        .populate("borrowerId", "fullName phone")
-        .sort({ createdAt: -1 })
-    ]);
+    loans.forEach((loan) => {
+      totalLoanAmount += loan.totalRepayment || 0;
 
-    /* -------------------------------------------------
-   🆕 STEP 3.1: OUTSTANDING LOAN AMOUNT
-------------------------------------------------- */
-const outstandingLoans = await Loan.find({
-  loanRequestStatus: "approved",
-  status: { $in: ["active", "overdue"] }
-}).select("balance");
+      const collected = loan.repayments?.reduce(
+        (sum, r) => sum + (r.amount || 0),
+        0
+      ) || 0;
 
-const outstandingLoanAmount = outstandingLoans.reduce(
-  (sum, loan) => sum + (loan.balance || 0),
-  0
-);
+      totalCollectedAmount += collected;
 
-    /* -------------------------------------------------
-       🆕 STEP 4: FORMAT ISSUED LOANS
-    ------------------------------------------------- */
+      if (loan.balance > 0) {
+        activeLoans++;
+        if (new Date(loan.dueDate) < new Date()) {
+          overdueLoans++;
+        }
+      }
+    });
+
+    /* ================= OUTSTANDING ================= */
+    const outstandingLoanAmount = loans.reduce(
+      (sum, loan) => sum + (loan.balance || 0),
+      0
+    );
+
+    /* ================= FILTERED LOANS ================= */
+    const thisMonthLoans = loans.filter(
+      l => l.createdAt >= startOfMonth
+    );
+
+    const last3MonthsLoans = loans.filter(
+      l => l.createdAt >= threeMonthsAgo
+    );
+
+    /* ================= ISSUED LOANS (TIME BASED) ================= */
     const issuedLoans = {
-      last7Days: {
-        count: last7DaysLoans.length,
-        totalAmount: last7DaysLoans.reduce((s, l) => s + (l.amount || 0), 0),
-        loans: last7DaysLoans
-      },
       thisMonth: {
         count: thisMonthLoans.length,
-        totalAmount: thisMonthLoans.reduce((s, l) => s + (l.amount || 0), 0),
-        loans: thisMonthLoans
+        totalAmount: thisMonthLoans.reduce(
+          (s, l) => s + (l.totalRepayment || 0),
+          0
+        ),
+        loans: thisMonthLoans   // ✅ ADDED
       },
       last3Months: {
         count: last3MonthsLoans.length,
-        totalAmount: last3MonthsLoans.reduce((s, l) => s + (l.amount || 0), 0),
-        loans: last3MonthsLoans
+        totalAmount: last3MonthsLoans.reduce(
+          (s, l) => s + (l.totalRepayment || 0),
+          0
+        ),
+        loans: last3MonthsLoans // ✅ ADDED
       }
     };
 
-    /* -------------------------------------------------
-       ✅ STEP 5: FINAL RESPONSE (MERGED)
-    ------------------------------------------------- */
     res.status(200).json({
-      ...(stats ? stats.toObject() : {}),
+      totalLoanAmount,
+      totalCollectedAmount,
       outstandingLoanAmount,
+      activeLoans,
+      overdueLoans,
       issuedLoans
     });
 
   } catch (error) {
     console.error("Error fetching stats:", error);
-    res.status(500).json({ message: "Server error", error });
+    res.status(500).json({ message: "Server error" });
   }
 };
-
-
-
-
-
-
