@@ -1,35 +1,38 @@
 const path = require("path");
-const bucket = require("../config/firebase"); 
-// <-- this must export the initialized bucket
+const { v4: uuidv4 } = require("uuid");
+const bucket = require("../config/firebase");
 
 /**
  * Upload a file to Firebase Storage
  * @param {Object} file - multer file object
  * @param {String} baseName - clean base name
- * @param {String} folder - folder inside bucket (default: borrowers)
+ * @param {String} folder - folder inside bucket
  * @returns {Promise<String|null>}
  */
 const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
   return new Promise(async (resolve, reject) => {
     try {
+      // ✅ No file → no upload
       if (!file) return resolve(null);
 
-      // Check if storage is configured
+      // ✅ Firebase not configured → skip safely
       if (!bucket || !bucket.isConfigured) {
         console.warn("⚠️ Firebase Storage NOT configured. Skipping upload.");
         return resolve(null);
       }
 
-      // Create unique filename
+      // ✅ Build truly unique filename
       const ext = path.extname(file.originalname) || ".jpg";
       const safeBase = baseName.replace(/[^a-zA-Z0-9_-]/g, "");
-      const fileName = `${folder}/${safeBase}_${Date.now()}${ext}`;
+      const uniqueId = uuidv4(); // 🔥 CRITICAL FIX
 
+      const fileName = `${folder}/${safeBase}_${uniqueId}${ext}`;
       const fileRef = bucket.file(fileName);
 
       const stream = fileRef.createWriteStream({
         metadata: {
           contentType: file.mimetype,
+          cacheControl: "no-store, no-cache, must-revalidate, max-age=0", // 🔥 STOP CACHING
         },
         resumable: false,
       });
@@ -41,11 +44,9 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
 
       stream.on("finish", async () => {
         try {
-          // Make file public
           await fileRef.makePublic();
 
           const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-
           resolve(publicUrl);
         } catch (err) {
           console.error("🔥 Error making file public:", err);
@@ -53,7 +54,6 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
         }
       });
 
-      // Write buffer to Firebase Storage
       stream.end(file.buffer);
     } catch (err) {
       reject(err);

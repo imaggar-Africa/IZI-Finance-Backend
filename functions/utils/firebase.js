@@ -10,7 +10,7 @@ const serviceAccount = require(serviceAccountPath);
 
 initializeApp({
   credential: cert(serviceAccount),
-  storageBucket: 'izi-stageing.firebasestorage.app', // replace with your bucket name
+  storageBucket: 'your-project-id.appspot.com', // replace with your bucket name
 });
 
 const bucket = getStorage().bucket();

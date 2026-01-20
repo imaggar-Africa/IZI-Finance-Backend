@@ -1,25 +1,19 @@
 const multer = require("multer");
-const stream = require("stream");
 
 const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   limits: {
-    fileSize: 5 * 1024 * 1024,
+    fileSize: 5 * 1024 * 1024, // 5MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Only JPG, PNG, and WEBP images are allowed"));
+    }
+    cb(null, true);
   },
 });
 
-function firebaseSafeUpload(fields) {
-  return (req, res, next) => {
-    if (req.rawBody) {
-      const bufferStream = new stream.PassThrough();
-      bufferStream.end(req.rawBody);
-      req.pipe = bufferStream.pipe.bind(bufferStream); 
-    }
-
-    upload.fields(fields)(req, res, next);
-  };
-}
-
-module.exports = firebaseSafeUpload;
+module.exports = (fields) => upload.fields(fields);
