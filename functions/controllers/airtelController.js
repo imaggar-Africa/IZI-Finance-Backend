@@ -1,5 +1,5 @@
 const { sendAirtelMoney } = require("../payment/airtel/airtelSend");
-
+const Transaction = require("../models/Transaction");
 /**
  * Send money via Airtel Money
  */
@@ -35,63 +35,54 @@ const sendAirtel = async (req, res) => {
   }
 };
 
+
 const airtelCallback = async (req, res) => {
   try {
     console.log("📥 Airtel Callback Received:", JSON.stringify(req.body));
 
-    /**
-     * Expected Airtel callback format (sandbox & prod):
-     * {
-     *   "transaction": {
-     *     "id": "AIRTEL_TXN_1001",
-     *     "status": "SUCCESS",
-     *     "amount": 50000,
-     *     "currency": "UGX"
-     *   }
-     * }
-     */
+    const transactionData = req.body.transaction;
 
-    const transaction = req.body.transaction;
-
-    if (!transaction || !transaction.id) {
+    if (!transactionData || !transactionData.id) {
       return res.status(400).json({
         success: false,
         message: "Invalid Airtel callback payload",
       });
     }
 
-    const reference = transaction.id;
-    const status = transaction.status;
+    const reference = transactionData.id;
+    const status = transactionData.status;
 
-    // 🔁 STATUS NORMALIZATION
     let finalStatus = "PENDING";
-
     if (status === "SUCCESS") finalStatus = "SUCCESS";
     if (status === "FAILED") finalStatus = "FAILED";
     if (status === "REVERSED") finalStatus = "REVERSED";
 
-    // TODO (next step):
-    // - Find transaction by reference
-    // - Update DB status
-    // - Credit wallet / close loan / mark repayment
+    // 🔹 OPTIONAL DB UPDATE (SAFE)
+    const txn = await Transaction.findOne({ referenceId: reference });
+
+    if (txn) {
+      txn.status = finalStatus.toLowerCase();
+      await txn.save();
+    }
 
     console.log(`✅ Airtel TXN ${reference} => ${finalStatus}`);
 
-    // Airtel expects 200 OK
     return res.status(200).json({
       success: true,
       message: "Callback received",
     });
+
   } catch (error) {
     console.error("🔥 Airtel Callback Error:", error);
 
-    // Airtel will retry if not 200
     return res.status(500).json({
       success: false,
       message: "Callback processing failed",
     });
   }
 };
+
+
 module.exports = {
   sendAirtel,
   airtelCallback

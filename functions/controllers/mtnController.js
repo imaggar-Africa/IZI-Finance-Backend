@@ -31,4 +31,32 @@ const sendMtn = async (req, res) => {
   }
 };
 
-module.exports = { sendMtn };
+// const mtnCallback = async (req, res) => {
+//   try {
+//     const { referenceId, status } = req.body;
+
+//     const transaction = await Transaction.findOne({ reference: referenceId });
+//     if (!transaction) return res.json({ success: true });
+
+//     if (status === "SUCCESS") {
+//       transaction.status = "successful";
+
+//       if (transaction.loanId) {
+//         const loan = await Loan.findById(transaction.loanId);
+//         loan.repaidAmount += transaction.amount;
+//         loan.balance -= transaction.amount;
+//         loan.status = loan.balance <= 0 ? "fully paid" : "active";
+//         await loan.save();
+//       }
+//     } else {
+//       transaction.status = "failed";
+//     }
+
+//     await transaction.save();
+//     res.json({ success: true });
+//   } catch (err) {
+//     res.status(500).json({ success: false });
+//   }
+// };
+
+module.exports = { sendMtn};

@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const { protect } = require("../middleware/authMiddleware");
+
 const {
   getDashboardReport,
   getLoansReport,
@@ -7,15 +9,22 @@ const {
   getProfitReport,
   getBorrowersReport,
   getAgentsReport,
-  getAuditLogs
+  getAuditLogs,
+  getLoanRepaymentReport
 } = require("../controllers/reportController");
 
-router.get("/dashboard", getDashboardReport);
-router.get("/loans", getLoansReport);
-router.get("/repayments", getRepaymentsReport);
-router.get("/profit", getProfitReport);
-router.get("/borrowers", getBorrowersReport);
-router.get("/agents", getAgentsReport);
-router.get("/audit-logs", getAuditLogs);
+router.get("/dashboard",protect, getDashboardReport);
+router.get("/loans",protect, getLoansReport);
+router.get("/repayments",protect, getRepaymentsReport);
+router.get("/profit",protect, getProfitReport);
+router.get("/borrowers",protect, getBorrowersReport);
+router.get("/agents",protect, getAgentsReport);
+router.get("/audit-logs",protect, getAuditLogs);
+router.get(
+  "/loan-repayment",
+  protect,
+  getLoanRepaymentReport
+);
+
 
 module.exports = router;

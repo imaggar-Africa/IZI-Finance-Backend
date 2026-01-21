@@ -548,13 +548,38 @@ exports.updateBorrowerProfile = async (req, res) => {
       "status"
     ];
 
-    // 3️⃣ Build safe update object
+    // 3️⃣ Build safe update object (TEXT FIELDS)
     const updateData = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         updateData[field] = req.body[field];
       }
     });
+
+    /* =====================================================
+       🆕 PHOTO UPDATE (ADDITIVE ONLY)
+    ===================================================== */
+
+    if (req.files?.livePhoto?.[0]) {
+      updateData.livePhoto = await uploadToFirebase(
+        req.files.livePhoto[0],
+        "livePhoto"
+      );
+    }
+
+    if (req.files?.frontID?.[0]) {
+      updateData.frontID = await uploadToFirebase(
+        req.files.frontID[0],
+        "frontID"
+      );
+    }
+
+    if (req.files?.backID?.[0]) {
+      updateData.backID = await uploadToFirebase(
+        req.files.backID[0],
+        "backID"
+      );
+    }
 
     // ❌ Nothing to update
     if (Object.keys(updateData).length === 0) {
@@ -567,7 +592,7 @@ exports.updateBorrowerProfile = async (req, res) => {
     const updatedCustomer = await Borrower.findByIdAndUpdate(
       customerId,
       { $set: updateData },
-      { new: true } // return updated document
+      { new: true }
     );
 
     return res.status(200).json({

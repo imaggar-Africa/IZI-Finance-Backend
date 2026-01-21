@@ -153,3 +153,84 @@ exports.getAuditLogs = async (req, res) => {
     data: [] // extend later
   });
 };
+
+
+/* =====================================================
+   LOAN & REPAYMENT REPORT (DATE RANGE)
+   ❗ NEW API – DOES NOT CHANGE EXISTING CODE
+===================================================== */
+exports.getLoanRepaymentReport = async (req, res) => {
+  try {
+    const { borrowerId, loanId, fromDate, toDate } = req.query;
+
+    // 🔹 Build loan filter
+    const loanFilter = {};
+
+    if (borrowerId) loanFilter.borrowerId = borrowerId;
+    if (loanId) loanFilter._id = loanId;
+
+    if (fromDate || toDate) {
+      loanFilter.createdAt = {};
+      if (fromDate) loanFilter.createdAt.$gte = new Date(fromDate);
+      if (toDate) loanFilter.createdAt.$lte = new Date(toDate);
+    }
+
+    // 🔹 Fetch loans
+    const loans = await Loan.find(loanFilter).populate("borrowerId lenderId");
+
+    let totalPrincipal = 0;
+    let totalInterest = 0;
+    let totalPaid = 0;
+    let totalBalance = 0;
+
+    const reportData = loans.map((loan) => {
+      const paid =
+        Array.isArray(loan.repayments)
+          ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+          : loan.repaidAmount || 0;
+
+      totalPrincipal += loan.amount || 0;
+      totalInterest += loan.interest || 0;
+      totalPaid += paid;
+      totalBalance += loan.balance || 0;
+
+      return {
+        loanId: loan._id,
+        borrowerName: loan.borrowerId?.fullName || null,
+        principal: loan.amount,
+        interest: loan.interest,
+        totalRepayment: loan.totalRepayment,
+        paidAmount: paid,
+        outstandingBalance: loan.balance,
+        status: loan.status,
+        issueDate: loan.issueDate,
+        dueDate: loan.dueDate
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      filters: {
+        borrowerId: borrowerId || null,
+        loanId: loanId || null,
+        fromDate: fromDate || null,
+        toDate: toDate || null
+      },
+      summary: {
+        totalPrincipal,
+        totalInterest,
+        totalPaid,
+        totalOutstandingBalance: totalBalance
+      },
+      count: reportData.length,
+      data: reportData
+    });
+
+  } catch (error) {
+    console.error("❌ Loan repayment report error:", error);
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};

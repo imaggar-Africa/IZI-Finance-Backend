@@ -55,6 +55,11 @@ router.get("/login/profile",borrowerProtect,customerController.getBorrowerProfil
 router.put(
   "/:customerId",
   protect,
+  firebaseSafeUpload([
+    { name: "livePhoto", maxCount: 1 },
+    { name: "frontID", maxCount: 1 },
+    { name: "backID", maxCount: 1 }
+  ]),
   customerController.updateBorrowerProfile
 );
 
