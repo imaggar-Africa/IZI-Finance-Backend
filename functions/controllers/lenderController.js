@@ -303,3 +303,78 @@ exports.getAgentsByLender = async (req, res) => {
   }
 };
 
+/* =====================================================
+   🆕 EDIT CUSTOMER PROFILE (LENDER ONLY)
+===================================================== */
+exports.updateCustomerProfile = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const { customerId } = req.params;
+
+    const {
+      fullName,
+      phone,
+      idNumber,
+      address,
+      isVerified
+    } = req.body;
+
+    // 🔹 Fetch customer
+    const customer = await Customer.findById(customerId);
+    if (!customer || customer.isDeleted) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // 🔹 Validate ownership (lender or lender's agent)
+    const agents = await AgentModel.find({ lenderId }).select("_id");
+    const agentIds = agents.map(a => a._id.toString());
+
+    const isOwned =
+      (customer.registeredBy?.toString() === lenderId.toString() &&
+        customer.registeredByModel === "User") ||
+      (agentIds.includes(customer.registeredBy?.toString()) &&
+        customer.registeredByModel === "Agent");
+
+    if (!isOwned) {
+      return res.status(403).json({
+        message: "You are not allowed to edit this customer"
+      });
+    }
+
+    // 🔹 Phone uniqueness check
+    if (phone && phone !== customer.phone) {
+      const existing = await Customer.findOne({
+        phone,
+        _id: { $ne: customerId }
+      });
+
+      if (existing) {
+        return res.status(409).json({
+          message: "Phone number already in use"
+        });
+      }
+
+      customer.phone = phone;
+    }
+
+    // 🔹 Update allowed fields only
+    if (fullName) customer.fullName = fullName;
+    if (idNumber) customer.idNumber = idNumber;
+    if (address) customer.address = address;
+    if (typeof isVerified === "boolean") customer.isVerified = isVerified;
+
+    await customer.save();
+
+    return res.status(200).json({
+      message: "Customer profile updated successfully",
+      customer
+    });
+
+  } catch (error) {
+    console.error("❌ Error updating customer:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};

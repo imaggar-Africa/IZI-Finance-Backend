@@ -45,7 +45,7 @@ async function initializeApp() {
   const urlParser = express.urlencoded({ extended: true, limit: "10mb" });
 
   // ---------------- ROUTES ----------------
-  app.use("/api/customers", require("./routes/customerRoutes"));
+  app.use("/api/customers",jsonParser, require("./routes/customerRoutes"));
   app.use("/api/agent", require("./routes/agentRoutes"));
 
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));

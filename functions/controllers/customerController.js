@@ -10,7 +10,7 @@ const Loan = require("../models/Loan");
 // const CustomerProfile = require("../models/BorrowerProfile");
 const bucket = require("../config/firebase");
 const { getStorage } = require("firebase-admin/storage");
-
+const mongoose = require("mongoose"); 
 
 
 // Upload to Firebase Storage
@@ -516,3 +516,76 @@ exports.getBorrowerSummary = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+/* =====================================================
+   🆕 EDIT BORROWER PROFILE (SAFE UPDATE)
+===================================================== */
+exports.updateBorrowerProfile = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    // 1️⃣ Ensure customer exists
+    const customer = await Borrower.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        message: "Customer not found"
+      });
+    }
+
+    // 2️⃣ Fields lender is ALLOWED to update
+    const allowedFields = [
+      "fullName",
+      "altPhoneNumber",
+      "physicalAddress",
+      "gpsLocation",
+      "occupation",
+      "monthlyIncomeRange",
+      "market",
+      "town",
+      "nextOfKinName",
+      "nextOfKinPhone",
+      "status"
+    ];
+
+    // 3️⃣ Build safe update object
+    const updateData = {};
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
+      }
+    });
+
+    // ❌ Nothing to update
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        message: "No valid fields provided for update"
+      });
+    }
+
+    // 4️⃣ Partial update (NO validation error)
+    const updatedCustomer = await Borrower.findByIdAndUpdate(
+      customerId,
+      { $set: updateData },
+      { new: true } // return updated document
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Customer updated successfully",
+      customer: updatedCustomer
+    });
+
+  } catch (error) {
+    console.error("❌ updateBorrowerProfile error:", error);
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+
+
+

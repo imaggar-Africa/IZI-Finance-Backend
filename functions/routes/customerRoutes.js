@@ -52,5 +52,11 @@ router.get("/summary",protect, customerController.getBorrowerSummary);
 
 router.get("/login/profile",borrowerProtect,customerController.getBorrowerProfile)
 
+router.put(
+  "/:customerId",
+  protect,
+  customerController.updateBorrowerProfile
+);
+
 
 module.exports = router;
