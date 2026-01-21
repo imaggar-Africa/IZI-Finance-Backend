@@ -14,6 +14,38 @@ const { recalculateCreditScore } = require("../utils/creditScore");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 
 /* =====================================================
+   🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
+   ❗ DO NOT CHANGE FORMULA
+===================================================== */
+function calculateLoan(principal, repaymentDays, totalPaid = 0) {
+  const INTEREST_RATE = 0.35;
+
+  const interest = principal * INTEREST_RATE;
+  const totalPayable = principal + interest;
+
+  const dailyTarget = totalPayable / repaymentDays;
+
+  const remainingBalance = Math.max(totalPayable - totalPaid, 0);
+
+  const remainingDays =
+    dailyTarget > 0
+      ? Math.ceil(remainingBalance / dailyTarget)
+      : 0;
+
+  return {
+    principal,
+    interest,
+    totalPayable,
+    repaymentDays,
+    dailyTarget: Math.round(dailyTarget),
+    totalPaid,
+    remainingBalance,
+    remainingDays
+  };
+}
+
+
+/* =====================================================
    1️⃣ TRACK LOAN REPAYMENT (STK PUSH INIT)
 ===================================================== */
 exports.trackRepayment = async (req, res) => {
@@ -468,8 +500,57 @@ exports.getLoansByBorrower = async (req, res) => {
     status: { $in: ["active", "overdue"] }
   });
 
-  res.json({ loans });
+  const enrichedLoans = loans.map((loan) => {
+    const repayments = Array.isArray(loan.repayments) ? loan.repayments : [];
+
+    const totalPaid = repayments.reduce(
+      (sum, r) => sum + (r.amount || 0),
+      0
+    );
+
+    const paymentsMade = repayments.length;
+
+    const averagePayment =
+      paymentsMade > 0 ? Math.round(totalPaid / paymentsMade) : 0;
+
+    const lastPayment =
+      paymentsMade > 0
+        ? repayments.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+        : null;
+
+    // ✅ Use your formula exactly
+    const repaymentBehavior = calculateLoan(
+      loan.amount,              // principal
+      loan.duration,            // repaymentDays
+      totalPaid
+    );
+
+    const repaymentProgress =
+      repaymentBehavior.totalPayable > 0
+        ? Math.round(
+            (totalPaid / repaymentBehavior.totalPayable) * 100
+          )
+        : 0;
+
+    return {
+      ...loan.toObject(),
+
+      repaymentBehavior: {
+        paymentsMade,
+        averagePayment,
+        totalPaid,
+        remainingBalance: repaymentBehavior.remainingBalance,
+        remainingPayments: repaymentBehavior.remainingDays,
+        dailyTarget: repaymentBehavior.dailyTarget,
+        lastPaymentDate: lastPayment?.date || null,
+        repaymentProgress // percentage
+      }
+    };
+  });
+
+  res.json({ loans: enrichedLoans });
 };
+
 
 /* =====================================================
    9️⃣ AGENT → REQUEST LOAN
