@@ -491,6 +491,9 @@ exports.getBorrowersWithLoans = async (req, res) => {
 /* =====================================================
    8️⃣ GET LOANS BY BORROWER
 ===================================================== */
+/* =====================================================
+   8️⃣ GET LOANS BY BORROWER
+===================================================== */
 exports.getLoansByBorrower = async (req, res) => {
   const { borrowerId } = req.params;
 
@@ -518,10 +521,10 @@ exports.getLoansByBorrower = async (req, res) => {
         ? repayments.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
         : null;
 
-    // ✅ Use your formula exactly
+    // ✅ EXISTING: repayment behavior calculation
     const repaymentBehavior = calculateLoan(
-      loan.amount,              // principal
-      loan.duration,            // repaymentDays
+      loan.amount,      // principal
+      loan.duration,    // repaymentDays
       totalPaid
     );
 
@@ -532,9 +535,16 @@ exports.getLoansByBorrower = async (req, res) => {
           )
         : 0;
 
+    // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore: loan.creditScoreAfter || 500,
+      requestedAmount: loan.amount
+    });
+
     return {
       ...loan.toObject(),
 
+      // ================= EXISTING =================
       repaymentBehavior: {
         paymentsMade,
         averagePayment,
@@ -543,13 +553,22 @@ exports.getLoansByBorrower = async (req, res) => {
         remainingPayments: repaymentBehavior.remainingDays,
         dailyTarget: repaymentBehavior.dailyTarget,
         lastPaymentDate: lastPayment?.date || null,
-        repaymentProgress // percentage
+        repaymentProgress
+      },
+
+      // ================= ADDED (SAFE) =================
+      loanEligibility: {
+        eligible: eligibility.allowed,
+        creditScore: loan.creditScoreAfter || 500,
+        maxEligibleAmount: eligibility.approvedAmount || 0,
+        reason: eligibility.reason || null
       }
     };
   });
 
   res.json({ loans: enrichedLoans });
 };
+
 
 
 /* =====================================================
