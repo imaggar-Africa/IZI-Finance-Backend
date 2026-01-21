@@ -23,31 +23,43 @@ exports.getStats = async (req, res) => {
     }).populate("borrowerId", "fullName phone");
 
     /* ================= GLOBAL TOTALS ================= */
-    let totalLoanAmount = 0;
-    let totalCollectedAmount = 0;
+    let totalLoanAmount = 0;          // principal + interest (expected)
+    let totalPrincipalAmount = 0;     // principal only
+    let totalCollectedAmount = 0;     // actual collected
     let outstandingLoanAmount = 0;
     let activeLoans = 0;
     let overdueLoans = 0;
     let paidLoans = 0;
+    let totalInterestEarned = 0;      // ✅ FIXED (positive only)
 
     loans.forEach((loan) => {
       totalLoanAmount += loan.totalRepayment || 0;
-
-      const collected = loan.repayments?.reduce(
-        (sum, r) => sum + (r.amount || 0),
-        0
-      ) || 0;
-
-      totalCollectedAmount += collected;
+      totalPrincipalAmount += loan.amount || 0;
       outstandingLoanAmount += loan.balance || 0;
 
+      const collected = Array.isArray(loan.repayments)
+        ? loan.repayments.reduce((sum, r) => sum + (r.amount || 0), 0)
+        : 0;
+
+      totalCollectedAmount += collected;
+
+      /* ================= CORRECT INTEREST CALCULATION =================
+         Principal is recovered first.
+         Interest is earned ONLY after principal recovery.
+      ================================================================= */
+      const principalRecovered = Math.min(collected, loan.amount || 0);
+      const interestRecovered = Math.max(0, collected - principalRecovered);
+
+      totalInterestEarned += interestRecovered;
+
+      /* ================= STATUS COUNTS ================= */
       if (loan.balance > 0) {
         activeLoans++;
         if (new Date(loan.dueDate) < now) {
           overdueLoans++;
         }
       } else {
-        paidLoans++; // ✅ fully paid loans
+        paidLoans++;
       }
     });
 
@@ -94,13 +106,15 @@ exports.getStats = async (req, res) => {
 
     /* ================= FINAL RESPONSE ================= */
     res.status(200).json({
-      totalLoanCount: loans.length,      // ✅ added
+      totalLoanCount: loans.length,
       totalLoanAmount,
+      totalPrincipalAmount,
       totalCollectedAmount,
+      totalInterestEarned,          // ✅ ALWAYS POSITIVE
       outstandingLoanAmount,
       activeLoans,
       overdueLoans,
-      paidLoans,                         // ✅ added
+      paidLoans,
       issuedLoans
     });
 
