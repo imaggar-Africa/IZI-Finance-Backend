@@ -80,10 +80,21 @@ exports.getAllCustomersForLender = async (req, res) => {
           status: { $in: ["active", "overdue"] }
         }).sort({ createdAt: -1 });
 
-        // ✅ Base customer object with CREDIT SCORE exposed
+        const creditScore = loan?.creditScoreAfter ?? null;
+
+        // ✅ ADD: Risk Level Calculation (TASK REQUIREMENT)
+        let riskLevel = null;
+        if (creditScore !== null) {
+          if (creditScore >= 800) riskLevel = "Low";
+          else if (creditScore >= 600) riskLevel = "Medium";
+          else riskLevel = "High";
+        }
+
+        // ✅ Base customer object
         const baseCustomer = {
           ...customer.toObject(),
-          creditScore: loan?.creditScoreAfter ?? null
+          creditScore,
+          riskLevel
         };
 
         // 🔹 No active loan
@@ -203,6 +214,7 @@ exports.getAllCustomersForLender = async (req, res) => {
     });
   }
 };
+
 
 
 exports.assignCustomerToAgent = async (req, res) => {

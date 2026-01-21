@@ -7,76 +7,47 @@ const otpServiceFactory = require("./utils/africatalking");
 const app = express();
 let initialized = false;
 
-// -----------------------------------------------------
-//  FIX 1: DO NOT parse JSON globally (breaks file upload)
-//  Only parse JSON for non-upload routes later.
-// -----------------------------------------------------
 app.use(cors({ origin: true }));
 
-// Health checks BEFORE initialization
+// ---------------- HEALTH ----------------
 app.get("/", (req, res) => {
   res.status(200).json({
     status: "healthy",
-    message: "🔥 Firebase Function is Running Successfully!",
+    message: "🔥 API is running",
     timestamp: new Date().toISOString(),
   });
 });
 
-
-// -----------------------------------------------------
-// Multer (Memory Storage)
-// -----------------------------------------------------
-
-
-
-
 app.get("/ping", (_req, res) => res.send("pong"));
 
-// -----------------------------------------------------
-// Multer (Memory Storage)
-// -----------------------------------------------------
-
-// -----------------------------------------------------
-// INITIALIZATION FUNCTION
-// -----------------------------------------------------
-async function initializeApp(secrets = {}) {
+// ---------------- INIT FUNCTION ----------------
+async function initializeApp() {
   if (initialized) return;
 
   console.log("📦 Initializing database + redis + services...");
 
-  // MongoDB
-  await connectDB(secrets.mongoUri);
-
-  // Redis
-  await ensureRedis(secrets.redisUrl, secrets.redisToken);
-
-  // JWT (used by auth middleware)
-  process.env.JWT_ACCESS_SECRET = secrets.jwtAccessSecret;
-  process.env.JWT_REFRESH_SECRET = secrets.jwtRefreshSecret;
+  // ✅ USE ENV DIRECTLY (NOT secrets)
+  await connectDB(process.env.MONGO_URI);
+  await ensureRedis(
+    process.env.UPSTASH_REDIS_REST_URL,
+    process.env.UPSTASH_REDIS_REST_TOKEN
+  );
 
   // OTP service
   app.locals.otpService = otpServiceFactory({
-    atUsername: secrets.atUsername,
-    atApiKey: secrets.atApiKey,
-    atSenderId: secrets.atSenderId,
+    atUsername: process.env.AT_USERNAME,
+    atApiKey: process.env.AT_API_KEY,
+    atSenderId: process.env.AT_SENDER_ID,
   });
 
-
-  // -----------------------------------------------------
-// 1️⃣ UPLOAD ROUTES (MUST COME FIRST + OUTSIDE /api)
-// -----------------------------------------------------
-app.use("/api/customers", require("./routes/customerRoutes"));  // ← FIXED
-app.use("/api/agent", require("./routes/agentRoutes")); // optional
-
-
-
-  // -----------------------------------------------------
-  // FIX 2 — JSON PARSER ONLY FOR JSON ROUTES
-  // -----------------------------------------------------
+  // ---------------- BODY PARSERS ----------------
   const jsonParser = express.json({ limit: "10mb" });
   const urlParser = express.urlencoded({ extended: true, limit: "10mb" });
 
-  // JSON ROUTES ONLY
+  // ---------------- ROUTES ----------------
+  app.use("/api/customers", require("./routes/customerRoutes"));
+  app.use("/api/agent", require("./routes/agentRoutes"));
+
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));
   app.use("/api/mpesa", jsonParser, require("./routes/mpesaCallbackRoutes"));
   app.use("/api/auth", jsonParser, require("./routes/authRoutes"));
@@ -92,42 +63,30 @@ app.use("/api/agent", require("./routes/agentRoutes")); // optional
   app.use("/api/lender", jsonParser, require("./routes/lenderRoutes"));
   app.use("/api", jsonParser, require("./routes/activityRoutes"));
   app.use("/api/suggestions", jsonParser, require("./routes/suggestionRoutes"));
-app.use("/api/borrowers", jsonParser, require("./routes/borrowerRoutes"));
-app.use("/api/borrowers",jsonParser,require("./routes/borrowerBusinessProfileRoutes"));
-app.use(
-  "/api/borrowers/next-of-kin",
-  jsonParser,
-  require("./routes/nextOfKinRoutes")
-);
+  app.use("/api/borrowers", jsonParser, require("./routes/borrowerRoutes"));
+  app.use("/api/borrowers", jsonParser, require("./routes/borrowerBusinessProfileRoutes"));
+  app.use("/api/borrowers/next-of-kin", jsonParser, require("./routes/nextOfKinRoutes"));
+  app.use("/api/guarantor", jsonParser, require("./routes/guarantorRoutes"));
+  app.use("/api/airtel", jsonParser, require("./routes/airtelRoutes"));
+  app.use("/api/mtn", jsonParser, require("./routes/mtnRoutes"));
+  app.use("/api/vodacom", jsonParser, require("./routes/vodacom.routes"));
+  app.use("/api/reports",jsonParser, require("./routes/reportRoutes"));
 
-app.use(
-  "/api/guarantor",
-  jsonParser,
-  require("./routes/guarantorRoutes")
-);
+  app.use("/debug", require("./routes/debug"));
+  app.use("/api/c2b", require("./routes/c2bRoutes"));
 
-// Debug route to confirm secrets loaded
-app.use("/debug", require("./routes/debug"));
+  // ---------------- ERRORS ----------------
+  app.use((req, res) =>
+    res.status(404).json({ message: "API Route Not Found" })
+  );
 
-// C2B callback handler (public endpoint for Safaricom)
-
-
-// Registration route (your internal API)
-// app.use("/api", jsonParser, require("./routes/mpesaRegisterRoute"));
-const c2bRoutes = require("./routes/c2bRoutes");
-app.use("/api/c2b", c2bRoutes);
-
-  // Fallback 404
-  app.use((req, res) => res.status(404).json({ message: "API Route Not Found" }));
-
-  // Global fail-safe error handler
-  app.use((err, req, res, next) => {
+  app.use((err, req, res, _next) => {
     console.error("🔥 SERVER ERROR:", err);
     res.status(500).json({ message: "Internal Server Error" });
   });
 
   initialized = true;
-  console.log("✅ App fully initialized!");
+  console.log("✅ App initialization complete");
 }
 
-module.exports = { app, initializeApp, };
+module.exports = { app, initializeApp };

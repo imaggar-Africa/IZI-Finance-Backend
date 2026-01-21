@@ -47,6 +47,8 @@ router.get("/findAll",protect, customerController.getAllCustomers);
 // Get borrower savings balance
 router.get("/savings/:customerId", customerController.getSavings);
 
+router.get("/summary",protect, customerController.getBorrowerSummary);
+
 
 router.get("/login/profile",borrowerProtect,customerController.getBorrowerProfile)
 

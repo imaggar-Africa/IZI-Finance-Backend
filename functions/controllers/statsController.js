@@ -5,8 +5,15 @@ const Loan = require("../models/Loan");
 exports.getStats = async (req, res) => {
   try {
     const now = new Date();
-    const startOfToday = new Date(now.setHours(0, 0, 0, 0));
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const sevenDaysAgo = new Date(startOfToday);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
     const threeMonthsAgo = new Date(startOfMonth);
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
@@ -18,8 +25,10 @@ exports.getStats = async (req, res) => {
     /* ================= GLOBAL TOTALS ================= */
     let totalLoanAmount = 0;
     let totalCollectedAmount = 0;
+    let outstandingLoanAmount = 0;
     let activeLoans = 0;
     let overdueLoans = 0;
+    let paidLoans = 0;
 
     loans.forEach((loan) => {
       totalLoanAmount += loan.totalRepayment || 0;
@@ -30,22 +39,23 @@ exports.getStats = async (req, res) => {
       ) || 0;
 
       totalCollectedAmount += collected;
+      outstandingLoanAmount += loan.balance || 0;
 
       if (loan.balance > 0) {
         activeLoans++;
-        if (new Date(loan.dueDate) < new Date()) {
+        if (new Date(loan.dueDate) < now) {
           overdueLoans++;
         }
+      } else {
+        paidLoans++; // ✅ fully paid loans
       }
     });
 
-    /* ================= OUTSTANDING ================= */
-    const outstandingLoanAmount = loans.reduce(
-      (sum, loan) => sum + (loan.balance || 0),
-      0
+    /* ================= FILTERED LOANS ================= */
+    const last7DaysLoans = loans.filter(
+      l => l.createdAt >= sevenDaysAgo
     );
 
-    /* ================= FILTERED LOANS ================= */
     const thisMonthLoans = loans.filter(
       l => l.createdAt >= startOfMonth
     );
@@ -54,15 +64,23 @@ exports.getStats = async (req, res) => {
       l => l.createdAt >= threeMonthsAgo
     );
 
-    /* ================= ISSUED LOANS (TIME BASED) ================= */
+    /* ================= ISSUED LOANS ================= */
     const issuedLoans = {
+      last7Days: {
+        count: last7DaysLoans.length,
+        totalAmount: last7DaysLoans.reduce(
+          (s, l) => s + (l.totalRepayment || 0),
+          0
+        ),
+        loans: last7DaysLoans
+      },
       thisMonth: {
         count: thisMonthLoans.length,
         totalAmount: thisMonthLoans.reduce(
           (s, l) => s + (l.totalRepayment || 0),
           0
         ),
-        loans: thisMonthLoans   // ✅ ADDED
+        loans: thisMonthLoans
       },
       last3Months: {
         count: last3MonthsLoans.length,
@@ -70,16 +88,19 @@ exports.getStats = async (req, res) => {
           (s, l) => s + (l.totalRepayment || 0),
           0
         ),
-        loans: last3MonthsLoans // ✅ ADDED
+        loans: last3MonthsLoans
       }
     };
 
+    /* ================= FINAL RESPONSE ================= */
     res.status(200).json({
+      totalLoanCount: loans.length,      // ✅ added
       totalLoanAmount,
       totalCollectedAmount,
       outstandingLoanAmount,
       activeLoans,
       overdueLoans,
+      paidLoans,                         // ✅ added
       issuedLoans
     });
 

@@ -1,49 +1,82 @@
 const express = require("express");
-const router = express.Router(); // Initialize the router
+const router = express.Router();
+
 const loanController = require("../controllers/loanController");
-const validateRegisteredPhone = require("../middleware/validatePhone");
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
 
-// Issue a new loan
+2
+// Issue loan
 router.post("/issue", protect, loanController.issueLoan);
 
+// Outstanding loans (borrower)
+router.post(
+  "/outstanding/loan-details",
+  borrowerProtect,
+  loanController.getActiveLoansByPhone
+);
 
-// --- B2C Callback ---
-// Safaricom will call this endpoint after B2C payment
+// Repayment
+router.post("/repay", borrowerProtect, loanController.trackRepayment);
 
-router.post("/outstanding/loan-details",borrowerProtect ,loanController.getActiveLoansByPhone);
+// Fully paid
+router.get("/fully-paid", protect, loanController.getFullyPaidLoans);
+// router.get(
+//   "/customers-with-fully-paid/loans",
+//   loanController.getAllCustomersWithLoansFullyPaid
+// );
 
-// Track loan repayments
-router.post("/repay",borrowerProtect,loanController.trackRepayment);
+router.get(
+  "/borrower/:borrowerId/fully-paid",
+  loanController.getFullyPaidLoansByCustomer
+);
 
-router.get("/fully-paid",protect, loanController.getFullyPaidLoans);
+router.get(
+  "/borrowers/active-overdue",
+  loanController.getBorrowersWithLoans
+);
 
+router.get(
+  "/outstanding/:borrowerId",
+  protect,
+  loanController.getLoansByBorrower
+);
 
-router.get("/customers-with-fully-paid/loans", loanController.getAllCustomersWithLoansFullyPaid);
-
-
-// GET all fully paid loans for a borrower
-router.get("/borrower/:borrowerId/fully-paid", loanController.getFullyPaidLoansByCustomer);
-
-router.get("/borrowers/active-overdue", loanController.getBorrowersWithLoans);
-
-
-router.get('/outstanding/:borrowerId',protect, loanController.getLoansByBorrower);
-
-
+// STK callback
 router.post(
   "/repayment/callback",
   loanController.stkRepaymentCallback
 );
 
+// Agent → request loan
+router.post(
+  "/request-loan",
+  protect,
+  authorizeRoles("agent"),
+  loanController.requestLoan
+);
 
-router.post("/request-loan",protect,authorizeRoles("agent"),loanController.requestLoan);
+// Lender → review
+router.get(
+  "/loan-requests",
+  protect,
+  authorizeRoles("lender"),
+  loanController.getAllLoanRequests
+);
 
-router.get("/loan-requests",protect,authorizeRoles("lender"),loanController.getAllLoanRequests);
+router.post(
+  "/review-loan",
+  protect,
+  authorizeRoles("lender"),
+  loanController.reviewLoanRequest
+);
 
-router.post("/review-loan",protect,authorizeRoles("lender"),loanController.reviewLoanRequest);
+// Agent → active loans
+router.get(
+  "/active-loans",
+  protect,
+  authorizeRoles("agent","lender"),
+  loanController.getActiveLoans
+);
 
-
-router.get("/active-loans",protect,authorizeRoles("agent"),loanController.getActiveLoansByAgent);
-module.exports = router; // Export the router
+module.exports = router;

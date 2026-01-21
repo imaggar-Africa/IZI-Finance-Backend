@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const Customer = require("../models/customer"); 
 const OTP = require("../models/OTP");
+const Loan = require("../models/Loan")
 
 // Borrower registration
 exports.registerBorrower = async (req, res) => {
