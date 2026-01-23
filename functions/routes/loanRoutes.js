@@ -79,6 +79,12 @@ router.get(
   loanController.getActiveLoans
 );
 
+// Get payment instructions (QR / Pay link)
+router.get(
+  "/pay/:loanId",
+  protect,
+  loanController.getPaymentInstructions
+);
 
 
 module.exports = router;

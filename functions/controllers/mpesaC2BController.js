@@ -6,6 +6,7 @@ const Customer = require("../models/customer");
 const { sendSMS } = require("../utils/sms");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const { normalizePhone } = require("../utils/normalizePhone");
 
 // functions/controllers/mpesaC2B.controller.js
 const axios = require("axios");
@@ -362,17 +363,28 @@ exports.confirmationHandler = async (req, res) => {
 
 
 // ---------------- SIMULATION ----------------
+// ---------------- SIMULATION ----------------
 exports.simulatePayment = async (req, res) => {
   try {
     const token = await getMpesaToken();
 
     const url = "https://sandbox.safaricom.co.ke/mpesa/c2b/v2/simulate";
 
+    const rawPhone = req.body.phone || "+254708374149";
+    const normalizedPhone = normalizePhone(rawPhone);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number for simulation"
+      });
+    }
+
     const payload = {
       ShortCode: global.config.mpesaShortcode,
       BillRefNumber: req.body.billRef || "TEST123",
       Amount: req.body.amount || "10",
-      Msisdn: req.body.phone || "254708374149",
+      Msisdn: normalizedPhone.replace("+", ""), // M-Pesa requires no "+"
       CommandID: "CustomerPayBillOnline",
     };
 
@@ -380,12 +392,21 @@ exports.simulatePayment = async (req, res) => {
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    return res.json({ success: true, message: "Simulation Sent", safaricom: data });
+    return res.json({
+      success: true,
+      message: "Simulation Sent",
+      safaricom: data
+    });
+
   } catch (err) {
     console.error("Simulation Error:", err.response?.data || err.message);
-    return res.status(500).json({ success: false, error: err.response?.data || err.message });
+    return res.status(500).json({
+      success: false,
+      error: err.response?.data || err.message
+    });
   }
 };
+
 
 
 

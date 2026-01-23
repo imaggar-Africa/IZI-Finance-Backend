@@ -882,3 +882,33 @@ exports.stkRepaymentCallback = async (req, res) => {
 };
 
 
+// controllers/loanController.js
+exports.getPaymentInstructions = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+
+    const loan = await Loan.findById(loanId).populate("borrowerId");
+    if (!loan) {
+      return res.status(404).json({ message: "Loan not found" });
+    }
+
+    if (loan.status === "fully paid") {
+      return res.status(400).json({ message: "Loan already fully paid" });
+    }
+
+    return res.json({
+      success: true,
+      payment: {
+        loanId: loan._id,
+        borrowerName: loan.borrowerId.fullName,
+        amountDue: loan.balance,
+        paybill: process.env.MPESA_SHORTCODE,
+        accountNumber: loan.borrowerId.idNumber, // BillRefNumber
+        phone: loan.borrowerId.phone
+      }
+    });
+  } catch (err) {
+    console.error("getPaymentInstructions error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

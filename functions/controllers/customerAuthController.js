@@ -1,8 +1,8 @@
 // controllers/borrowerAuthController.js
 
 const Customer = require("../models/customer");
+const { normalizePhone } = require("../utils/phone");
 
-const { normalizeToE164 } = require("../utils/phone");
 const { signAccess, issueSession, rotateRefresh,revokeRefresh } = require('../utils/tokens-redis');
 
 
@@ -17,7 +17,7 @@ exports.loginRequest = async (req, res) => {
     }
 
     // Normalize
-    const normalizedPhone = normalizeToE164(phone, "KE");
+    const normalizedPhone = normalizePhone(phone, "KE");
     if (!normalizedPhone) {
       return res.status(400).json({ success: false, message: "Invalid phone number" });
     }
@@ -72,7 +72,7 @@ exports.loginVerify = async (req, res) => {
     console.log("Step 1: Received phone & OTP", phone, otp);
 
     // Normalize
-    const normalizedPhone = normalizeToE164(phone, "KE");
+    const normalizedPhone = normalizePhone(phone, "KE");
     if (!normalizedPhone) {
       return res.status(400).json({ success: false, message: "Invalid phone number" });
     }

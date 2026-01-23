@@ -6,7 +6,7 @@ const { registerAgent, changePassword, loginAgent, registerCustomer, getAgentPro
 const { protect, agentProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware.js");
 // Get upload from app locals
-const { validateKenyaPhone } = require("../middleware/validateKenyaPhone.js");
+const { validateAfricaPhone } = require("../middleware/validateAfricaPhone.js");
 const firebaseSafeUpload = require("../utils/upload.js");
 // const handleMulterErrors = require("../utils/upload.js")
 // Register agent (lender only
@@ -34,11 +34,11 @@ router.get(
 );
 
 
-router.post("/register", protect,authorizeRoles("lender"), validateKenyaPhone, // ✅ phone validation here
+router.post("/register", protect,authorizeRoles("lender"), validateAfricaPhone, // ✅ phone validation here
 registerAgent);
 
 // Agent login
-router.post("/login",validateKenyaPhone,loginAgent);
+router.post("/login",validateAfricaPhone,loginAgent);
 
 // Change password (agent only, must be logged in)
 router.put("/change-password", protect, changePassword);

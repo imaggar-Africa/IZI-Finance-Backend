@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { sendOTP, verifyOTPController } = require("../controllers/otpController");
-const { validateKenyaPhone } = require("../middleware/validateKenyaPhone");
+const { validateAfricaPhone } = require("../middleware/validateAfricaPhone");
 
 // Route to send OTP
 router.post("/send", sendOTP);

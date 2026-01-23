@@ -5,14 +5,14 @@ const authController = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
-const { validateKenyaPhone } = require("../middleware/validateKenyaPhone");
+const { validateAfricaPhone } = require("../middleware/validateAfricaPhone");
 const firebaseSafeUpload = require("../utils/upload");
 
 // Register a new user
-router.post("/register",validateKenyaPhone,authController.register);
+router.post("/register",validateAfricaPhone,authController.register);
 
 // Login user
-router.post("/login",validateKenyaPhone, authController.login);
+router.post("/login",validateAfricaPhone, authController.login);
 
 // Refersh Token 
 router.post("/refresh", authController.refresh); 
@@ -31,10 +31,10 @@ router.post(
   authController.uploadLenderIDVerification
 );
 // Send verification code
-router.post("/send-verification-code",validateKenyaPhone, authController.sendVerificationCode);
+router.post("/send-verification-code",validateAfricaPhone, authController.sendVerificationCode);
 
 // Verify phone number
-router.post("/verify-phone",validateKenyaPhone, authController.verifyPhoneNumber);
+router.post("/verify-phone",validateAfricaPhone, authController.verifyPhoneNumber);
 
 // forgortpasword
 

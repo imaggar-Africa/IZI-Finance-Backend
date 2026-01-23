@@ -1,5 +1,5 @@
 const africastalking = require("africastalking");
-const { normalizeToE164 } = require("./phone");
+const { normalizePhone } = require("./normalizePhone");
 
 // ------------------------------
 // AfricasTalking SMS client
@@ -42,23 +42,26 @@ exports.sendSMS = async (phoneNumber, message) => {
   try {
     if (!isSMSInitialized) initSMS();
 
-    const normalizedPhone = normalizeToE164(phoneNumber, "KE");
-    if (!normalizedPhone) throw new Error(`Invalid phone number: ${phoneNumber}`);
+    const normalizedPhone = normalizePhone(phoneNumber);
 
-    console.log("📨 Sending SMS ->", normalizedPhone, message);
+    if (!normalizedPhone) {
+      console.warn("⚠️ SMS skipped. Invalid phone:", phoneNumber);
+      return { success: false, message: "Invalid phone number" };
+    }
 
     if (!smsClient) {
       return { success: false, message: "SMS client not initialized" };
     }
 
-    // Construct SMS payload
+    console.log("📨 Sending SMS ->", normalizedPhone, message);
+
     const payload = {
       to: [normalizedPhone],
-      message
+      message,
     };
 
-    // ONLY include sender ID if NOT sandbox and sender ID is valid
-    const senderId = global.config.atSenderId?.trim();
+    // Include sender ID only if not sandbox
+    const senderId = global.config?.atSenderId?.trim();
     if (senderId && global.config.atUsername !== "sandbox") {
       payload.from = senderId;
     }
@@ -68,8 +71,8 @@ exports.sendSMS = async (phoneNumber, message) => {
     console.log("📩 SMS Response:", JSON.stringify(result, null, 2));
     return result;
 
-  } catch (e) {
-    console.error("❌ Error sending SMS:", e);
-    throw e;
+  } catch (error) {
+    console.error("❌ Error sending SMS:", error.message);
+    return { success: false, error: error.message };
   }
 };

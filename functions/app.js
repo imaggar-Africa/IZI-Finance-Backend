@@ -71,6 +71,9 @@ async function initializeApp() {
   app.use("/api/mtn", jsonParser, require("./routes/mtnRoutes"));
   app.use("/api/vodacom", jsonParser, require("./routes/vodacom.routes"));
   app.use("/api/reports",jsonParser, require("./routes/reportRoutes"));
+  app.use("/api/phone", require("./routes/phoneTestRoutes"));
+app.use("/api/qr", jsonParser, require("./routes/qrRoutes"));
+
 
   app.use("/debug", require("./routes/debug"));
   app.use("/api/c2b", require("./routes/c2bRoutes"));

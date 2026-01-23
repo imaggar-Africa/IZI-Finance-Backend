@@ -7,7 +7,7 @@ const { app } = require("../app");
 
 
 const authorizeRoles = require("../middleware/rolemiddleware");
-const { validateKenyaPhone } = require("../middleware/validateKenyaPhone");
+const { validateAfricaPhone } = require("../middleware/validateAfricaPhone");
 const busboyMiddleware = require("../middleware/busboyMiddleware");
 const firebaseSafeUpload = require("../utils/upload");
 
@@ -24,7 +24,7 @@ router.post(
   "/register",
   protect,
   authorizeRoles("lender"),
-
+   
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
     { name: "backID", maxCount: 1 },

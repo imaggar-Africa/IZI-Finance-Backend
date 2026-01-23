@@ -1,45 +1,86 @@
-// ✅ E.164 validator
-exports.isE164 = (phone) => {
-  return /^\+[1-9]\d{1,14}$/.test(phone);
-};
+/**
+ * Phone normalization utility
+ * Supports: KE, UG, TZ, RW, NG, GH
+ * Output: E.164 format (+XXXXXXXXXXX)
+ */
 
-exports.normalizeToE164 = (raw, defaultCountry = "KE") => {
+// E.164 validator
+const E164 = /^\+[1-9]\d{1,14}$/;
+
+exports.isE164 = (phone) => E164.test(phone);
+
+/**
+ * Normalize phone number to E.164
+ * @param {string} raw
+ * @returns {string|null}
+ */
+exports.normalizePhone = (raw) => {
   if (!raw) return null;
 
   let s = String(raw)
-    .replace(/[^\d+]/g, "")
+    .replace(/\s+/g, "")
     .replace(/\u200B/g, "")
     .replace(/\u00A0/g, "");
 
   if (!s) return null;
 
-  // Already E164
-  if (s.startsWith("+") && exports.isE164(s)) {
+  // Already valid E.164
+  if (s.startsWith("+") && E164.test(s)) {
     return s;
   }
 
-  // 🇰🇪 Kenya rules
-  if (defaultCountry === "KE") {
+  // Remove "+"
+  s = s.replace(/^\+/, "");
 
-    if (s.startsWith("07")) {
-      s = "+254" + s.slice(1);
-      return exports.isE164(s) ? s : null;
-    }
+  /* ---------------- KENYA ---------------- */
+  if (s.startsWith("254") && s.length === 12) {
+    return `+${s}`;
+  }
+  if (s.startsWith("07") && s.length === 10) {
+    return `+254${s.slice(1)}`;
+  }
+  if (s.startsWith("7") && s.length === 9) {
+    return `+254${s}`;
+  }
 
-    if (s.length === 9 && s.startsWith("7")) {
-      s = "+254" + s;
-      return exports.isE164(s) ? s : null;
-    }
+  /* ---------------- UGANDA ---------------- */
+  if (s.startsWith("256") && s.length === 12) {
+    return `+${s}`;
+  }
+  if (s.startsWith("07") && s.length === 10) {
+    return `+256${s.slice(1)}`;
+  }
 
-    if (s.length === 10 && s.startsWith("0")) {
-      s = "+254" + s.slice(1);
-      return exports.isE164(s) ? s : null;
-    }
+  /* ---------------- TANZANIA ---------------- */
+  if (s.startsWith("255") && s.length === 12) {
+    return `+${s}`;
+  }
+  if (s.startsWith("07") && s.length === 10) {
+    return `+255${s.slice(1)}`;
+  }
 
-    if (s.length === 12 && s.startsWith("254")) {
-      s = "+" + s;
-      return exports.isE164(s) ? s : null;
-    }
+  /* ---------------- RWANDA ---------------- */
+  if (s.startsWith("250") && s.length === 12) {
+    return `+${s}`;
+  }
+  if (s.startsWith("07") && s.length === 10) {
+    return `+250${s.slice(1)}`;
+  }
+
+  /* ---------------- NIGERIA ---------------- */
+  if (s.startsWith("234") && s.length === 13) {
+    return `+${s}`;
+  }
+  if (s.startsWith("0") && s.length === 11) {
+    return `+234${s.slice(1)}`;
+  }
+
+  /* ---------------- GHANA ---------------- */
+  if (s.startsWith("233") && s.length === 12) {
+    return `+${s}`;
+  }
+  if (s.startsWith("0") && s.length === 10) {
+    return `+233${s.slice(1)}`;
   }
 
   return null;
