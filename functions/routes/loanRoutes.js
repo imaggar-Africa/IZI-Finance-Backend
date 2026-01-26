@@ -38,15 +38,12 @@ router.get(
 
 router.get(
   "/outstanding/:borrowerId",
-  protect,
+  borrowerProtect,
+  authorizeRoles("lender","agent"),
   loanController.getLoansByBorrower
 );
 
-// STK callback
-router.post(
-  "/repayment/callback",
-  loanController.stkRepaymentCallback
-);
+
 
 // Agent → request loan
 router.post(
@@ -75,8 +72,8 @@ router.post(
 router.get(
   "/active-loans",
   protect,
-  authorizeRoles("agent","lender"),
-  loanController.getActiveLoans
+  authorizeRoles("agent"),
+  loanController.getActiveLoansByAgent
 );
 
 // Get payment instructions (QR / Pay link)
