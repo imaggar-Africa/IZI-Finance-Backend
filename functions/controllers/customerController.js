@@ -11,7 +11,7 @@ const Loan = require("../models/Loan");
 const bucket = require("../config/firebase");
 const { getStorage } = require("firebase-admin/storage");
 const mongoose = require("mongoose"); 
-
+const { generateAccountId } = require("../utils/generateAccountId");
 
 // Upload to Firebase Storage
 const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
@@ -178,6 +178,7 @@ if (referralSource === "existing_borrower") {
     const frontIDUrl = await uploadToFirebase(frontIDFile, "frontID");
     const backIDUrl = await uploadToFirebase(backIDFile, "backID");
 
+    const accountId = await generateAccountId();
     // -----------------------------
     // Create borrower record
     // -----------------------------
@@ -185,7 +186,7 @@ if (referralSource === "existing_borrower") {
       registeredBy: req.user._id,
       registeredByModel: req.user.role === "agent" ? "Agent" : "User",
       agentId: req.user.role === "agent" ? req.user._id : null,
-
+      accountId,
       fullName,
       phone,
       idNumber,
@@ -611,6 +612,80 @@ exports.updateBorrowerProfile = async (req, res) => {
 };
 
 
+exports.getMyLoans = async (req, res) => {
+  const { borrowerId } = req.params;
+
+  const loans = await Loan.find({
+    borrowerId,
+    loanRequestStatus: "approved",
+    status: { $in: ["active", "overdue"] }
+  });
+
+  const enrichedLoans = loans.map((loan) => {
+    const repayments = Array.isArray(loan.repayments) ? loan.repayments : [];
+
+    const totalPaid = repayments.reduce(
+      (sum, r) => sum + (r.amount || 0),
+      0
+    );
+
+    const paymentsMade = repayments.length;
+
+    const averagePayment =
+      paymentsMade > 0 ? Math.round(totalPaid / paymentsMade) : 0;
+
+    const lastPayment =
+      paymentsMade > 0
+        ? repayments.sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+        : null;
+
+    // ✅ EXISTING: repayment behavior calculation
+    const repaymentBehavior = calculateLoan(
+      loan.amount,      // principal
+      loan.duration,    // repaymentDays
+      totalPaid
+    );
+
+    const repaymentProgress =
+      repaymentBehavior.totalPayable > 0
+        ? Math.round(
+            (totalPaid / repaymentBehavior.totalPayable) * 100
+          )
+        : 0;
+
+    // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore: loan.creditScoreAfter || 500,
+      requestedAmount: loan.amount
+    });
+
+    return {
+      ...loan.toObject(),
+
+      // ================= EXISTING =================
+      repaymentBehavior: {
+        paymentsMade,
+        averagePayment,
+        totalPaid,
+        remainingBalance: repaymentBehavior.remainingBalance,
+        remainingPayments: repaymentBehavior.remainingDays,
+        dailyTarget: repaymentBehavior.dailyTarget,
+        lastPaymentDate: lastPayment?.date || null,
+        repaymentProgress
+      },
+
+      // ================= ADDED (SAFE) =================
+      loanEligibility: {
+        eligible: eligibility.allowed,
+        creditScore: loan.creditScoreAfter || 500,
+        maxEligibleAmount: eligibility.approvedAmount || 0,
+        reason: eligibility.reason || null
+      }
+    };
+  });
+
+  res.json({ loans: enrichedLoans });
+};
 
 
 

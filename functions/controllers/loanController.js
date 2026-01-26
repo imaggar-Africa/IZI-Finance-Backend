@@ -10,7 +10,6 @@ const { normalizePhone } = require("../utils/phone");
 const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
-const { recalculateCreditScore } = require("../utils/creditScore");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 
 /* =====================================================

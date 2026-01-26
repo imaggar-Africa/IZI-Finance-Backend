@@ -63,5 +63,10 @@ router.put(
   customerController.updateBorrowerProfile
 );
 
+router.get(
+  "/borrower/:borrowerId",
+  borrowerProtect,          
+  customerController.getMyLoans       
+);
 
 module.exports = router;

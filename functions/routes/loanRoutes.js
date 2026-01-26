@@ -38,7 +38,6 @@ router.get(
 
 router.get(
   "/outstanding/:borrowerId",
-  borrowerProtect,
   authorizeRoles("lender","agent"),
   loanController.getLoansByBorrower
 );
