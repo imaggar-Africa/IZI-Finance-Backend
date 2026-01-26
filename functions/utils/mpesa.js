@@ -56,54 +56,68 @@ async function initiateSTKPush(phoneNumber, amount, accountRef) {
   const config = getConfig();
   const env = config.mpesaEnv.trim().toLowerCase();
 
-  const normalized = normalizePhone(phoneNumber);
-  if (!normalized) {
-    throw new Error("Invalid phone number");
-  }
+  try {
+    phoneNumber = phoneNumber.replace(/^\+/, "").replace(/\s+/g, "");
 
-  // M-Pesa requires MSISDN without "+"
-  const phone = normalized.replace("+", "");
+    amount = Number(amount);
+    if (!Number.isFinite(amount) || amount < 1)
+      throw new Error("Amount must be >= 1");
 
-  const amt = Number(amount);
-  if (!Number.isFinite(amt) || amt < 1) {
-    throw new Error("Invalid amount");
-  }
+    if (env === "sandbox" && phoneNumber !== "254708374149") {
+      throw new Error("Sandbox MSISDN must be 254708374149");
+    }
 
-  // Sandbox restriction
-  if (env === "sandbox" && phone !== "254708374149") {
-    throw new Error("Sandbox MSISDN must be 254708374149");
-  }
+    const accessToken = await getAccessToken();
+    const ts = timestamp14();
+    const password = stkPassword(config.mpesaShortcode, config.mpesaPasskey, ts);
 
-  const token = await getAccessToken();
-  const ts = timestamp14();
-  const password = stkPassword(
-    config.mpesaShortcode.trim(),
-    config.mpesaPasskey.trim(),
-    ts
-  );
 
-  const { data } = await axios.post(
-    `${getBaseURL()}/mpesa/stkpush/v1/processrequest`,
-    {
+    // 🚀 Log before sending
+    console.log("📌 STK Push Request Config:", {
+      env,
       BusinessShortCode: config.mpesaShortcode.trim(),
-      Password: password,
-      Timestamp: ts,
-      TransactionType: "CustomerPayBillOnline",
-      Amount: amt,
-      PartyA: phone,
-      PartyB: config.mpesaShortcode.trim(),
-      PhoneNumber: phone,
-      CallBackURL: config.mpesaStkCallback.trim(),
+      Passkey: config.mpesaPasskey ? "Loaded ✔" : "Missing ❌",
+      CallbackURL: config.mpesaStkCallback.trim(),
+      AccountReference: accountRef,
+      PhoneNumber: phoneNumber,
+      Amount: amount
+    });
+    
+    const { data } = await axios.post(
+      `${getBaseURL()}/mpesa/stkpush/v1/processrequest`,
+      {
+        BusinessShortCode: config.mpesaShortcode.trim(),
+        Password: password,
+        Timestamp: ts,
+        TransactionType: "CustomerPayBillOnline",
+        Amount: amount,
+        PartyA: phoneNumber,
+        PartyB: config.mpesaShortcode.trim(),
+        PhoneNumber: phoneNumber,
+        CallBackURL: config.mpesaStkCallback.trim(),
 
-      // 🔗 Link payment to loan / wallet
-      AccountReference: accountRef || "Loan-Repayment",
-      TransactionDesc: "Loan Repayment",
-    },
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+        // ⭐ USE DYNAMIC CUSTOMER ACCOUNT REFERENCE
+        AccountReference:
+          env === "sandbox"
+            ? accountRef || "TEST-STK"
+            : accountRef || "CustomerPayment",
 
-  return data;
+        TransactionDesc:
+          env === "sandbox"
+            ? "TEST MODE — NO REAL DEBIT"
+            : "Deposit to Wallet",
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    return data;
+  } catch (error) {
+    console.error("❌ STK Push failed:", error.response?.data || error.message);
+    throw new Error("STK Push failed");
+  }
 }
+
+
 
 /* ---------------- STK QUERY ---------------- */
 

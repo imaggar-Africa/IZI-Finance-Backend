@@ -138,6 +138,13 @@ const customerSchema = new mongoose.Schema({
     required: true
   },
 
+  accountId: {
+  type: String,
+  unique: true,
+  index: true,
+  required: true
+},
+
   // ---------------- META ----------------
   createdAt: {
     type: Date,

@@ -163,11 +163,16 @@ exports.getLoanRepaymentReport = async (req, res) => {
   try {
     const { borrowerId, loanId, fromDate, toDate } = req.query;
 
-    // 🔹 Build loan filter
+    // 🔹 Build filter (EMPTY = ALL BORROWERS)
     const loanFilter = {};
 
-    if (borrowerId) loanFilter.borrowerId = borrowerId;
-    if (loanId) loanFilter._id = loanId;
+    if (borrowerId) {
+      loanFilter.borrowerId = borrowerId;
+    }
+
+    if (loanId) {
+      loanFilter._id = loanId;
+    }
 
     if (fromDate || toDate) {
       loanFilter.createdAt = {};
@@ -175,8 +180,10 @@ exports.getLoanRepaymentReport = async (req, res) => {
       if (toDate) loanFilter.createdAt.$lte = new Date(toDate);
     }
 
-    // 🔹 Fetch loans
-    const loans = await Loan.find(loanFilter).populate("borrowerId lenderId");
+    // 🔹 Fetch loans for ALL borrowers
+    const loans = await Loan.find(loanFilter)
+      .populate("borrowerId", "fullName phone")
+      .populate("lenderId", "fullName phone");
 
     let totalPrincipal = 0;
     let totalInterest = 0;
@@ -184,23 +191,24 @@ exports.getLoanRepaymentReport = async (req, res) => {
     let totalBalance = 0;
 
     const reportData = loans.map((loan) => {
-      const paid =
-        Array.isArray(loan.repayments)
-          ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
-          : loan.repaidAmount || 0;
+      const paidAmount = Array.isArray(loan.repayments)
+        ? loan.repayments.reduce((sum, r) => sum + (r.amount || 0), 0)
+        : 0;
 
       totalPrincipal += loan.amount || 0;
       totalInterest += loan.interest || 0;
-      totalPaid += paid;
+      totalPaid += paidAmount;
       totalBalance += loan.balance || 0;
 
       return {
         loanId: loan._id,
-        borrowerName: loan.borrowerId?.fullName || null,
-        principal: loan.amount,
-        interest: loan.interest,
+        borrowerId: loan.borrowerId?._id || null,
+        borrowerName: loan.borrowerId?.fullName || "N/A",
+        borrowerPhone: loan.borrowerId?.phone || "N/A",
+        principalAmount: loan.amount,
+        interestAmount: loan.interest,
         totalRepayment: loan.totalRepayment,
-        paidAmount: paid,
+        paidAmount,
         outstandingBalance: loan.balance,
         status: loan.status,
         issueDate: loan.issueDate,
@@ -210,19 +218,19 @@ exports.getLoanRepaymentReport = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      filters: {
-        borrowerId: borrowerId || null,
-        loanId: loanId || null,
+      filtersApplied: {
+        borrowerId: borrowerId || "ALL",
+        loanId: loanId || "ALL",
         fromDate: fromDate || null,
         toDate: toDate || null
       },
       summary: {
+        totalLoans: reportData.length,
         totalPrincipal,
         totalInterest,
         totalPaid,
         totalOutstandingBalance: totalBalance
       },
-      count: reportData.length,
       data: reportData
     });
 

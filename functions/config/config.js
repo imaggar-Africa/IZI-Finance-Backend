@@ -9,7 +9,7 @@ const requiredEnv = [
   "PROJECT_ID",
   "CLIENT_EMAIL",
   "FB_PRIVATE_KEY",
-  "FB_STORAGE_BUCKET",
+  "STORAGE_BUCKET",
 ];
 
 const missing = requiredEnv.filter(
@@ -61,7 +61,7 @@ if (!configured) {
     if (!admin.apps.length) {
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        storageBucket: process.env.FB_STORAGE_BUCKET.trim(),
+        storageBucket: process.env.STORAGE_BUCKET.trim(),
       });
     }
 

@@ -1,6 +1,7 @@
 {
   "projects": {
-    "default": "izi-finance-backend-7f4f6"
+    "default": "izi-finance-backend-7f4f6",
+    "izi": "izi-finance-backend-7f4f6"
   },
   "targets": {},
   "etags": {}
