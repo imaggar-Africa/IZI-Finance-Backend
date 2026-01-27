@@ -64,7 +64,7 @@ router.put(
 );
 
 router.get(
-  "/borrower/:borrowerId",
+  "/:borrowerId",
   borrowerProtect,          
   customerController.getMyLoans       
 );

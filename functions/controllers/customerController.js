@@ -16,6 +16,26 @@ const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { calculateMembership } = require("../utils/membershipRules");
 
 
+function calculateLoan(principal, repaymentDays, totalPaid) {
+  const dailyTarget = Math.ceil(principal / repaymentDays);
+  const totalPayable = principal;
+
+  const remainingBalance = Math.max(totalPayable - totalPaid, 0);
+
+  const remainingDays =
+    dailyTarget > 0
+      ? Math.ceil(remainingBalance / dailyTarget)
+      : 0;
+
+  return {
+    totalPayable,
+    remainingBalance,
+    remainingDays,
+    dailyTarget
+  };
+}
+
+
 // Upload to Firebase Storage
 const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
   return new Promise(async (resolve, reject) => {
