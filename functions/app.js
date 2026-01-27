@@ -1,3 +1,4 @@
+require("dotenv").config(); // ✅ SAFE – Firebase ignores this in prod
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
@@ -91,9 +92,6 @@ app.use("/api/qr", jsonParser, require("./routes/qrRoutes"));
   initialized = true;
   console.log("✅ App initialization complete");
 }
-
-module.exports = { app, initializeApp };
-
 // ================= ECS ONLY =================
 // This runs ONLY in ECS, NOT in Firebase
 if (!process.env.FUNCTION_TARGET) {
@@ -112,3 +110,6 @@ if (!process.env.FUNCTION_TARGET) {
     }
   })();
 }
+module.exports = { app, initializeApp };
+
+
