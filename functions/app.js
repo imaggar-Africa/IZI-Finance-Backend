@@ -78,6 +78,8 @@ async function initializeApp(secrets = {}) {
   app.use("/api/auth/borrower", jsonParser, require("./routes/borrowerauthRouter"));
   app.use("/api/wallet", jsonParser, require("./routes/walletRoutes"));
   app.use("/api/loans", jsonParser, require("./routes/loanRoutes"));
+  app.use("/api", jsonParser, require("./routes/activityRoutes"));
+  app.use("/api/suggestions", jsonParser, require("./routes/suggestionRoutes"));
   app.use("/api/transactions", jsonParser, require("./routes/transactionRoutes"));
   app.use("/api/stats", jsonParser, require("./routes/statsRoutes"));
   app.use("/api/profile", jsonParser, require("./routes/profileRoutes"));
