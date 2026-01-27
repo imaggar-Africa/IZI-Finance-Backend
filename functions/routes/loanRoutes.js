@@ -28,16 +28,21 @@ router.get("/fully-paid", protect, loanController.getFullyPaidLoans);
 
 router.get(
   "/borrower/:borrowerId/fully-paid",
+  protect,
+  authorizeRoles("lender","agent"),
   loanController.getFullyPaidLoansByCustomer
 );
 
 router.get(
   "/borrowers/active-overdue",
+  protect,
+  authorizeRoles("lender","agent"),
   loanController.getBorrowersWithLoans
 );
 
 router.get(
   "/outstanding/:borrowerId",
+  protect,
   authorizeRoles("lender","agent"),
   loanController.getLoansByBorrower
 );
