@@ -92,4 +92,11 @@ app.use("/api/qr", jsonParser, require("./routes/qrRoutes"));
   console.log("✅ App initialization complete");
 }
 
+if (!process.env.FUNCTION_TARGET) {
+  const PORT =  3000;
+
+  app.listen(PORT, () => {
+    console.log("Server running on port", PORT);
+  });
+}
 module.exports = { app, initializeApp };
