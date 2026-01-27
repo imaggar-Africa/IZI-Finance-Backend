@@ -12,6 +12,7 @@ const bucket = require("../config/firebase");
 const { getStorage } = require("firebase-admin/storage");
 const mongoose = require("mongoose"); 
 const { generateAccountId } = require("../utils/generateAccountId");
+const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 
 // Upload to Firebase Storage
 const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
@@ -408,29 +409,112 @@ exports.getSavings = async (req, res) => {
   }
 };
 
+// exports.getBorrowerProfile = async (req, res) => {
+//   try {
+//     // Borrower is already attached by borrowerProtect middleware
+//     const borrower = req.borrower;
+
+//     if (!borrower) {
+//       return res.status(404).json({ success: false, message: "Borrower not found" });
+//     }
+
+//     // Fetch loans related to this borrower
+//     const loans = await Loan.find({ borrowerId: borrower._id })
+//       .populate("lenderId")           // Populate full lender document
+//       .populate("requestedByAgentId") // Populate full agent document
+//       .populate("issuedByLenderId");  // Populate full issuedBy lender document
+
+//     res.status(200).json({
+//       success: true,
+//       borrower, // Entire borrower object
+//       loans     // Array of full loan objects
+//     });
+//   } catch (error) {
+//     console.error("Error fetching borrower profile:", error);
+//     res.status(500).json({ success: false, message: "Error fetching borrower profile" });
+//   }
+// };
+
 exports.getBorrowerProfile = async (req, res) => {
   try {
     // Borrower is already attached by borrowerProtect middleware
     const borrower = req.borrower;
 
     if (!borrower) {
-      return res.status(404).json({ success: false, message: "Borrower not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Borrower not found"
+      });
     }
 
     // Fetch loans related to this borrower
     const loans = await Loan.find({ borrowerId: borrower._id })
-      .populate("lenderId")           // Populate full lender document
-      .populate("requestedByAgentId") // Populate full agent document
-      .populate("issuedByLenderId");  // Populate full issuedBy lender document
+      .populate("lenderId")
+      .populate("requestedByAgentId")
+      .populate("issuedByLenderId");
+
+    /* ================= ADDED: DERIVED PROFILE DATA ================= */
+
+    let totalLoanBalance = 0;
+    let activeLoanCount = 0;
+    let overdueLoanCount = 0;
+    let nextDueDate = null;
+
+    loans.forEach((loan) => {
+      if (loan.status === "active" || loan.status === "overdue") {
+        activeLoanCount++;
+        totalLoanBalance += loan.balance || 0;
+
+        if (loan.status === "overdue") {
+          overdueLoanCount++;
+        }
+
+        if (!nextDueDate || new Date(loan.dueDate) < new Date(nextDueDate)) {
+          nextDueDate = loan.dueDate;
+        }
+      }
+    });
+
+    const creditScore = borrower.creditScore || 500;
+
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore,
+      requestedAmount: borrower.creditLimit || 50000
+    });
+
+    const profileSummary = {
+      borrowerName: borrower.fullName,
+      phone: borrower.phone,
+      membershipType: borrower.membershipType || "Silver Member",
+      creditScore,
+      creditLimit: borrower.creditLimit || eligibility.approvedAmount || 50000,
+      eligible: eligibility.allowed,
+
+      loanSummary: {
+        activeLoanCount,
+        overdueLoanCount,
+        totalLoanBalance,
+        nextDueDate
+      },
+
+      savingsBalance: borrower.savingsBalance || 0
+    };
+
+    /* ================= FINAL RESPONSE (UNCHANGED + ADDED) ================= */
 
     res.status(200).json({
       success: true,
-      borrower, // Entire borrower object
-      loans     // Array of full loan objects
+      borrower,          // EXISTING (UNCHANGED)
+      loans,             // EXISTING (UNCHANGED)
+      profileSummary     // ✅ ADDED
     });
+
   } catch (error) {
     console.error("Error fetching borrower profile:", error);
-    res.status(500).json({ success: false, message: "Error fetching borrower profile" });
+    res.status(500).json({
+      success: false,
+      message: "Error fetching borrower profile"
+    });
   }
 };
 
