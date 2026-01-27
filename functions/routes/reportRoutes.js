@@ -13,7 +13,7 @@ const {
   getLoanRepaymentReport
 } = require("../controllers/reportController");
 
-router.get("/dashboard",protect, getDashboardReport);
+router.get("/summary",protect, getDashboardReport);
 router.get("/loans",protect, getLoansReport);
 router.get("/repayments",protect, getRepaymentsReport);
 router.get("/profit",protect, getProfitReport);

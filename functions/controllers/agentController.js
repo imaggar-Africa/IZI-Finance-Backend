@@ -5,6 +5,7 @@ const AgentModel = require("../models/AgentModel");
 const { issueSession, signAccess } = require("../utils/tokens-redis");
 const OTP = require("../models/OTP");
 const uploadToFirebase = require("../utils/uploadToFirebase");
+const Loan = require("../models/Loan");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents
@@ -357,16 +358,71 @@ const registerCustomer = async (req, res) => {
 
 
 const getAgentProfile = asyncHandler(async (req, res) => {
-  // req.user is set by your 'protect' middleware
+  // Agent is set by protect middleware
   const agent = await AgentModel.findById(req.user._id)
-    .select("-password") // exclude password
-    .populate("customers"); // populate all customer fields if needed
+    .select("-password")
+    .populate("customers");
 
   if (!agent) {
     return res.status(404).json({ message: "Agent not found" });
   }
 
-  res.status(200).json(agent); // return the whole agent object
+  /* =====================================================
+     📊 DASHBOARD CALCULATIONS (NO FLOW CHANGE)
+  ===================================================== */
+
+  // 1️⃣ Loans issued by this agent (APPROVED ONLY)
+  const issuedLoans = await Loan.find({
+    requestedByAgentId: agent._id,
+    loanRequestStatus: "approved"
+  });
+
+  const loansIssuedAmount = issuedLoans.reduce(
+    (sum, loan) => sum + (loan.amount || 0),
+    0
+  );
+
+  // 2️⃣ Pending loan requests by this agent
+  const pendingRequests = await Loan.countDocuments({
+    requestedByAgentId: agent._id,
+    loanRequestStatus: "pending"
+  });
+
+  // 3️⃣ Agent tier (simple rule — can be enhanced later)
+  let agentTier = "Bronze Agent";
+  if (agent.totalCustomers >= 20) agentTier = "Silver Agent";
+  if (agent.totalCustomers >= 50) agentTier = "Gold Agent";
+
+  // 4️⃣ Rating (safe fallback)
+  const rating =
+    agent.totalCustomers > 0
+      ? Math.min(5, Number((agent.totalCustomers / 5).toFixed(1)))
+      : 0;
+
+  /* =====================================================
+     ✅ FINAL RESPONSE (ADDITIVE ONLY)
+  ===================================================== */
+  res.status(200).json({
+    agent, // ✅ EXISTING DATA (UNCHANGED)
+
+    dashboardSummary: {
+      agentId: `AG-${agent._id.toString().slice(-5)}`,
+      agentTier,
+      rating,
+
+      wallet: {
+        availableBalance: agent.walletBalance || 0,
+        lastUpdated: agent.updatedAt
+      },
+
+      stats: {
+        totalCustomers: agent.customers.length,
+        loansIssuedAmount,   // ✅ REAL DB VALUE
+        pendingRequests      // ✅ REAL DB VALUE
+      }
+    }
+  });
 });
+
 
 module.exports = { registerAgent ,changePassword,loginAgent , registerCustomer ,getAgentProfile,getCustomersForAgent };

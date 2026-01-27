@@ -13,6 +13,8 @@ const { getStorage } = require("firebase-admin/storage");
 const mongoose = require("mongoose"); 
 const { generateAccountId } = require("../utils/generateAccountId");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
+const { calculateMembership } = require("../utils/membershipRules");
+
 
 // Upload to Firebase Storage
 const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
@@ -103,6 +105,7 @@ exports.registerCustomer = async (req, res) => {
     const {
       fullName,
       phone,
+      email,
       idNumber,
       dateOfBirth,
       gender,
@@ -128,9 +131,9 @@ exports.registerCustomer = async (req, res) => {
     // -----------------------------
     // Validate required fields
     // -----------------------------
-    if (!fullName || !phone || !idNumber || !req.files?.livePhoto) {
+    if (!fullName || !phone || !idNumber ||!email || !req.files?.livePhoto) {
       return res.status(400).json({
-        message: "Full name, phone, ID number and Live Photo are required.",
+        message: "Full name, phone,email ID number and Live Photo are required.",
       });
     }
 
@@ -190,6 +193,7 @@ if (referralSource === "existing_borrower") {
       accountId,
       fullName,
       phone,
+      email,
       idNumber,
 
       livePhoto: livePhotoUrl,
@@ -342,11 +346,6 @@ exports.getAllCustomers = async (req, res) => {
   }
 };
 
-
-
-
-
-
 // exports.getCustomerWithProfile = async (req, res) => {
 //   try {
 //     const { id } = req.params; // use `id` instead of `customerId`
@@ -434,10 +433,9 @@ exports.getSavings = async (req, res) => {
 //     res.status(500).json({ success: false, message: "Error fetching borrower profile" });
 //   }
 // };
-
 exports.getBorrowerProfile = async (req, res) => {
   try {
-    // Borrower is already attached by borrowerProtect middleware
+    // Borrower already attached by borrowerProtect middleware
     const borrower = req.borrower;
 
     if (!borrower) {
@@ -447,34 +445,59 @@ exports.getBorrowerProfile = async (req, res) => {
       });
     }
 
-    // Fetch loans related to this borrower
+    // Fetch all loans for this borrower
     const loans = await Loan.find({ borrowerId: borrower._id })
       .populate("lenderId")
       .populate("requestedByAgentId")
       .populate("issuedByLenderId");
 
-    /* ================= ADDED: DERIVED PROFILE DATA ================= */
-
+    /* ================= DERIVED COUNTERS ================= */
     let totalLoanBalance = 0;
     let activeLoanCount = 0;
     let overdueLoanCount = 0;
+    let fullyPaidLoans = 0;
     let nextDueDate = null;
 
+    let totalLoanTaken = 0;
+    let totalRepaidAmount = 0;
+    let onTimePayments = 0;
+    let totalPayments = 0;
+
     loans.forEach((loan) => {
+      // Lifetime totals
+      totalLoanTaken += loan.amount || 0;
+      totalRepaidAmount += loan.repaidAmount || 0;
+
+      // Active / overdue logic
       if (loan.status === "active" || loan.status === "overdue") {
         activeLoanCount++;
         totalLoanBalance += loan.balance || 0;
-
-        if (loan.status === "overdue") {
-          overdueLoanCount++;
-        }
 
         if (!nextDueDate || new Date(loan.dueDate) < new Date(nextDueDate)) {
           nextDueDate = loan.dueDate;
         }
       }
+
+      if (loan.status === "overdue") overdueLoanCount++;
+      if (loan.status === "fully paid") fullyPaidLoans++;
+
+      // Repayment punctuality
+      if (Array.isArray(loan.repayments)) {
+        loan.repayments.forEach(r => {
+          totalPayments++;
+          if (r.wasPaymentLate === false) {
+            onTimePayments++;
+          }
+        });
+      }
     });
 
+    const onTimeRepaymentPercentage =
+      totalPayments > 0
+        ? Math.round((onTimePayments / totalPayments) * 100)
+        : 100;
+
+    /* ================= CREDIT SCORE + ELIGIBILITY ================= */
     const creditScore = borrower.creditScore || 500;
 
     const eligibility = evaluateLoanByCreditScore({
@@ -482,31 +505,52 @@ exports.getBorrowerProfile = async (req, res) => {
       requestedAmount: borrower.creditLimit || 50000
     });
 
+    /* ================= MEMBERSHIP AUTO RULE ================= */
+    const membershipType = calculateMembership({
+      creditScore,
+      fullyPaidLoans,
+      overdueLoans: overdueLoanCount
+    });
+
+    /* ================= PROFILE SUMMARY ================= */
     const profileSummary = {
+      borrowerRefId: borrower.borrowerRefId || `BRW-${borrower.accountId}`,
       borrowerName: borrower.fullName,
       phone: borrower.phone,
-      membershipType: borrower.membershipType || "Silver Member",
+      email: borrower.email || null,
+      dateJoined: borrower.createdAt,
+
+      membershipType,
       creditScore,
-      creditLimit: borrower.creditLimit || eligibility.approvedAmount || 50000,
+
+      creditLimit:
+        borrower.creditLimit ||
+        eligibility.approvedAmount ||
+        50000,
+
       eligible: eligibility.allowed,
 
       loanSummary: {
         activeLoanCount,
         overdueLoanCount,
+        activeLoanAmount: totalLoanBalance,
         totalLoanBalance,
         nextDueDate
       },
 
-      savingsBalance: borrower.savingsBalance || 0
+      totalLoanTaken,
+      totalRepaidAmount,
+      onTimeRepaymentPercentage,
+      savingsBalance: borrower.savingsBalance || 0,
+      isVerified: borrower.isVerified === true
     };
 
-    /* ================= FINAL RESPONSE (UNCHANGED + ADDED) ================= */
-
+    /* ================= FINAL RESPONSE ================= */
     res.status(200).json({
       success: true,
-      borrower,          // EXISTING (UNCHANGED)
-      loans,             // EXISTING (UNCHANGED)
-      profileSummary     // ✅ ADDED
+      borrower,        // EXISTING (unchanged)
+      loans,           // EXISTING (unchanged)
+      profileSummary   // ✅ UI-complete summary
     });
 
   } catch (error) {
@@ -517,7 +561,6 @@ exports.getBorrowerProfile = async (req, res) => {
     });
   }
 };
-
 
 exports.getCustomersWithoutActiveLoans = async (req, res) => {
   try {

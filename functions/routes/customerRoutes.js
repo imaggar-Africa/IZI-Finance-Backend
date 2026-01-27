@@ -24,7 +24,7 @@ router.post(
   "/register",
   protect,
   authorizeRoles("lender"),
-   
+   validateAfricaPhone,
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
     { name: "backID", maxCount: 1 },

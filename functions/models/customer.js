@@ -28,6 +28,12 @@ const customerSchema = new mongoose.Schema({
     unique: true
   },
 
+   email: {
+    type: String,
+    required: true,
+    unique: true
+  },
+
   idNumber: {
     type: String,
     required: true,
