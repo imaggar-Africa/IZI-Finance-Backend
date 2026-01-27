@@ -106,8 +106,19 @@ async function initializeApp(secrets = {}) {
     res.status(500).json({ message: "Internal Server Error" });
   });
 
+ 
+
+
   initialized = true;
   console.log("✅ App initialization complete");
+}
+
+ if (!process.env.FUNCTION_TARGET) {
+  const PORT =  3000;
+
+  app.listen(PORT, () => {
+    console.log("Server running on port", PORT);
+  });
 }
 
 module.exports = { app, initializeApp };
