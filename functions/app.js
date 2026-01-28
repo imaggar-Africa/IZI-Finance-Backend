@@ -1,4 +1,4 @@
-require("dotenv").config(); // ✅ SAFE – Firebase ignores this in prod
+require("dotenv").config(); // ✅ sSAFE – Firebase ignores this in prod
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
