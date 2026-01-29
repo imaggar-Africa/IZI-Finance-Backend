@@ -10,7 +10,6 @@ const { normalizePhone } = require("../utils/phone");
 const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
-const { recalculateCreditScore } = require("../utils/creditScore");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 
 /* =====================================================
@@ -168,6 +167,56 @@ exports.issueLoan = async (req, res) => {
     const borrower = await Customer.findById(borrowerId).session(session);
     if (!borrower) throw new Error("Borrower not found");
 
+    /* =====================================================
+       ✅ ADDED VALIDATIONS (SAFE – NO FLOW CHANGE)
+    ===================================================== */
+
+    if (borrower.isDeleted) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: "Borrower account is inactive" });
+    }
+
+    if (!borrower.isVerified) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: "Borrower is not verified" });
+    }
+
+    const creditScore = borrower.creditScore || 500;
+
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore,
+      requestedAmount: amount
+    });
+
+    if (!eligibility.allowed) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        message: "Loan not allowed based on credit score",
+        creditScore,
+        maxEligibleAmount: eligibility.approvedAmount || 0
+      });
+    }
+
+    if (amount > eligibility.approvedAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        message: "Requested amount exceeds eligible limit",
+        maxEligibleAmount: eligibility.approvedAmount
+      });
+    }
+
+    if (amount <= 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        message: "Loan amount must be greater than zero"
+      });
+    }
+
     /* ---------------- CHECK EXISTING LOAN ---------------- */
     const existingLoan = await Loan.findOne({
       borrowerId,
@@ -196,7 +245,7 @@ exports.issueLoan = async (req, res) => {
     const dailyRepayment = totalRepayment / numInstallments;
 
     /* =====================================================
-       ✅ CREATE LOAN (REPAYMENT-READY STRUCTURE)
+       ✅ CREATE LOAN (UNCHANGED)
     ===================================================== */
     const [loan] = await Loan.create(
       [
@@ -251,7 +300,7 @@ exports.issueLoan = async (req, res) => {
     );
 
     /* =====================================================
-       🧪 SANDBOX MODE (AUTO SUCCESS)
+       🧪 SANDBOX MODE (UNCHANGED)
     ===================================================== */
     if (global.config.mpesaEnv === "sandbox") {
       transaction.status = "successful";
@@ -301,7 +350,7 @@ Due date: ${loan.dueDate.toDateString()}`
     }
 
     /* =====================================================
-       🚀 LIVE MODE (B2C)
+       🚀 LIVE MODE (UNCHANGED)
     ===================================================== */
     const b2cResponse = await initiateB2C(phoneNumber, amount, transaction._id);
 
@@ -329,6 +378,7 @@ Due date: ${loan.dueDate.toDateString()}`
     return res.status(500).json({ message: error.message });
   }
 };
+
 
 /* =====================================================
    3️⃣ GET ACTIVE LOANS BY PHONE

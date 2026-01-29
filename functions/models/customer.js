@@ -28,6 +28,12 @@ const customerSchema = new mongoose.Schema({
     unique: true
   },
 
+   email: {
+    type: String,
+    required: true,
+    unique: true
+  },
+
   idNumber: {
     type: String,
     required: true,
@@ -137,6 +143,13 @@ const customerSchema = new mongoose.Schema({
     enum: ["existing_borrower", "advertisement", "direct"],
     required: true
   },
+
+  accountId: {
+  type: String,
+  unique: true,
+  index: true,
+  required: true
+},
 
   // ---------------- META ----------------
   createdAt: {

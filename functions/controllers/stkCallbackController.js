@@ -9,6 +9,8 @@ const { sendSMS } = require("../utils/sms");
 const AgentCommission = require('../models/AgentCommission');
 const Profile = require("../models/Profile");
 const AgentModel = require("../models/AgentModel");
+const { recalculateCreditScore } = require("../utils/creditScore");
+
 
 // Single callback for all STK Push transactions
 
@@ -302,6 +304,46 @@ if (lender) {
         borrower.loanBalance = loan.balance;
         transaction.balanceAfter = loan.balance;
         await borrower.save({ session });
+
+        // ================== CREDIT SCORE UPDATE (ADD ONLY) ==================
+
+const paidDate = new Date();           // callback time
+const dueDate = loan.dueDate;          // loan due date
+
+let wasPaymentLate = false;
+let daysLate = 0;
+
+if (dueDate && paidDate > dueDate) {
+  wasPaymentLate = true;
+  daysLate = Math.ceil(
+    (paidDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)
+  );
+}
+
+const { newScore, scoreDelta } = await recalculateCreditScore({
+  currentScore: borrower.creditScore || 500,
+  wasPaymentLate,
+  daysLate
+});
+
+// update only credit score fields
+borrower.creditScore = newScore;
+borrower.lastCreditScoreChange = {
+  delta: scoreDelta,
+  reason: wasPaymentLate
+    ? `Late payment (${daysLate} days)`
+    : "On-time repayment",
+  date: new Date()
+};
+
+await borrower.save({ session });
+
+console.log(
+  `📊 Credit score updated | Borrower=${borrower._id} | Δ=${scoreDelta} | New=${newScore}`
+);
+
+// ================== END CREDIT SCORE UPDATE ==================
+
 
         // ⭐ Get lender details for notification
         const lenderProfile = await Profile.findOne({ userId: loan.lenderId });

@@ -7,6 +7,8 @@ exports.getStats = async (req, res) => {
   try {
     const now = new Date();
 
+    const { fromDate, toDate } = req.query;
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
@@ -18,20 +20,36 @@ exports.getStats = async (req, res) => {
     const threeMonthsAgo = new Date(startOfMonth);
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-    /* ================= ALL APPROVED LOANS ================= */
-    const loans = await Loan.find({
+    /* ================= DATE FILTER (ADDED) ================= */
+    const dateFilter = {};
+    if (fromDate) dateFilter.$gte = new Date(fromDate);
+    if (toDate) {
+      const end = new Date(toDate);
+      end.setHours(23, 59, 59, 999);
+      dateFilter.$lte = end;
+    }
+
+    const loanFilter = {
       loanRequestStatus: "approved"
-    }).populate("borrowerId", "fullName phone");
+    };
+
+    if (fromDate || toDate) {
+      loanFilter.createdAt = dateFilter;
+    }
+
+    /* ================= ALL APPROVED LOANS ================= */
+    const loans = await Loan.find(loanFilter)
+      .populate("borrowerId", "fullName phone");
 
     /* ================= GLOBAL TOTALS ================= */
-    let totalLoanAmount = 0;          // principal + interest (expected)
-    let totalPrincipalAmount = 0;     // principal only
-    let totalCollectedAmount = 0;     // actual collected
+    let totalLoanAmount = 0;
+    let totalPrincipalAmount = 0;
+    let totalCollectedAmount = 0;
     let outstandingLoanAmount = 0;
     let activeLoans = 0;
     let overdueLoans = 0;
     let paidLoans = 0;
-    let totalInterestEarned = 0;      // ✅ FIXED (positive only)
+    let totalInterestEarned = 0;
 
     loans.forEach((loan) => {
       totalLoanAmount += loan.totalRepayment || 0;
@@ -44,74 +62,55 @@ exports.getStats = async (req, res) => {
 
       totalCollectedAmount += collected;
 
-      /* ================= CORRECT INTEREST CALCULATION =================
-         Principal is recovered first.
-         Interest is earned ONLY after principal recovery.
-      ================================================================= */
       const principalRecovered = Math.min(collected, loan.amount || 0);
       const interestRecovered = Math.max(0, collected - principalRecovered);
 
       totalInterestEarned += interestRecovered;
 
-      /* ================= STATUS COUNTS ================= */
       if (loan.balance > 0) {
         activeLoans++;
-        if (new Date(loan.dueDate) < now) {
-          overdueLoans++;
-        }
+        if (new Date(loan.dueDate) < now) overdueLoans++;
       } else {
         paidLoans++;
       }
     });
 
-    /* ================= FILTERED LOANS ================= */
-    const last7DaysLoans = loans.filter(
-      l => l.createdAt >= sevenDaysAgo
-    );
+    /* ================= FILTERED LOANS (UNCHANGED) ================= */
+    const last7DaysLoans = loans.filter(l => l.createdAt >= sevenDaysAgo);
+    const thisMonthLoans = loans.filter(l => l.createdAt >= startOfMonth);
+    const last3MonthsLoans = loans.filter(l => l.createdAt >= threeMonthsAgo);
 
-    const thisMonthLoans = loans.filter(
-      l => l.createdAt >= startOfMonth
-    );
-
-    const last3MonthsLoans = loans.filter(
-      l => l.createdAt >= threeMonthsAgo
-    );
-
-    /* ================= ISSUED LOANS ================= */
     const issuedLoans = {
       last7Days: {
         count: last7DaysLoans.length,
         totalAmount: last7DaysLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0),
-          0
+          (s, l) => s + (l.totalRepayment || 0), 0
         ),
         loans: last7DaysLoans
       },
       thisMonth: {
         count: thisMonthLoans.length,
         totalAmount: thisMonthLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0),
-          0
+          (s, l) => s + (l.totalRepayment || 0), 0
         ),
         loans: thisMonthLoans
       },
       last3Months: {
         count: last3MonthsLoans.length,
         totalAmount: last3MonthsLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0),
-          0
+          (s, l) => s + (l.totalRepayment || 0), 0
         ),
         loans: last3MonthsLoans
       }
     };
 
-    /* ================= FINAL RESPONSE ================= */
+    /* ================= FINAL RESPONSE (UNCHANGED) ================= */
     res.status(200).json({
       totalLoanCount: loans.length,
       totalLoanAmount,
       totalPrincipalAmount,
       totalCollectedAmount,
-      totalInterestEarned,          // ✅ ALWAYS POSITIVE
+      totalInterestEarned,
       outstandingLoanAmount,
       activeLoans,
       overdueLoans,
@@ -125,25 +124,26 @@ exports.getStats = async (req, res) => {
   }
 };
 
+
 exports.downloadStatsPDF = async (req, res) => {
   try {
     const now = new Date();
+    const { fromDate, toDate } = req.query;
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    /* ================= DATE FILTER ================= */
+    const loanFilter = {
+      loanRequestStatus: "approved"
+    };
 
-    const sevenDaysAgo = new Date(startOfToday);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    const threeMonthsAgo = new Date(startOfMonth);
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    if (fromDate || toDate) {
+      loanFilter.issueDate = {};
+      if (fromDate) loanFilter.issueDate.$gte = new Date(fromDate);
+      if (toDate) loanFilter.issueDate.$lte = new Date(toDate);
+    }
 
     /* ================= FETCH APPROVED LOANS ================= */
-    const loans = await Loan.find({
-      loanRequestStatus: "approved"
-    }).populate("borrowerId", "fullName phone");
+    const loans = await Loan.find(loanFilter)
+      .populate("borrowerId", "fullName phone");
 
     /* ================= CALCULATIONS ================= */
     let totalLoanAmount = 0;
@@ -189,7 +189,8 @@ exports.downloadStatsPDF = async (req, res) => {
 
     doc.pipe(res);
 
-    /* ================= PDF CONTENT ================= */
+    /* ================= PAGE 1 – SUMMARY ================= */
+
     doc
       .fontSize(20)
       .text("IZI Lender App – Stats Report", { align: "center" })
@@ -198,7 +199,20 @@ exports.downloadStatsPDF = async (req, res) => {
     doc
       .fontSize(12)
       .text(`Generated On: ${now.toLocaleString()}`)
-      .moveDown(1.5);
+      .moveDown(0.5);
+
+    if (fromDate || toDate) {
+      doc
+        .fontSize(11)
+        .text(
+          `Report Period: ${
+            fromDate ? new Date(fromDate).toDateString() : "Start"
+          } → ${
+            toDate ? new Date(toDate).toDateString() : "Today"
+          }`
+        )
+        .moveDown(1);
+    }
 
     doc.fontSize(14).text("Overall Statistics", { underline: true });
     doc.moveDown(0.5);
@@ -221,9 +235,44 @@ exports.downloadStatsPDF = async (req, res) => {
     doc.text(`Paid Loans: ${paidLoans}`);
 
     doc.moveDown(2);
-    doc
-      .fontSize(10)
-      .text("© IZI Lender App", { align: "center" });
+    doc.fontSize(10).text("© IZI Lender App", { align: "center" });
+
+    /* ================= PAGE 2 – LOAN DETAILS ================= */
+
+    doc.addPage();
+
+    doc.fontSize(16).text("Loan Details", { underline: true });
+    doc.moveDown(1);
+
+    doc.fontSize(10).text(
+      "Borrower | Phone | Principal | Total | Collected | Balance | Issue Date | Due Date | Status"
+    );
+    doc.moveDown(0.5);
+
+    doc.fontSize(9);
+
+    loans.forEach((loan, index) => {
+      const borrowerName = loan.borrowerId?.fullName || "N/A";
+      const phone = loan.borrowerId?.phone || "N/A";
+
+      const collected = Array.isArray(loan.repayments)
+        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+        : 0;
+
+      let status = "Paid";
+      if (loan.balance > 0 && new Date(loan.dueDate) < now) status = "Overdue";
+      else if (loan.balance > 0) status = "Active";
+
+      doc.text(
+        `${index + 1}. ${borrowerName} | ${phone} | ₹${loan.amount} | ₹${loan.totalRepayment} | ₹${collected} | ₹${loan.balance} | ${
+          loan.issueDate ? new Date(loan.issueDate).toDateString() : "N/A"
+        } | ${
+          loan.dueDate ? new Date(loan.dueDate).toDateString() : "N/A"
+        } | ${status}`
+      );
+
+      doc.moveDown(0.3);
+    });
 
     doc.end();
 
