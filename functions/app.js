@@ -1,3 +1,4 @@
+require("dotenv").config(); // ✅ sSAFE – Firebase ignores this in prod
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
@@ -113,6 +114,6 @@ async function initializeApp(secrets = {}) {
   console.log("✅ App initialization complete");
 }
 
-
-
 module.exports = { app, initializeApp };
+
+
