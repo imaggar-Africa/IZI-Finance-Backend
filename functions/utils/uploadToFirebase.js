@@ -1,5 +1,6 @@
 const path = require("path");
-const { v4: uuidv4 } = require("uuid");
+const { randomUUID } = require("crypto");
+const id = randomUUID();
 const bucket = require("../config/firebase");
 
 /**

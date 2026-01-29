@@ -1,3 +1,11 @@
+process.on("uncaughtException", err => {
+  console.error("UNCAUGHT:", err);
+});
+
+process.on("unhandledRejection", err => {
+  console.error("UNHANDLED:", err);
+});
+
 require("dotenv").config(); // ✅ sSAFE – Firebase ignores this in prod
 const express = require("express");
 const cors = require("cors");
