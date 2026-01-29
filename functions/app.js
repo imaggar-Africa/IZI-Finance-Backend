@@ -1,14 +1,22 @@
-process.on("uncaughtException", err => {
-  console.error("UNCAUGHT:", err);
+/*************************************************
+ * GLOBAL ERROR SAFETY NET
+ *************************************************/
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
 });
 
-process.on("unhandledRejection", err => {
-  console.error("UNHANDLED:", err);
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
 });
 
-require("dotenv").config(); // ✅ sSAFE – Firebase ignores this in prod
+/*************************************************
+ * BASE SETUP
+ *************************************************/
+require("dotenv").config(); // Safe for local, ignored in prod (ECS/Firebase)
+
 const express = require("express");
 const cors = require("cors");
+
 const connectDB = require("./config/db");
 const { ensureRedis } = require("./utils/redis");
 const otpServiceFactory = require("./utils/africatalking");
@@ -16,75 +24,73 @@ const otpServiceFactory = require("./utils/africatalking");
 const app = express();
 let initialized = false;
 
-// -----------------------------------------------------
-//  FIX 1: DO NOT parse JSON globally (breaks file upload)
-//  Only parse JSON for non-upload routes later.
-// -----------------------------------------------------
+/*************************************************
+ * MIDDLEWARE (SAFE)
+ *************************************************/
 app.use(cors({ origin: true }));
 
-// Health checks BEFORE initialization
-app.get("/", (req, res) => {
+/*************************************************
+ * HEALTH CHECK (ALB / ECS)
+ *************************************************/
+app.get("/", (_req, res) => {
   res.status(200).json({
     status: "healthy",
-    message: "🔥 Firebase Function is Running Successfully!",
+    service: "IZI Finance Backend",
     timestamp: new Date().toISOString(),
   });
 });
 
-
-// -----------------------------------------------------
-// Multer (Memory Storage)
-// -----------------------------------------------------
-
-
-
-
 app.get("/ping", (_req, res) => res.send("pong"));
 
-// -----------------------------------------------------
-// Multer (Memory Storage)
-// -----------------------------------------------------
-
-// -----------------------------------------------------
-// INITIALIZATION FUNCTION
-// -----------------------------------------------------
+/*************************************************
+ * INITIALIZATION (RUNS ONCE)
+ *************************************************/
 async function initializeApp(secrets = {}) {
   if (initialized) return;
 
   console.log("📦 Initializing database + redis + services...");
 
   // MongoDB
-  await connectDB(secrets.mongoUri);
+  await connectDB(secrets.mongoUri || process.env.MONGO_URI);
 
   // Redis
-  await ensureRedis(secrets.redisUrl, secrets.redisToken);
+  await ensureRedis(
+    secrets.redisUrl || process.env.REDIS_URL,
+    secrets.redisToken || process.env.REDIS_TOKEN
+  );
 
-  // JWT (used by auth middleware)
-  process.env.JWT_ACCESS_SECRET = secrets.jwtAccessSecret;
-  process.env.JWT_REFRESH_SECRET = secrets.jwtRefreshSecret;
+  // JWT Secrets
+  process.env.JWT_ACCESS_SECRET =
+    secrets.jwtAccessSecret || process.env.JWT_ACCESS_SECRET;
+  process.env.JWT_REFRESH_SECRET =
+    secrets.jwtRefreshSecret || process.env.JWT_REFRESH_SECRET;
 
-  // OTP service
+  // OTP Service
   app.locals.otpService = otpServiceFactory({
-    atUsername: secrets.atUsername,
-    atApiKey: secrets.atApiKey,
-    atSenderId: secrets.atSenderId,
+    atUsername: secrets.atUsername || process.env.AT_USERNAME,
+    atApiKey: secrets.atApiKey || process.env.AT_API_KEY,
+    atSenderId: secrets.atSenderId || process.env.AT_SENDER_ID,
   });
 
-
-  /* =======================
-     BODY PARSERS
-     ======================= */
+  /*************************************************
+   * BODY PARSERS (ROUTE-SCOPED)
+   *************************************************/
   const jsonParser = express.json({ limit: "10mb" });
   const urlEncodedParser = express.urlencoded({ extended: true });
-  /* =======================
-     ROUTES
-     ======================= */
+
+  /*************************************************
+   * ROUTES
+   *************************************************/
   app.use("/api/customers", jsonParser, require("./routes/customerRoutes"));
   app.use("/api/agent", jsonParser, require("./routes/agentRoutes"));
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));
   app.use("/api/mpesa", jsonParser, require("./routes/mpesaCallbackRoutes"));
   app.use("/api/auth", jsonParser, require("./routes/authRoutes"));
-  app.use("/api/auth/borrower", jsonParser, require("./routes/borrowerauthRouter"));
+  app.use(
+    "/api/auth/borrower",
+    jsonParser,
+    require("./routes/borrowerauthRouter")
+  );
   app.use("/api/wallet", jsonParser, require("./routes/walletRoutes"));
   app.use("/api/loans", jsonParser, require("./routes/loanRoutes"));
   app.use("/api", jsonParser, require("./routes/activityRoutes"));
@@ -93,20 +99,24 @@ async function initializeApp(secrets = {}) {
   app.use("/api/stats", jsonParser, require("./routes/statsRoutes"));
   app.use("/api/profile", jsonParser, require("./routes/profileRoutes"));
   app.use("/api/reminder", jsonParser, require("./routes/reminderRoutes"));
-  app.use("/api/notifications", jsonParser, require("./routes/notificationRoutes"));
+  app.use(
+    "/api/notifications",
+    jsonParser,
+    require("./routes/notificationRoutes")
+  );
   app.use("/api/otp", jsonParser, require("./routes/otpRoutes"));
   app.use("/api/lender", jsonParser, require("./routes/lenderRoutes"));
   app.use("/api/reports", jsonParser, require("./routes/reportRoutes"));
   app.use("/api/c2b", jsonParser, require("./routes/c2bRoutes"));
-  app.use("/api", jsonParser, require("./routes/qrRoutes"))
+  app.use("/api", jsonParser, require("./routes/qrRoutes"));
   app.use("/api", urlEncodedParser, require("./routes/paymentPage"));
   app.use("/api", urlEncodedParser, require("./routes/stkPayment"));
   app.use("/debug", require("./routes/debug"));
 
-  /* =======================
-     ERRORSsss
-     ======================= */
-  app.use((req, res) =>
+  /*************************************************
+   * ERROR HANDLING
+   *************************************************/
+  app.use((_req, res) =>
     res.status(404).json({ message: "API Route Not Found" })
   );
 
@@ -115,41 +125,36 @@ async function initializeApp(secrets = {}) {
     res.status(500).json({ message: "Internal Server Error" });
   });
 
- 
-
-
   initialized = true;
   console.log("✅ App initialization complete");
 }
 
-// ================= ECS / LOCAL =================
+/*************************************************
+ * ECS / LOCAL SERVER
+ *************************************************/
 if (!process.env.FUNCTION_TARGET) {
-  const PORT = Number(process.env.PORT) || 8081; // ⛔ never 8080 on Windows
+  const PORT = Number(process.env.PORT) || 8081;
 
   (async () => {
     try {
       await initializeApp();
 
-      const server = app.listen(8081, "0.0.0.0", () => {
+      const server = app.listen(PORT, "0.0.0.0", () => {
         console.log(`🚀 Server running on port ${PORT}`);
       });
 
       server.on("error", (err) => {
-        if (err.code === "EADDRINUSE") {
-          console.error(`❌ Port ${PORT} is already in use`);
-        } else {
-          console.error("❌ Server error:", err);
-        }
+        console.error("❌ Server error:", err);
         process.exit(1);
       });
-
     } catch (err) {
-      console.error("❌ Startup failed", err);
+      console.error("❌ Startup failed:", err);
       process.exit(1);
     }
   })();
 }
-c53a686c102ce923b94dd1e67e0f4a0a4e9fe4f3
+
+/*************************************************
+ * EXPORTS (IMPORTANT)
+ *************************************************/
 module.exports = { app, initializeApp };
-
-
