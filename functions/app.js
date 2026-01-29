@@ -95,7 +95,7 @@ async function initializeApp(secrets = {}) {
   app.use("/debug", require("./routes/debug"));
 
   /* =======================
-     ERRORS
+     ERRORSsss
      ======================= */
   app.use((req, res) =>
     res.status(404).json({ message: "API Route Not Found" })
