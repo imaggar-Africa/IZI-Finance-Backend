@@ -92,18 +92,27 @@ app.use("/api/qr", jsonParser, require("./routes/qrRoutes"));
   initialized = true;
   console.log("✅ App initialization complete");
 }
-// ================= ECS ONLY =================
-// This runs ONLY in ECS, NOT in Firebase
+// ================= ECS / LOCAL =================
 if (!process.env.FUNCTION_TARGET) {
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 8081; // ⛔ never 8080 on Windows
 
   (async () => {
     try {
       await initializeApp();
 
-      app.listen(PORT, "0.0.0.0", () => {
-        console.log("🚀 ECS server running on port", PORT);
+      const server = app.listen(8081, "0.0.0.0", () => {
+        console.log(`🚀 Server running on port ${PORT}`);
       });
+
+      server.on("error", (err) => {
+        if (err.code === "EADDRINUSE") {
+          console.error(`❌ Port ${PORT} is already in use`);
+        } else {
+          console.error("❌ Server error:", err);
+        }
+        process.exit(1);
+      });
+
     } catch (err) {
       console.error("❌ Startup failed", err);
       process.exit(1);
