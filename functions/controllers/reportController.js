@@ -2,6 +2,9 @@ const Loan = require("../models/Loan");
 const Customer = require("../models/customer");
 const Transaction = require("../models/Transaction");
 const Agent = require("../models/AgentModel");
+const { logReportAudit } = require("../utils/auditLogger");
+const AuditLog = require("../models/AuditLog");
+const mongoose = require("mongoose");
 
 /* ===========================
    DASHBOARD REPORT
@@ -18,6 +21,12 @@ exports.getDashboardReport = async (req, res) => {
     const totalDisbursed = loans.reduce((s, l) => s + l.amount, 0);
     const totalOutstanding = loans.reduce((s, l) => s + l.balance, 0);
     const totalRepaid = loans.reduce((s, l) => s + l.repaidAmount, 0);
+
+    await logReportAudit({
+      req,
+      reportType: "DASHBOARD_REPORT"
+    });
+
 
     res.json({
       success: true,
@@ -42,6 +51,11 @@ exports.getDashboardReport = async (req, res) => {
 exports.getLoansReport = async (req, res) => {
   const loans = await Loan.find().populate("borrowerId lenderId");
 
+   await logReportAudit({
+    req,
+    reportType: "LOANS_REPORT"
+  });
+
   res.json({
     success: true,
     summary: {
@@ -58,6 +72,11 @@ exports.getLoansReport = async (req, res) => {
 =========================== */
 exports.getRepaymentsReport = async (req, res) => {
   const repayments = await Transaction.find({ type: "repayment" });
+   await logReportAudit({
+    req,
+    reportType: "REPAYMENTS_REPORT"
+  });
+
 
   res.json({
     success: true,
@@ -80,6 +99,11 @@ exports.getProfitReport = async (req, res) => {
     (s, l) => s + Math.max(0, l.repaidAmount - l.amount),
     0
   );
+
+  await logReportAudit({
+    req,
+    reportType: "PROFIT_REPORT"
+  });
 
   res.json({
     success: true,
@@ -115,6 +139,11 @@ exports.getBorrowersReport = async (req, res) => {
     })
   );
 
+   await logReportAudit({
+    req,
+    reportType: "BORROWERS_REPORT"
+  });
+
   res.json({
     success: true,
     count: data.length,
@@ -141,6 +170,11 @@ exports.getAgentsReport = async (req, res) => {
     })
   );
 
+   await logReportAudit({
+    req,
+    reportType: "AGENTS_REPORT"
+  });
+
   res.json({ success: true, data });
 };
 
@@ -148,9 +182,14 @@ exports.getAgentsReport = async (req, res) => {
    AUDIT LOGS (BASIC)
 =========================== */
 exports.getAuditLogs = async (req, res) => {
+  const logs = await AuditLog.find()
+    .sort({ createdAt: -1 })
+    .limit(50);
+
   res.json({
     success: true,
-    data: [] // extend later
+    count: logs.length,
+    data: logs
   });
 };
 
@@ -216,6 +255,17 @@ exports.getLoanRepaymentReport = async (req, res) => {
       };
     });
 
+await logReportAudit({
+  req,
+  reportType: "LOAN_REPAYMENT_REPORT",
+  filters: {
+    borrowerId: borrowerId || "ALL",
+    loanId: loanId || "ALL",
+    fromDate: fromDate || null,
+    toDate: toDate || null
+  }
+});
+
     return res.status(200).json({
       success: true,
       filtersApplied: {
@@ -242,3 +292,87 @@ exports.getLoanRepaymentReport = async (req, res) => {
     });
   }
 };
+
+/* ===========================
+   DEMOGRAPHICS REPORT
+=========================== */
+exports.getDemographicsReport = async (req, res) => {
+  try {
+    const data = await mongoose.connection.db
+      .collection("demographics_repayment_analysis")
+      .find({})
+      .toArray();
+
+    try {
+      await logReportAudit({
+        req,
+        reportType: "DEMOGRAPHICS_REPORT",
+        filters: { source: "VIEW" }
+      });
+    } catch (e) {}
+
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
+/* ===========================
+   REGIONAL PERFORMANCE REPORT
+=========================== */
+exports.getRegionalPerformanceReport = async (req, res) => {
+  try {
+    const data = await mongoose.connection.db
+      .collection("regional_market_performance")
+      .find({})
+      .toArray();
+
+    try {
+      await logReportAudit({
+        req,
+        reportType: "REGIONAL_PERFORMANCE_REPORT",
+        filters: { source: "VIEW" }
+      });
+    } catch (e) {
+      console.error("Audit log failed:", e.message);
+    }
+
+    res.json({
+      success: true,
+      basedOn: "DB VIEW: regional_market_performance",
+      data
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
+
+
+/* ===========================
+   BUSINESS TYPE REPORT
+=========================== */
+exports.getBusinessTypeReport = async (req, res) => {
+  try {
+    const data = await mongoose.connection.db
+      .collection("business_category_performance")
+      .find({})
+      .toArray();
+
+    try {
+      await logReportAudit({
+        req,
+        reportType: "BUSINESS_TYPE_REPORT",
+        filters: { source: "VIEW" }
+      });
+    } catch (e) {}
+
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+

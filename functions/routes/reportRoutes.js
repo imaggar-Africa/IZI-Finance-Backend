@@ -10,7 +10,10 @@ const {
   getBorrowersReport,
   getAgentsReport,
   getAuditLogs,
-  getLoanRepaymentReport
+  getLoanRepaymentReport,
+  getDemographicsReport,
+  getRegionalPerformanceReport,
+  getBusinessTypeReport
 } = require("../controllers/reportController");
 
 router.get("/summary",protect, getDashboardReport);
@@ -26,5 +29,8 @@ router.get(
   getLoanRepaymentReport
 );
 
+router.get("/demographics", protect, getDemographicsReport);
+router.get("/regional-performance", protect, getRegionalPerformanceReport);
+router.get("/business-type", protect, getBusinessTypeReport);
 
 module.exports = router;

@@ -203,6 +203,13 @@ if (referralSource === "existing_borrower") {
     const backIDUrl = await uploadToFirebase(backIDFile, "backID");
 
     const accountId = await generateAccountId();
+
+    if (!livePhotoUrl || !frontIDUrl || !backIDUrl) {
+  return res.status(500).json({
+    message: "File upload failed. Please retry.",
+  });
+}
+
     // -----------------------------
     // Create borrower record
     // -----------------------------

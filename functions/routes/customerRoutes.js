@@ -20,21 +20,34 @@ router.get("/eligible-loan",protect,customerController.getCustomersWithoutActive
 // Register a new borrower with ID photos - USING BUSBOY
 // Register a new borrower with ID photos - USING BUSBOY WITH RAW BODY
 // Register a borrower with 3 files
+// router.post(
+//   "/register",
+//   protect,
+//   authorizeRoles("lender"),
+//   firebaseSafeUpload([
+//     { name: "frontID", maxCount: 1 },
+//     { name: "backID", maxCount: 1 },
+//     { name: "livePhoto", maxCount: 1 },
+//   ]),
+//    validateAfricaPhone,
+//   customerController.registerCustomer
+// );
+
+
 router.post(
   "/register",
   protect,
   authorizeRoles("lender"),
-   validateAfricaPhone,
+
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
     { name: "backID", maxCount: 1 },
     { name: "livePhoto", maxCount: 1 },
   ]),
 
+  validateAfricaPhone,
   customerController.registerCustomer
 );
-
-
 
 
 

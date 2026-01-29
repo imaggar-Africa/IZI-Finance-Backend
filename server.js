@@ -2,6 +2,7 @@ require("dotenv").config();
 const { app, initializeApp } = require("./functions/app");
 
 const PORT = process.env.PORT || 8080;
+const uri = process.env.MONGO_URI?.trim();
 
 // Prevent running inside Cloud/Emulator
 const isCloudRuntime =
@@ -18,6 +19,7 @@ if (isCloudRuntime) {
     await initializeApp();
     app.listen(PORT, () => {
       console.log(`✅ Local server running on http://localhost:${PORT}`);
+      console.log(`${uri}`)
     });
   } catch (err) {
     console.error("❌ Failed to initialize app:", err);
