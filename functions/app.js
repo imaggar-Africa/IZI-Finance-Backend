@@ -121,7 +121,7 @@ async function initializeApp(secrets = {}) {
   initialized = true;
   console.log("✅ App initialization complete");
 }
-<<<<<<< HEAD
+
 // ================= ECS / LOCAL =================
 if (!process.env.FUNCTION_TARGET) {
   const PORT = Number(process.env.PORT) || 8081; // ⛔ never 8080 on Windows
@@ -149,9 +149,7 @@ if (!process.env.FUNCTION_TARGET) {
     }
   })();
 }
-=======
-
->>>>>>> c53a686c102ce923b94dd1e67e0f4a0a4e9fe4f3
+c53a686c102ce923b94dd1e67e0f4a0a4e9fe4f3
 module.exports = { app, initializeApp };
 
 
