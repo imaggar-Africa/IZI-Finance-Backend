@@ -130,31 +130,6 @@ async function initializeApp(secrets = {}) {
 }
 
 /*************************************************
- * ECS / LOCAL SERVER
- *************************************************/
-if (!process.env.FUNCTION_TARGET) {
-  const PORT = Number(process.env.PORT) || 8081;
-
-  (async () => {
-    try {
-      await initializeApp();
-
-      const server = app.listen(PORT, "0.0.0.0", () => {
-        console.log(`🚀 Server running on port ${PORT}`);
-      });
-
-      server.on("error", (err) => {
-        console.error("❌ Server error:", err);
-        process.exit(1);
-      });
-    } catch (err) {
-      console.error("❌ Startup failed:", err);
-      process.exit(1);
-    }
-  })();
-}
-
-/*************************************************
  * EXPORTS (IMPORTANT)
  *************************************************/
 module.exports = { app, initializeApp };
