@@ -207,42 +207,54 @@ if (referralSource === "existing_borrower") {
     // Create borrower record
     // -----------------------------
     const borrower = new Borrower({
-      registeredBy: req.user._id,
-      registeredByModel: req.user.role === "agent" ? "Agent" : "User",
-      agentId: req.user.role === "agent" ? req.user._id : null,
-      accountId,
-      fullName,
-      phone,
-      email,
-      idNumber,
+  registeredBy: req.user._id,
+  registeredByModel: req.user.role === "agent" ? "Agent" : "User",
+  agentId: req.user.role === "agent" ? req.user._id : null,
+  accountId,
+  fullName,
+  phone,
+  email,
+  idNumber,
 
-      livePhoto: livePhotoUrl,
-      frontID: frontIDUrl,
-      backID: backIDUrl,
+  livePhoto: livePhotoUrl,
+  frontID: frontIDUrl,
+  backID: backIDUrl,
 
-      isVerified: true,
-      dateOfBirth,
-      gender,
-      maritalStatus,
-      altPhoneNumber,
-      physicalAddress,
-      gpsLocation,
-      occupation,
-      monthlyIncomeRange,
-      nextOfKinName,
-      nextOfKinPhone,
-      preferredMobileMoney,
-      savingsGoal,
-      loanConsent,
-      kraPin,
-      agreementAcceptance,
-      preferences: preferences || {},
-      savingsBalance: savingsBalance || 0,
-      referralSource,
-      referredByBorrowerId: referralSource === "existing_borrower"
-    ? referredByBorrowerId
-    : null,
-    });
+  isVerified: true,
+  status: "Active",            // ✅ IMPORTANT
+
+  dateOfBirth,
+  gender,
+  maritalStatus,
+  altPhoneNumber,
+  physicalAddress,
+  gpsLocation,
+  occupation,
+  monthlyIncomeRange,
+  nextOfKinName,
+  nextOfKinPhone,
+  preferredMobileMoney,
+  savingsGoal,
+  loanConsent,
+  kraPin,
+  agreementAcceptance,
+  preferences: preferences || {},
+  savingsBalance: savingsBalance || 0,
+
+  referralSource,
+  referredByBorrowerId:
+    referralSource === "existing_borrower" ? referredByBorrowerId : null,
+
+  /* ================= CREDIT SCORE DEFAULTS ================= */
+  creditScore: 500,
+  creditLevel: "High Risk",
+  maxLoanLimit: 1000,
+  totalLoans: 0,
+  completedLoans: 0,
+  overdueLoans: 0,
+  lastScoreUpdate: new Date()
+});
+
 
     await borrower.save();
 
@@ -522,7 +534,8 @@ exports.getBorrowerProfile = async (req, res) => {
 
     const eligibility = evaluateLoanByCreditScore({
       creditScore,
-      requestedAmount: borrower.creditLimit || 50000
+      requestedAmount: borrower.creditLimit || 50000,
+      borrower
     });
 
     /* ================= MEMBERSHIP AUTO RULE ================= */
@@ -803,7 +816,8 @@ exports.getMyLoans = async (req, res) => {
     // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
     const eligibility = evaluateLoanByCreditScore({
       creditScore: loan.creditScoreAfter || 500,
-      requestedAmount: loan.amount
+      requestedAmount: loan.amount,
+       borrower
     });
 
     return {

@@ -7,7 +7,9 @@ const authorizeRoles = require("../middleware/rolemiddleware");
 const {
   createNextOfKin,
   updateNextOfKin,
-  getNextOfKin
+  getNextOfKin,
+  verifyNextOfKinOTP,
+  resendNextOfKinOTP
 } = require("../controllers/nextOfKinController");
 
 // CREATE (Agent/Lender only)
@@ -17,6 +19,20 @@ router.post(
   authorizeRoles("agent", "lender"),
   createNextOfKin
 );
+
+router.post(
+  "/verify-otp",
+  protect,
+  verifyNextOfKinOTP
+);
+
+// RESEND OTP
+router.post(
+  "/resend-otp",
+  protect,
+  resendNextOfKinOTP
+);
+
 
 // UPDATE (Agent/Lender only)
 router.put(

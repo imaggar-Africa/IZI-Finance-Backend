@@ -14,12 +14,17 @@ process.on("unhandledRejection", (err) => {
  *************************************************/
 require("dotenv").config(); // Safe for local, ignored in prod (ECS/Firebase)
 
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 
 const connectDB = require("./config/db");
 const { ensureRedis } = require("./utils/redis");
 const otpServiceFactory = require("./utils/africatalking");
+if (!process.env.FUNCTIONS_EMULATOR && !process.env.K_SERVICE) {
+  require("./utils/localInit")();
+}
+
 
 const app = express();
 let initialized = false;
@@ -81,10 +86,17 @@ async function initializeApp(secrets = {}) {
   /*************************************************
    * ROUTES
    *************************************************/
+  
+  /* =======================
+     ROUTES
+     ======================= */
+     
   app.use("/api/customers", jsonParser, require("./routes/customerRoutes"));
+   app.use("/api/guarantors", jsonParser, require("./routes/guarantorRoutes"));
+   app.use("/api/next-of-kin", jsonParser, require("./routes/nextOfKinRoutes"));
   app.use("/api/agent", jsonParser, require("./routes/agentRoutes"));
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));
-  app.use("/api/mpesa", jsonParser, require("./routes/mpesaCallbackRoutes"));
+  app.use("/api/mpesa",jsonParser,  require("./routes/mpesaCallbackRoutes"));
   app.use("/api/auth", jsonParser, require("./routes/authRoutes"));
   app.use(
     "/api/auth/borrower",

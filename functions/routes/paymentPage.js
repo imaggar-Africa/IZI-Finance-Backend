@@ -30,7 +30,12 @@ router.get("/pay/:accountId", async (req, res) => {
             <input type="number" name="amount" required /><br/><br/>
 
             <label>Phone Number</label><br/>
-            <input type="text" name="phone" placeholder="2547XXXXXXXX" required /><br/><br/>
+            <input 
+              type="text" 
+              name="phone" 
+              value="${borrower.phone}" 
+              readonly 
+            /><br/><br/>
 
             <button type="submit">Pay Now</button>
           </form>

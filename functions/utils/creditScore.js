@@ -1,22 +1,48 @@
-module.exports.recalculateCreditScore = async ({
-  currentScore = 500,
-  wasPaymentLate,
-  daysLate
+module.exports.evaluateLoanByCreditScore = ({
+  creditScore = 500,
+  requestedAmount = 0,
+  borrower
 }) => {
-  let scoreDelta = 0;
 
-  if (!wasPaymentLate) scoreDelta = +2;
-  else if (daysLate <= 3) scoreDelta = -5;
-  else if (daysLate <= 7) scoreDelta = -10;
-  else scoreDelta = -20;
+  // 🛑 SAFETY
+  if (!borrower) {
+    return {
+      allowed: false,
+      approvedAmount: 0,
+      reason: "Borrower data missing"
+    };
+  }
 
-  let newScore = currentScore + scoreDelta;
+  // 🟢 FIRST LOAN OVERRIDE (VERY IMPORTANT)
+  if (
+    Number(borrower.totalLoans || 0) === 0 &&
+    Number(borrower.completedLoans || 0) === 0
+  ) {
+    const starterLimit = 1000;
 
-  // clamp score between 0 and 1000
-  newScore = Math.max(0, Math.min(1000, newScore));
+    return {
+      allowed: requestedAmount <= starterLimit,
+      approvedAmount: starterLimit,
+      reason: "Starter loan for new customer"
+    };
+  }
 
-  return {
-    scoreDelta,
-    newScore
-  };
+  // 🔴 BLOCK
+  if (creditScore < 600) {
+    return { allowed: false, approvedAmount: 0 };
+  }
+
+  if (creditScore < 650) {
+    return { allowed: true, approvedAmount: 2000 };
+  }
+
+  if (creditScore < 700) {
+    return { allowed: true, approvedAmount: 5000 };
+  }
+
+  if (creditScore < 750) {
+    return { allowed: true, approvedAmount: 8000 };
+  }
+
+  return { allowed: true, approvedAmount: 15000 };
 };

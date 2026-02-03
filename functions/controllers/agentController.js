@@ -305,35 +305,55 @@ const registerCustomer = async (req, res) => {
     if (await Borrower.findOne({ idNumber })) return res.status(409).json({ error: "ID number already registered" });
 
     // ✅ Create customer
-    const customer = new Borrower({
-      registeredBy,
-      registeredByModel,
-      agentId: req.user.role === "agent" ? registeredBy : null,
-      fullName,
-      phone,
-      idNumber,
-      frontID: frontIDUrl,
-      backID: backIDUrl,
-      livePhoto: livePhotoUrl,
-      isVerified: true,
-      dateOfBirth,
-      gender,
-      maritalStatus,
-      altPhoneNumber,
-      physicalAddress,
-      gpsLocation,
-      occupation,
-      monthlyIncomeRange,
-      nextOfKinName,
-      nextOfKinPhone,
-      preferredMobileMoney,
-      savingsGoal,
-      loanConsent,
-      kraPin: req.body.kraPin,
-      agreementAcceptance,
-      preferences: preferences || {},
-      savingsBalance: savingsBalance || 0
-    });
+   const borrower = new Borrower({
+  registeredBy: req.user._id,
+  registeredByModel: req.user.role === "agent" ? "Agent" : "User",
+  agentId: req.user.role === "agent" ? req.user._id : null,
+  accountId,
+  fullName,
+  phone,
+  email,
+  idNumber,
+
+  livePhoto: livePhotoUrl,
+  frontID: frontIDUrl,
+  backID: backIDUrl,
+
+  isVerified: true,
+  status: "Active",            // ✅ IMPORTANT
+
+  dateOfBirth,
+  gender,
+  maritalStatus,
+  altPhoneNumber,
+  physicalAddress,
+  gpsLocation,
+  occupation,
+  monthlyIncomeRange,
+  nextOfKinName,
+  nextOfKinPhone,
+  preferredMobileMoney,
+  savingsGoal,
+  loanConsent,
+  kraPin,
+  agreementAcceptance,
+  preferences: preferences || {},
+  savingsBalance: savingsBalance || 0,
+
+  referralSource,
+  referredByBorrowerId:
+    referralSource === "existing_borrower" ? referredByBorrowerId : null,
+
+  /* ================= CREDIT SCORE DEFAULTS ================= */
+  creditScore: 500,
+  creditLevel: "High Risk",
+  maxLoanLimit: 1000,
+  totalLoans: 0,
+  completedLoans: 0,
+  overdueLoans: 0,
+  lastScoreUpdate: new Date()
+});
+
 
     await customer.save();
 

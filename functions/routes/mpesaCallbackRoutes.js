@@ -6,7 +6,7 @@ const router = express.Router();
 
 // STK Push callback
 
-router.post("/stk/callback", stkCallback);
+router.post("/stk/callback",express.json({ type: "*/*" }), stkCallback);
 
 // B2C Payment callback (loan disbursement / withdrawals)
 router.post('/b2c/callback', b2cCallback)

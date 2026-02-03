@@ -4,6 +4,7 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const { onInit } = require("firebase-functions/v2/core");
 const { defineSecret } = require("firebase-functions/params");
 const axios = require("axios");
+require("dotenv").config();
 
 const { app, initializeApp } = require("./app");
 

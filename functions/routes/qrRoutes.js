@@ -16,6 +16,8 @@ router.get("/qr/:accountId", async (req, res) => {
 
     // 2. Payment URL (THIS is the QR content)
     const paymentUrl = `https://trainsick-felicia-scleritic.ngrok-free.dev/api/pay/${accountId}`;
+    // const paymentUrl = `https://api-qqxc6zwzmq-uc.a.run.app/api/pay/${accountId}`;
+
 
     // 3. Generate QR as base64 image
     const qrImage = await QRCode.toDataURL(paymentUrl);
@@ -32,5 +34,6 @@ router.get("/qr/:accountId", async (req, res) => {
     res.status(500).json({ message: "Failed to generate QR" });
   }
 });
+
 
 module.exports = router;
