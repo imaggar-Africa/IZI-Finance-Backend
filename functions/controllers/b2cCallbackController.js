@@ -456,10 +456,10 @@ if (!transaction && MpesaTransactionID) {
             type: "loan",
           });
 
-          await sendSMS(
-            loan.lenderId.phone,
-            `Dear ${lenderName}, a loan of KES ${loan.amount} has been disbursed to borrower ${borrowerName}. \nTotal repayment: KES ${loan.totalRepayment} due on ${loan.dueDate.toLocaleDateString()}. \nREF: ${transaction._id}\n- izifinance`
-          );
+          // await sendSMS(
+          //   loan.lenderId.phone,
+          //   `Dear ${lenderName}, a loan of KES ${loan.amount} has been disbursed to borrower ${borrowerName}. \nTotal repayment: KES ${loan.totalRepayment} due on ${loan.dueDate.toLocaleDateString()}. \nREF: ${transaction._id}\n- izifinance`
+          // );
 
           // Notify agent about commission
           if (loan.requestedByAgentId) {
@@ -620,10 +620,10 @@ Funds are on the way to your M-Pesa.
           type: "agent_withdrawal",
         });
 
-        await sendSMS(
-          lender.phone,
-          `Dear ${lenderName}, agent ${agent.name} has successfully withdrawn KES ${transaction.amount}. \nTransaction reference: ${transaction._id}\n- izifinance`
-        );
+        // await sendSMS(
+        //   lender.phone,
+        //   `Dear ${lenderName}, agent ${agent.name} has successfully withdrawn KES ${transaction.amount}. \nTransaction reference: ${transaction._id}\n- izifinance`
+        // );
       }
     }
   });

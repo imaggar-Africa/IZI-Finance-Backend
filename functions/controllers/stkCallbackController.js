@@ -273,7 +273,6 @@ exports.stkCallback = async (req, res) => {
 
       if (!loan || !lender) throw new Error("Loan or Lender not found");
 
-      // ✅ Deduct wallet ONLY HERE (after MPesa success)
       transaction.balanceBefore = lender.walletBalance;
       lender.walletBalance -= amount;
       transaction.balanceAfter = lender.walletBalance;
@@ -295,6 +294,39 @@ exports.stkCallback = async (req, res) => {
 
       transaction.balanceBefore = loan.balance;
 
+      /* ===============================
+         🔥 LATE CHECK + 15% PENALTY
+      =============================== */
+      let event = "ON_TIME";
+      let daysLate = 0;
+
+      if (loan.dueDate && new Date() > loan.dueDate) {
+        event = "LATE";
+        daysLate = Math.ceil(
+          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+        );
+
+        const penalty = Math.ceil(loan.balance * 0.15);
+        loan.balance += penalty;
+        loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+
+        // 📩 SMS ONLY TO BORROWER
+        await sendSMS(
+          borrower.phone,
+          `Dear ${borrower.fullName},
+Your loan payment is late.
+
+Penalty (15%): KES ${penalty}
+New total balance: KES ${loan.balance}
+
+Please pay early to avoid more penalties.
+- IziFinance`
+        );
+      }
+
+      /* ===============================
+         APPLY REPAYMENT
+      =============================== */
       loan.repaidAmount += amount;
       loan.balance -= amount;
 
@@ -324,18 +356,8 @@ exports.stkCallback = async (req, res) => {
       transaction.balanceAfter = loan.balance;
 
       /* ===============================
-         CREDIT SCORE UPDATE
+         CREDIT SCORE (EVERY REPAYMENT)
       =============================== */
-      let event = "ON_TIME";
-      let daysLate = 0;
-
-      if (loan.dueDate && new Date() > loan.dueDate) {
-        event = "LATE";
-        daysLate = Math.ceil(
-          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
-        );
-      }
-
       const { newScore, scoreDelta } = await recalculateCreditScore({
         currentScore: borrower.creditScore || 500,
         event,
@@ -359,7 +381,6 @@ exports.stkCallback = async (req, res) => {
         loan.creditScoreAfter = newScore;
         await loan.save({ session });
 
-        // ✅ SINGLE agent commission handler
         if (loan.requestedByAgentId) {
           await handleAgentFullRepaymentCommission(
             loan,
@@ -396,6 +417,7 @@ exports.stkCallback = async (req, res) => {
     });
   }
 };
+
 
 
 

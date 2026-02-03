@@ -323,12 +323,12 @@ exports.confirmationHandler = async (req, res) => {
     );
 
     // 6️⃣ SEND SMS TO LENDER
-    if (lender) {
-      await sendSMS(
-        lender.phone,
-        `💰 Repayment received from ${customer.fullName}. Amount: KES ${Amount}. New balance: KES ${loan.balance}.`
-      );
-    }
+    // if (lender) {
+    //   await sendSMS(
+    //     lender.phone,
+    //     `💰 Repayment received from ${customer.fullName}. Amount: KES ${Amount}. New balance: KES ${loan.balance}.`
+    //   );
+    // }
 
     // 7️⃣ AGENT NOTIFICATION IF FULLY PAID
     if (fullyPaid && loan.requestedByAgentId) {
