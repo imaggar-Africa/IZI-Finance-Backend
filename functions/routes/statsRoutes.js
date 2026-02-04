@@ -5,7 +5,7 @@ const { protect } = require('../middleware/authMiddleware');
 const authorizeRoles = require("../middleware/rolemiddleware");
 
 
-router.get('/', protect ,statsController.getStats);
+router.get('/', protect ,authorizeRoles("lender","agent"),statsController.getStats);
 
 router.get(
   "/pdf",

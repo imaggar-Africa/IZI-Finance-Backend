@@ -81,11 +81,14 @@ creditScoreAfter: {
 },
 
 
+
 // 🔹 Add this field for reminders
   lastReminderSent: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+
 
 
 

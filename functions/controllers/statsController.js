@@ -2,128 +2,182 @@ const Stats = require('../models/Stats');
 const Loan = require("../models/Loan");
 const PDFDocument = require("pdfkit");
 
-// ✅ Fetch real-time stats from Loan collection
+function getRange(type, fromDate, toDate) {
+  const now = new Date();
+
+  if (type === "7d") {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return { start: d, end: now };
+  }
+
+  if (type === "1m") {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return { start: d, end: now };
+  }
+
+  if (type === "3m") {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    return { start: d, end: now };
+  }
+
+  if (fromDate && toDate) {
+    const start = new Date(fromDate);
+    const end = new Date(toDate);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+
+  return null;
+}
+
+/* ================= CORE STATS CALCULATOR ================= */
+function calculateStats(loans, start = null, end = null) {
+  let issuedCount = 0;
+  let totalLoanAmount = 0;
+  let principalAmount = 0;
+  let collectedAmount = 0;
+  let interestEarned = 0;
+  let outstandingLoanAmount = 0;
+  let activeLoans = 0;
+  let overdueLoans = 0;
+  let paidLoans = 0;
+
+  loans.forEach((loan) => {
+    const issuedInRange =
+      !start || !end || (loan.createdAt >= start && loan.createdAt <= end);
+
+    if (issuedInRange) {
+      issuedCount++;
+      totalLoanAmount += loan.totalRepayment || 0;
+      principalAmount += loan.amount || 0;
+    }
+
+    if (Array.isArray(loan.repayments)) {
+      loan.repayments.forEach((r) => {
+        const paymentInRange =
+          !start ||
+          !end ||
+          (r.paymentDate &&
+            r.paymentDate >= start &&
+            r.paymentDate <= end);
+
+        if (paymentInRange) {
+          collectedAmount += r.amount || 0;
+          const principalPart = Math.min(r.amount || 0, loan.amount || 0);
+          interestEarned += Math.max(0, (r.amount || 0) - principalPart);
+        }
+      });
+    }
+
+    outstandingLoanAmount += loan.balance || 0;
+
+    if (loan.balance > 0) {
+      activeLoans++;
+      if (loan.dueDate && new Date(loan.dueDate) < new Date()) overdueLoans++;
+    } else {
+      paidLoans++;
+    }
+  });
+
+  return {
+    issuedCount,
+    totalLoanAmount,
+    principalAmount,
+    collectedAmount,
+    interestEarned,
+    outstandingLoanAmount,
+    activeLoans,
+    overdueLoans,
+    paidLoans
+  };
+}
+
+/* ================= LOAN DETAIL MAPPER ================= */
+function mapLoanDetail(loan) {
+  return {
+    borrower: loan.borrowerId?.fullName || "N/A",
+    phone: loan.borrowerId?.phone || "N/A",
+    principal: loan.amount,
+    totalRepayment: loan.totalRepayment,
+    collectedAmount: Array.isArray(loan.repayments)
+      ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+      : 0,
+    balance: loan.balance,
+    issueDate: loan.createdAt,
+    dueDate: loan.dueDate,
+    status:
+      loan.balance === 0
+        ? "Paid"
+        : loan.dueDate && new Date(loan.dueDate) < new Date()
+        ? "Overdue"
+        : "Active"
+  };
+}
+
+/* ================= FILTER LOANS BY ISSUE DATE ================= */
+function filterLoansByIssueDate(loans, start, end) {
+  return loans.filter(
+    (loan) => loan.createdAt >= start && loan.createdAt <= end
+  );
+}
+
+/* ================= GET STATS API ================= */
 exports.getStats = async (req, res) => {
   try {
-    const now = new Date();
-
     const { fromDate, toDate } = req.query;
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const sevenDaysAgo = new Date(startOfToday);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    const threeMonthsAgo = new Date(startOfMonth);
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-
-    /* ================= DATE FILTER (ADDED) ================= */
-    const dateFilter = {};
-    if (fromDate) dateFilter.$gte = new Date(fromDate);
-    if (toDate) {
-      const end = new Date(toDate);
-      end.setHours(23, 59, 59, 999);
-      dateFilter.$lte = end;
-    }
-
-    const loanFilter = {
-      loanRequestStatus: "approved"
-    };
-
-    if (fromDate || toDate) {
-      loanFilter.createdAt = dateFilter;
-    }
-
-    /* ================= ALL APPROVED LOANS ================= */
-    const loans = await Loan.find(loanFilter)
+    const loans = await Loan.find({ loanRequestStatus: "approved" })
       .populate("borrowerId", "fullName phone");
 
-    /* ================= GLOBAL TOTALS ================= */
-    let totalLoanAmount = 0;
-    let totalPrincipalAmount = 0;
-    let totalCollectedAmount = 0;
-    let outstandingLoanAmount = 0;
-    let activeLoans = 0;
-    let overdueLoans = 0;
-    let paidLoans = 0;
-    let totalInterestEarned = 0;
+    const last7 = getRange("7d");
+    const last1m = getRange("1m");
+    const last3m = getRange("3m");
+    const custom = getRange(null, fromDate, toDate);
 
-    loans.forEach((loan) => {
-      totalLoanAmount += loan.totalRepayment || 0;
-      totalPrincipalAmount += loan.amount || 0;
-      outstandingLoanAmount += loan.balance || 0;
+    const last7Loans = filterLoansByIssueDate(loans, last7.start, last7.end);
+    const last1mLoans = filterLoansByIssueDate(loans, last1m.start, last1m.end);
+    const last3mLoans = filterLoansByIssueDate(loans, last3m.start, last3m.end);
+    const customLoans = custom
+      ? filterLoansByIssueDate(loans, custom.start, custom.end)
+      : [];
 
-      const collected = Array.isArray(loan.repayments)
-        ? loan.repayments.reduce((sum, r) => sum + (r.amount || 0), 0)
-        : 0;
-
-      totalCollectedAmount += collected;
-
-      const principalRecovered = Math.min(collected, loan.amount || 0);
-      const interestRecovered = Math.max(0, collected - principalRecovered);
-
-      totalInterestEarned += interestRecovered;
-
-      if (loan.balance > 0) {
-        activeLoans++;
-        if (new Date(loan.dueDate) < now) overdueLoans++;
-      } else {
-        paidLoans++;
-      }
-    });
-
-    /* ================= FILTERED LOANS (UNCHANGED) ================= */
-    const last7DaysLoans = loans.filter(l => l.createdAt >= sevenDaysAgo);
-    const thisMonthLoans = loans.filter(l => l.createdAt >= startOfMonth);
-    const last3MonthsLoans = loans.filter(l => l.createdAt >= threeMonthsAgo);
-
-    const issuedLoans = {
-      last7Days: {
-        count: last7DaysLoans.length,
-        totalAmount: last7DaysLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0), 0
-        ),
-        loans: last7DaysLoans
-      },
-      thisMonth: {
-        count: thisMonthLoans.length,
-        totalAmount: thisMonthLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0), 0
-        ),
-        loans: thisMonthLoans
-      },
-      last3Months: {
-        count: last3MonthsLoans.length,
-        totalAmount: last3MonthsLoans.reduce(
-          (s, l) => s + (l.totalRepayment || 0), 0
-        ),
-        loans: last3MonthsLoans
-      }
-    };
-
-    /* ================= FINAL RESPONSE (UNCHANGED) ================= */
     res.status(200).json({
-      totalLoanCount: loans.length,
-      totalLoanAmount,
-      totalPrincipalAmount,
-      totalCollectedAmount,
-      totalInterestEarned,
-      outstandingLoanAmount,
-      activeLoans,
-      overdueLoans,
-      paidLoans,
-      issuedLoans
+      overall: {
+        stats: calculateStats(loans),
+        loanDetails: loans.map(mapLoanDetail)
+      },
+
+      last7Days: {
+        stats: calculateStats(loans, last7.start, last7.end),
+        loanDetails: last7Loans.map(mapLoanDetail)
+      },
+
+      last1Month: {
+        stats: calculateStats(loans, last1m.start, last1m.end),
+        loanDetails: last1mLoans.map(mapLoanDetail)
+      },
+
+      last3Months: {
+        stats: calculateStats(loans, last3m.start, last3m.end),
+        loanDetails: last3mLoans.map(mapLoanDetail)
+      },
+
+      customRange: custom
+        ? {
+            stats: calculateStats(loans, custom.start, custom.end),
+            loanDetails: customLoans.map(mapLoanDetail)
+          }
+        : null
     });
 
   } catch (error) {
-    console.error("Error fetching stats:", error);
+    console.error("Stats error:", error);
     res.status(500).json({ message: "Server error" });
   }
 };
-
 
 exports.downloadStatsPDF = async (req, res) => {
   try {

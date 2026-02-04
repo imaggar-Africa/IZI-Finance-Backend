@@ -14,7 +14,6 @@ process.on("unhandledRejection", (err) => {
  *************************************************/
 require("dotenv").config(); // Safe for local, ignored in prod (ECS/Firebase)
 
-require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 
@@ -25,6 +24,8 @@ if (!process.env.FUNCTIONS_EMULATOR && !process.env.K_SERVICE) {
   require("./utils/localInit")();
 }
 
+const cron = require("node-cron");
+const { sendDueDateReminders } = require("./controllers/loanController");
 
 const app = express();
 let initialized = false;
@@ -64,6 +65,12 @@ async function initializeApp(secrets = {}) {
     secrets.redisToken || process.env.REDIS_TOKEN
   );
 
+  // ✅ Cron AFTER DB + Redis
+cron.schedule("0 9 * * *", async () => {
+  console.log("⏰ Running daily due-date reminder job");
+  await sendDueDateReminders();
+})
+
   // JWT Secrets
   process.env.JWT_ACCESS_SECRET =
     secrets.jwtAccessSecret || process.env.JWT_ACCESS_SECRET;
@@ -82,10 +89,6 @@ async function initializeApp(secrets = {}) {
    *************************************************/
   const jsonParser = express.json({ limit: "10mb" });
   const urlEncodedParser = express.urlencoded({ extended: true });
-
-  /*************************************************
-   * ROUTES
-   *************************************************/
   
   /* =======================
      ROUTES
@@ -140,6 +143,8 @@ async function initializeApp(secrets = {}) {
   initialized = true;
   console.log("✅ App initialization complete");
 }
+
+
 
 /*************************************************
  * EXPORTS (IMPORTANT)

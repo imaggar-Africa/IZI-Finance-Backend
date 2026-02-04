@@ -7,39 +7,34 @@ const { initiateSTKPush } = require("../utils/mpesa");
 // Payment page → STK Push
 router.post("/pay/stk", async (req, res) => {
   try {
-    const { accountId, amount } = req.body;
-    console.log("🔥 BODY:", req.body);
+    const { accountId, amount, phone } = req.body;
 
-    if (!accountId || !amount || Number(amount) <= 0) {
+    if (!accountId || !amount || Number(amount) <= 0 || !phone) {
       return res.status(400).send("Invalid payment data");
     }
 
     const borrower = await Customer.findOne({ accountId });
     if (!borrower) {
-      return res.send("Invalid account ID");
+      return res.status(404).send("Invalid account ID");
     }
 
-    const phone = borrower.phone; // always from DB
-
-    // 1️⃣ Create pending transaction
+    // phone = CUSTOMER phone
     const transaction = await Transaction.create({
-      type: "customer deposit",
+      type: "customer payment",
       userId: borrower._id,
       userModel: "Customer",
-      phone,
+      phone: phone,                 // ✅ only phone
       amount: Number(amount),
       accountReference: accountId,
       status: "pending"
     });
 
-    // 2️⃣ Initiate STK push
     const stkResponse = await initiateSTKPush(
-      phone,
+      phone,                        // STK popup → customer phone
       Number(amount),
       accountId
     );
 
-    // 3️⃣ SAVE IDs for callback matching (VERY IMPORTANT)
     transaction.checkoutRequestID = stkResponse.CheckoutRequestID;
     transaction.merchantRequestID = stkResponse.MerchantRequestID;
     await transaction.save();
@@ -50,7 +45,6 @@ router.post("/pay/stk", async (req, res) => {
     `);
 
   } catch (err) {
-    console.error("STK ERROR:", err);
     res.status(500).send("Failed to initiate payment");
   }
 });
