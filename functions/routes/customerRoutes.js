@@ -10,6 +10,8 @@ const authorizeRoles = require("../middleware/rolemiddleware");
 const { validateAfricaPhone } = require("../middleware/validateAfricaPhone");
 const busboyMiddleware = require("../middleware/busboyMiddleware");
 const firebaseSafeUpload = require("../utils/upload");
+// const firebaseSafeUpload = require("../middleware/firebaseSafeUpload");
+
 
 
 router.get("/eligible-loan",protect,customerController.getCustomersWithoutActiveLoans) 
@@ -24,12 +26,12 @@ router.post(
   "/register",
   protect,
   authorizeRoles("lender"),
-   validateAfricaPhone,
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
     { name: "backID", maxCount: 1 },
     { name: "livePhoto", maxCount: 1 },
   ]),
+   validateAfricaPhone,
 
   customerController.registerCustomer
 );

@@ -337,11 +337,23 @@ Please pay early to avoid more penalties.
         isFullyRepaid = true;
       }
 
+      // loan.repayments.push({
+      //   amount,
+      //   transactionId: transaction.transactionId,
+      //   date: new Date()
+      // });
+
       loan.repayments.push({
-        amount,
-        transactionId: transaction.transactionId,
-        date: new Date()
-      });
+  transactionId: transaction._id,
+  loanId: loan._id,
+  borrowerId: borrower._id,
+  amount,
+  date: new Date(),
+  expectedPaymentDate: loan.dueDate,
+  wasPaymentLate: event === "LATE",
+  daysLate: daysLate,
+  creditScoreDelta: scoreDelta || 0
+});
 
       await loan.save({ session });
 

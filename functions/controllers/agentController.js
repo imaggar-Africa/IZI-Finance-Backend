@@ -245,23 +245,30 @@ const registerCustomer = async (req, res) => {
     console.log("✅ Incoming files:", req.files);
     console.log("✅ Incoming body:", req.body);
 
-    // Parse nested / typed fields
- const gpsLocation =
+    /* ================= PARSE & NORMALIZE ================= */
+
+    const gpsLocation =
       req.body.gpsLocation_lat && req.body.gpsLocation_lng
         ? {
             lat: Number(req.body.gpsLocation_lat),
             lng: Number(req.body.gpsLocation_lng),
           }
-        : undefined; // ← SAFE: No NaN stored
+        : undefined;
 
-    const savingsGoal = req.body.savingsGoal ? parseFloat(req.body.savingsGoal) : 0;
+    const savingsGoal = req.body.savingsGoal
+      ? parseFloat(req.body.savingsGoal)
+      : 0;
+
     const loanConsent = req.body.loanConsent === "true";
     const agreementAcceptance = req.body.agreementAcceptance === "true";
+
+    /* ================= EXTRACT BODY ================= */
 
     const {
       idNumber,
       fullName,
       phone,
+      email,
       dateOfBirth,
       gender,
       maritalStatus,
@@ -273,108 +280,210 @@ const registerCustomer = async (req, res) => {
       nextOfKinPhone,
       preferredMobileMoney,
       preferences,
-      savingsBalance
+      savingsBalance,
+      kraPin,
+
+      // ✅ NEW FIELDS
+      educationLevel,
+      householdSize,
+      loanPurpose,
+      deviceType,
+
+      // referral
+      referralSource,
+      referredByBorrowerId
     } = req.body;
 
-    const registeredBy = req.user._id;
-    const registeredByModel = req.user.role === "agent" ? "Agent" : "User";
+    /* ================= ROLE CHECK ================= */
 
-    // ✅ Role check
     if (!["agent", "lender", "admin"].includes(req.user.role)) {
-      return res.status(403).json({ message: "Access denied: cannot register customer" });
+      return res
+        .status(403)
+        .json({ message: "Access denied: cannot register customer" });
     }
 
-    // ✅ Validate required fields
-    if (!idNumber || !fullName || !phone) {
-      return res.status(400).json({ error: "FullName, ID number, phone are required" });
+    /* ================= REQUIRED VALIDATION ================= */
+
+    if (
+      !fullName ||
+      !phone ||
+      !email ||
+      !idNumber ||
+      !educationLevel ||
+      !householdSize ||
+      !loanPurpose ||
+      !deviceType
+    ) {
+      return res.status(400).json({
+        message:
+          "Full name, phone, email, ID number, education level, household size, loan purpose, device type are required"
+      });
     }
 
-    // ✅ Validate files
-    const files = req.files;
-    if (!files?.frontID?.[0] || !files?.backID?.[0] || !files?.livePhoto?.[0]) {
-      return res.status(400).json({ error: "Front ID, Back ID, and Live Photo are required" });
+    /* ================= FILE VALIDATION ================= */
+
+    if (
+      !req.files?.frontID?.[0] ||
+      !req.files?.backID?.[0] ||
+      !req.files?.livePhoto?.[0]
+    ) {
+      return res.status(400).json({
+        message: "Front ID, Back ID and Live Photo are required"
+      });
     }
 
-    // ✅ Upload files to Firebase
-    const frontIDUrl = await uploadToFirebase(files.frontID[0], "frontID");
-    const backIDUrl = await uploadToFirebase(files.backID[0], "backID");
-    const livePhotoUrl = await uploadToFirebase(files.livePhoto[0], "livePhoto");
+    /* ================= DATA VALIDATION ================= */
 
-    // ✅ Check duplicates
-    if (await Borrower.findOne({ phone })) return res.status(409).json({ error: "Phone number already registered" });
-    if (await Borrower.findOne({ idNumber })) return res.status(409).json({ error: "ID number already registered" });
+    if (typeof Number(householdSize) !== "number" || Number(householdSize) < 1) {
+      return res.status(400).json({
+        message: "householdSize must be a valid number greater than 0"
+      });
+    }
 
-    // ✅ Create customer
-   const borrower = new Borrower({
-  registeredBy: req.user._id,
-  registeredByModel: req.user.role === "agent" ? "Agent" : "User",
-  agentId: req.user.role === "agent" ? req.user._id : null,
-  accountId,
-  fullName,
-  phone,
-  email,
-  idNumber,
+    const allowedEducationLevels = [
+      "None",
+      "Primary",
+      "Secondary",
+      "Diploma",
+      "Graduate",
+      "Postgraduate"
+    ];
 
-  livePhoto: livePhotoUrl,
-  frontID: frontIDUrl,
-  backID: backIDUrl,
+    if (!allowedEducationLevels.includes(educationLevel)) {
+      return res.status(400).json({ message: "Invalid education level" });
+    }
 
-  isVerified: true,
-  status: "Active",            // ✅ IMPORTANT
+    const allowedDeviceTypes = ["Android", "iOS", "Web", "USSD", "Other"];
+    if (!allowedDeviceTypes.includes(deviceType)) {
+      return res.status(400).json({ message: "Invalid device type" });
+    }
 
-  dateOfBirth,
-  gender,
-  maritalStatus,
-  altPhoneNumber,
-  physicalAddress,
-  gpsLocation,
-  occupation,
-  monthlyIncomeRange,
-  nextOfKinName,
-  nextOfKinPhone,
-  preferredMobileMoney,
-  savingsGoal,
-  loanConsent,
-  kraPin,
-  agreementAcceptance,
-  preferences: preferences || {},
-  savingsBalance: savingsBalance || 0,
+    /* ================= REFERRAL VALIDATION ================= */
 
-  referralSource,
-  referredByBorrowerId:
-    referralSource === "existing_borrower" ? referredByBorrowerId : null,
+    if (!referralSource) {
+      return res.status(400).json({ message: "referralSource is required" });
+    }
 
-  /* ================= CREDIT SCORE DEFAULTS ================= */
-  creditScore: 500,
-  creditLevel: "High Risk",
-  maxLoanLimit: 1000,
-  totalLoans: 0,
-  completedLoans: 0,
-  overdueLoans: 0,
-  lastScoreUpdate: new Date()
-});
+    if (referralSource === "existing_borrower") {
+      if (!referredByBorrowerId) {
+        return res.status(400).json({
+          message: "referredByBorrowerId is required"
+        });
+      }
 
+      const referredBorrower = await Borrower.findById(referredByBorrowerId);
+      if (!referredBorrower) {
+        return res.status(404).json({
+          message: "Referred borrower not found"
+        });
+      }
+    }
 
-    await customer.save();
+    /* ================= DUPLICATE CHECK ================= */
 
-    // ✅ Update agent's customers
+    if (await Borrower.findOne({ phone }))
+      return res.status(409).json({ message: "Phone already registered" });
+
+    if (await Borrower.findOne({ email }))
+      return res.status(409).json({ message: "Email already registered" });
+
+    if (await Borrower.findOne({ idNumber }))
+      return res.status(409).json({ message: "ID number already registered" });
+
+    /* ================= FILE UPLOAD ================= */
+
+    const frontIDUrl = await uploadToFirebase(req.files.frontID[0], "frontID");
+    const backIDUrl = await uploadToFirebase(req.files.backID[0], "backID");
+    const livePhotoUrl = await uploadToFirebase(
+      req.files.livePhoto[0],
+      "livePhoto"
+    );
+
+    const accountId = await generateAccountId();
+
+    /* ================= CREATE BORROWER ================= */
+
+    const borrower = new Borrower({
+      registeredBy: req.user._id,
+      registeredByModel: req.user.role === "agent" ? "Agent" : "User",
+      agentId: req.user.role === "agent" ? req.user._id : null,
+      accountId,
+
+      fullName,
+      phone,
+      email,
+      idNumber,
+
+      livePhoto: livePhotoUrl,
+      frontID: frontIDUrl,
+      backID: backIDUrl,
+
+      isVerified: true,
+      status: "Active",
+
+      dateOfBirth,
+      gender,
+      maritalStatus,
+      altPhoneNumber,
+      physicalAddress,
+      gpsLocation,
+      occupation,
+      monthlyIncomeRange,
+      nextOfKinName,
+      nextOfKinPhone,
+      preferredMobileMoney,
+      savingsGoal,
+      loanConsent,
+      kraPin,
+      agreementAcceptance,
+
+      preferences: preferences || {},
+      savingsBalance: savingsBalance || 0,
+
+      referralSource,
+      referredByBorrowerId:
+        referralSource === "existing_borrower"
+          ? referredByBorrowerId
+          : null,
+
+      /* ===== NEW SOCIO-ECONOMIC FIELDS ===== */
+      educationLevel,
+      householdSize: Number(householdSize),
+      loanPurpose,
+      deviceType,
+
+      /* ===== CREDIT SCORE DEFAULTS ===== */
+      creditScore: 500,
+      creditLevel: "High Risk",
+      maxLoanLimit: 1000,
+      totalLoans: 0,
+      completedLoans: 0,
+      overdueLoans: 0,
+      lastScoreUpdate: new Date()
+    });
+
+    await borrower.save();
+
+    /* ================= AGENT CUSTOMER LINK ================= */
+
     if (req.user.role === "agent") {
-      const agent = await AgentModel.findById(registeredBy);
-      if (agent) await agent.addCustomer(customer._id);
+      const agent = await AgentModel.findById(req.user._id);
+      if (agent) await agent.addCustomer(borrower._id);
     }
 
-    res.status(201).json({
-      message: "Customer registered and verified successfully",
-      customer
+    return res.status(201).json({
+      message: "Customer registered successfully",
+      borrower
     });
 
   } catch (error) {
-    console.error("Error registering customer:", error);
-    res.status(500).json({ error: "Error registering customer" });
+    console.error("❌ Error registering customer:", error);
+    return res.status(500).json({
+      message: "Error registering customer",
+      error: error.message
+    });
   }
 };
-
-
 
 
 const getAgentProfile = asyncHandler(async (req, res) => {

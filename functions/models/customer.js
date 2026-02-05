@@ -351,6 +351,34 @@ const customerSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  /* ================= SOCIO-ECONOMIC / LOAN INFO ================= */
+
+educationLevel: {
+  type: String,
+  enum: ["None", "Primary", "Secondary", "Diploma", "Graduate", "Postgraduate"],
+  required: true,
+  trim: true
+},
+
+householdSize: {
+  type: Number,
+  required: true,
+  min: 1,
+  max: 20
+},
+
+loanPurpose: {
+  type: String,
+  required: true,
+  trim: true
+},
+
+deviceType: {
+  type: String,
+  enum: ["Android", "iOS", "Web", "USSD", "Other"],
+  required: true
+},
+
 
   /* ================= META ================= */
   createdAt: { type: Date, default: Date.now },

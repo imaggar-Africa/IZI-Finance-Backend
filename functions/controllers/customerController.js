@@ -145,55 +145,116 @@ exports.registerCustomer = async (req, res) => {
       preferences,
       savingsBalance,
       referralSource,
-      referredByBorrowerId
+      referredByBorrowerId,
+
+      // ✅ NEW FIELDS
+      educationLevel,
+      householdSize,
+      loanPurpose,
+      deviceType
     } = req.body;
 
-    // -----------------------------
-    // Validate required fields
-    // -----------------------------
-    if (!fullName || !phone || !idNumber ||!email || !req.files?.livePhoto) {
+    /* ================= REQUIRED FIELD VALIDATION ================= */
+    console.log("BODY:", req.body);
+console.log("FILES:", req.files);
+
+
+    if (
+      !fullName ||
+      !phone ||
+      !email ||
+      !idNumber ||
+      !educationLevel ||
+      !householdSize ||
+      !loanPurpose ||
+      !deviceType
+    ) {
       return res.status(400).json({
-        message: "Full name, phone,email ID number and Live Photo are required.",
+        message:
+          "Full name, phone, email, ID number,  education level, household size, loan purpose, and device type are required."
       });
     }
 
-    // -----------------------------
-// Referral validation
-// -----------------------------
-if (!referralSource) {
+    const householdSizeNum = Number(householdSize);
+
+    /* ================= DATA TYPE & VALUE VALIDATION ================= */
+
+    if (isNaN(householdSizeNum) || householdSizeNum < 1) {
   return res.status(400).json({
-    message: "referralSource is required"
+    message: "householdSize must be a valid number greater than 0"
   });
 }
 
-if (referralSource === "existing_borrower") {
-  if (!referredByBorrowerId) {
-    return res.status(400).json({
-      message: "referredByBorrowerId is required for existing borrower referral"
-    });
-  }
 
-  const referredBorrower = await Borrower.findById(referredByBorrowerId);
-  if (!referredBorrower) {
-    return res.status(404).json({
-      message: "Referred borrower not found"
-    });
-  }
-}
+    const allowedEducationLevels = [
+      "None",
+      "Primary",
+      "Secondary",
+      "Diploma",
+      "Graduate",
+      "Postgraduate"
+    ];
 
-    // -----------------------------
-    // Check duplicates
-    // -----------------------------
+    if (!allowedEducationLevels.includes(educationLevel)) {
+      return res.status(400).json({
+        message: "Invalid education level"
+      });
+    }
+
+    const allowedDeviceTypes = ["Android", "iOS", "Web", "USSD", "Other"];
+
+    if (!allowedDeviceTypes.includes(deviceType)) {
+      return res.status(400).json({
+        message: "Invalid device type"
+      });
+    }
+
+    /* ================= REFERRAL VALIDATION ================= */
+
+    if (!referralSource) {
+      return res.status(400).json({
+        message: "referralSource is required"
+      });
+    }
+
+    if (referralSource === "existing_borrower") {
+      if (!referredByBorrowerId) {
+        return res.status(400).json({
+          message:
+            "referredByBorrowerId is required for existing borrower referral"
+        });
+      }
+
+      const referredBorrower = await Borrower.findById(referredByBorrowerId);
+      if (!referredBorrower) {
+        return res.status(404).json({
+          message: "Referred borrower not found"
+        });
+      }
+    }
+
+    /* ================= DUPLICATE CHECK ================= */
+
     if (await Borrower.findOne({ phone })) {
-      return res.status(409).json({ message: "Phone number already registered." });
-    }
-    if (await Borrower.findOne({ idNumber })) {
-      return res.status(409).json({ message: "ID number already registered." });
+      return res.status(409).json({
+        message: "Phone number already registered."
+      });
     }
 
-    // -----------------------------
-    // Upload files
-    // -----------------------------
+    if (await Borrower.findOne({ email })) {
+      return res.status(409).json({
+        message: "Email already registered."
+      });
+    }
+
+    if (await Borrower.findOne({ idNumber })) {
+      return res.status(409).json({
+        message: "ID number already registered."
+      });
+    }
+
+    /* ================= FILE UPLOAD ================= */
+
     const livePhotoFile = req.files.livePhoto?.[0];
     const frontIDFile = req.files.frontID?.[0];
     const backIDFile = req.files.backID?.[0];
@@ -203,71 +264,80 @@ if (referralSource === "existing_borrower") {
     const backIDUrl = await uploadToFirebase(backIDFile, "backID");
 
     const accountId = await generateAccountId();
-    // -----------------------------
-    // Create borrower record
-    // -----------------------------
+
+    /* ================= CREATE BORROWER ================= */
+
     const borrower = new Borrower({
-  registeredBy: req.user._id,
-  registeredByModel: req.user.role === "agent" ? "Agent" : "User",
-  agentId: req.user.role === "agent" ? req.user._id : null,
-  accountId,
-  fullName,
-  phone,
-  email,
-  idNumber,
+      registeredBy: req.user._id,
+      registeredByModel: req.user.role === "agent" ? "Agent" : "User",
+      agentId: req.user.role === "agent" ? req.user._id : null,
+      accountId,
 
-  livePhoto: livePhotoUrl,
-  frontID: frontIDUrl,
-  backID: backIDUrl,
+      fullName,
+      phone,
+      email,
+      idNumber,
 
-  isVerified: true,
-  status: "Active",            // ✅ IMPORTANT
+      livePhoto: livePhotoUrl,
+      frontID: frontIDUrl,
+      backID: backIDUrl,
 
-  dateOfBirth,
-  gender,
-  maritalStatus,
-  altPhoneNumber,
-  physicalAddress,
-  gpsLocation,
-  occupation,
-  monthlyIncomeRange,
-  nextOfKinName,
-  nextOfKinPhone,
-  preferredMobileMoney,
-  savingsGoal,
-  loanConsent,
-  kraPin,
-  agreementAcceptance,
-  preferences: preferences || {},
-  savingsBalance: savingsBalance || 0,
+      isVerified: true,
+      status: "Active",
 
-  referralSource,
-  referredByBorrowerId:
-    referralSource === "existing_borrower" ? referredByBorrowerId : null,
+      dateOfBirth,
+      gender,
+      maritalStatus,
+      altPhoneNumber,
+      physicalAddress,
+      gpsLocation,
+      occupation,
+      monthlyIncomeRange,
+      nextOfKinName,
+      nextOfKinPhone,
+      preferredMobileMoney,
+      savingsGoal,
+      loanConsent,
+      kraPin,
+      agreementAcceptance,
 
-  /* ================= CREDIT SCORE DEFAULTS ================= */
-  creditScore: 500,
-  creditLevel: "High Risk",
-  maxLoanLimit: 1000,
-  totalLoans: 0,
-  completedLoans: 0,
-  overdueLoans: 0,
-  lastScoreUpdate: new Date()
-});
+      preferences: preferences || {},
+      savingsBalance: savingsBalance || 0,
 
+      referralSource,
+      referredByBorrowerId:
+        referralSource === "existing_borrower"
+          ? referredByBorrowerId
+          : null,
+
+      /* ================= NEW SOCIO-ECONOMIC FIELDS ================= */
+      educationLevel,
+      householdSize,
+      loanPurpose,
+      deviceType,
+
+      /* ================= CREDIT SCORE DEFAULTS ================= */
+      creditScore: 500,
+      creditLevel: "High Risk",
+      maxLoanLimit: 1000,
+      totalLoans: 0,
+      completedLoans: 0,
+      overdueLoans: 0,
+      lastScoreUpdate: new Date()
+    });
 
     await borrower.save();
 
     return res.status(201).json({
       message: "Customer registered successfully.",
-      borrower,
+      borrower
     });
 
   } catch (error) {
     console.error("❌ Error registering customer:", error);
     return res.status(500).json({
       message: "Server error while registering customer.",
-      error: error.message,
+      error: error.message
     });
   }
 };

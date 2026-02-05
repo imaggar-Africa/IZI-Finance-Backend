@@ -1,6 +1,8 @@
 const Stats = require('../models/Stats');
 const Loan = require("../models/Loan");
 const PDFDocument = require("pdfkit");
+const Customer = require("../models/customer");
+
 
 function getRange(type, fromDate, toDate) {
   const now = new Date();
@@ -49,36 +51,44 @@ function calculateStats(loans, start = null, end = null) {
     const issuedInRange =
       !start || !end || (loan.createdAt >= start && loan.createdAt <= end);
 
+    // =========================
+    // 1️⃣ LOANS ISSUED IN RANGE
+    // =========================
     if (issuedInRange) {
       issuedCount++;
       totalLoanAmount += loan.totalRepayment || 0;
       principalAmount += loan.amount || 0;
+
+      // ✅ outstanding = CURRENT balance of loans issued in range
+      outstandingLoanAmount += loan.balance || 0;
+
+      if (loan.balance > 0) {
+        activeLoans++;
+        if (loan.dueDate && new Date(loan.dueDate) < new Date()) {
+          overdueLoans++;
+        }
+      } else {
+        paidLoans++;
+      }
     }
 
+    // =========================
+    // 2️⃣ COLLECTIONS (DATE BASED)
+    // =========================
     if (Array.isArray(loan.repayments)) {
       loan.repayments.forEach((r) => {
         const paymentInRange =
           !start ||
           !end ||
-          (r.paymentDate &&
-            r.paymentDate >= start &&
-            r.paymentDate <= end);
+          (r.date && r.date >= start && r.date <= end);
 
         if (paymentInRange) {
           collectedAmount += r.amount || 0;
+
           const principalPart = Math.min(r.amount || 0, loan.amount || 0);
           interestEarned += Math.max(0, (r.amount || 0) - principalPart);
         }
       });
-    }
-
-    outstandingLoanAmount += loan.balance || 0;
-
-    if (loan.balance > 0) {
-      activeLoans++;
-      if (loan.dueDate && new Date(loan.dueDate) < new Date()) overdueLoans++;
-    } else {
-      paidLoans++;
     }
   });
 
@@ -94,6 +104,8 @@ function calculateStats(loans, start = null, end = null) {
     paidLoans
   };
 }
+
+
 
 /* ================= LOAN DETAIL MAPPER ================= */
 function mapLoanDetail(loan) {
@@ -124,6 +136,15 @@ function filterLoansByIssueDate(loans, start, end) {
   );
 }
 
+function countCustomers(customers, start = null, end = null) {
+  return customers.filter(c =>
+    !start ||
+    !end ||
+    (c.createdAt >= start && c.createdAt <= end)
+  ).length;
+}
+
+
 /* ================= GET STATS API ================= */
 exports.getStats = async (req, res) => {
   try {
@@ -131,6 +152,8 @@ exports.getStats = async (req, res) => {
 
     const loans = await Loan.find({ loanRequestStatus: "approved" })
       .populate("borrowerId", "fullName phone");
+
+       const customers = await Customer.find({});
 
     const last7 = getRange("7d");
     const last1m = getRange("1m");
@@ -147,27 +170,32 @@ exports.getStats = async (req, res) => {
     res.status(200).json({
       overall: {
         stats: calculateStats(loans),
+        customersAdded: customers.length,
         loanDetails: loans.map(mapLoanDetail)
       },
 
       last7Days: {
         stats: calculateStats(loans, last7.start, last7.end),
+        customersAdded: countCustomers(customers, last7.start, last7.end),
         loanDetails: last7Loans.map(mapLoanDetail)
       },
 
       last1Month: {
         stats: calculateStats(loans, last1m.start, last1m.end),
+        customersAdded: countCustomers(customers, last1m.start, last1m.end),
         loanDetails: last1mLoans.map(mapLoanDetail)
       },
 
       last3Months: {
         stats: calculateStats(loans, last3m.start, last3m.end),
+          customersAdded: countCustomers(customers, last3m.start, last3m.end),
         loanDetails: last3mLoans.map(mapLoanDetail)
       },
 
       customRange: custom
         ? {
             stats: calculateStats(loans, custom.start, custom.end),
+            customersAdded: countCustomers(customers, custom.start, custom.end),
             loanDetails: customLoans.map(mapLoanDetail)
           }
         : null
