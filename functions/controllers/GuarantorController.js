@@ -8,92 +8,92 @@ const OTP = require("../models/OTP");
  * Add guarantor (Borrower / Customer)
  */
 
-exports.addGuarantor = async (req, res) => {
-  try {
-    const { borrowerId, fullName, phone, relationship, idNumber } = req.body;
+// exports.addGuarantor = async (req, res) => {
+//   try {
+//     const { borrowerId, fullName, phone, relationship, idNumber } = req.body;
 
-    if (!borrowerId || !fullName || !phone || !relationship || !idNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "All guarantor fields are required",
-      });
-    }
+//     if (!borrowerId || !fullName || !phone || !relationship || !idNumber) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "All guarantor fields are required",
+//       });
+//     }
 
-    const borrower = await Customer.findById(borrowerId);
-    if (!borrower) {
-      return res.status(404).json({
-        success: false,
-        message: "Borrower not found",
-      });
-    }
+//     const borrower = await Customer.findById(borrowerId);
+//     if (!borrower) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Borrower not found",
+//       });
+//     }
 
-    const normalizedPhone = normalizePhone(phone, "KE");
-    if (!normalizedPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid phone number",
-      });
-    }
+//     const normalizedPhone = normalizePhone(phone, "KE");
+//     if (!normalizedPhone) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Invalid phone number",
+//       });
+//     }
 
-    const existing = await Guarantor.findOne({
-      borrowerId,
-      phone: normalizedPhone,
-      isDeleted: false,
-    });
+//     const existing = await Guarantor.findOne({
+//       borrowerId,
+//       phone: normalizedPhone,
+//       isDeleted: false,
+//     });
 
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: "Guarantor already exists",
-      });
-    }
+//     if (existing) {
+//       return res.status(409).json({
+//         success: false,
+//         message: "Guarantor already exists",
+//       });
+//     }
 
-    const guarantor = await Guarantor.create({
-      borrowerId,
-      fullName,
-      phone: normalizedPhone,
-      relationship,
-      idNumber,
-      isVerified: false,
-    });
+//     const guarantor = await Guarantor.create({
+//       borrowerId,
+//       fullName,
+//       phone: normalizedPhone,
+//       relationship,
+//       idNumber,
+//       isVerified: false,
+//     });
 
-    // 🔥 SAME OTP FLOW AS LOGIN
-    const { sendVerificationCode } = req.app.locals.otpService;
-    const result = await sendVerificationCode(normalizedPhone);
+//     // 🔥 SAME OTP FLOW AS LOGIN
+//     const { sendVerificationCode } = req.app.locals.otpService;
+//     const result = await sendVerificationCode(normalizedPhone);
 
-    if (!result.success) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP",
-      });
-    }
+//     if (!result.success) {
+//       return res.status(500).json({
+//         success: false,
+//         message: "Failed to send OTP",
+//       });
+//     }
 
-    // 🧪 LOCAL / HTTP → show OTP
-    if (result.sandbox) {
-      return res.status(201).json({
-        success: true,
-        sandbox: true,
-        otp: result.otp,
-        message: "Guarantor added. OTP generated (sandbox)",
-        guarantor,
-      });
-    }
+//     // 🧪 LOCAL / HTTP → show OTP
+//     if (result.sandbox) {
+//       return res.status(201).json({
+//         success: true,
+//         sandbox: true,
+//         otp: result.otp,
+//         message: "Guarantor added. OTP generated (sandbox)",
+//         guarantor,
+//       });
+//     }
 
-    // 🔐 LIVE / HTTPS
-    return res.status(201).json({
-      success: true,
-      message: "Guarantor added. OTP sent for consent",
-      guarantor,
-    });
+//     // 🔐 LIVE / HTTPS
+//     return res.status(201).json({
+//       success: true,
+//       message: "Guarantor added. OTP sent for consent",
+//       guarantor,
+//     });
 
-  } catch (error) {
-    console.error("Add guarantor error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
-  }
-};
+//   } catch (error) {
+//     console.error("Add guarantor error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//     });
+//   }
+// };
 
 
 

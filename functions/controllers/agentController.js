@@ -256,7 +256,7 @@ const registerCustomer = async (req, res) => {
         : undefined;
 
     const savingsGoal = req.body.savingsGoal
-      ? parseFloat(req.body.savingsGoal)
+      ? Number(req.body.savingsGoal)
       : 0;
 
     const loanConsent = req.body.loanConsent === "true";
@@ -264,7 +264,7 @@ const registerCustomer = async (req, res) => {
 
     /* ================= EXTRACT BODY ================= */
 
-    const {
+    let {
       idNumber,
       fullName,
       phone,
@@ -283,13 +283,11 @@ const registerCustomer = async (req, res) => {
       savingsBalance,
       kraPin,
 
-      // ✅ NEW FIELDS
       educationLevel,
       householdSize,
       loanPurpose,
       deviceType,
 
-      // referral
       referralSource,
       referredByBorrowerId
     } = req.body;
@@ -297,16 +295,38 @@ const registerCustomer = async (req, res) => {
     /* ================= ROLE CHECK ================= */
 
     if (!["agent", "lender", "admin"].includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Access denied: cannot register customer" });
+      return res.status(403).json({
+        message: "Access denied: cannot register customer"
+      });
+    }
+
+    /* ================= TYPE SAFETY ================= */
+
+    fullName = String(fullName || "").trim();
+    email = String(email || "").toLowerCase().trim();
+    idNumber = String(idNumber || "").trim();
+
+    const rawPhone =
+      Array.isArray(phone)
+        ? phone[0]
+        : typeof phone === "object"
+        ? phone.value || phone.phone || ""
+        : phone;
+
+    const normalizedPhone = normalizePhone(String(rawPhone).trim());
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        message:
+          "Invalid phone format. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+      });
     }
 
     /* ================= REQUIRED VALIDATION ================= */
 
     if (
       !fullName ||
-      !phone ||
+      !normalizedPhone ||
       !email ||
       !idNumber ||
       !educationLevel ||
@@ -334,7 +354,8 @@ const registerCustomer = async (req, res) => {
 
     /* ================= DATA VALIDATION ================= */
 
-    if (typeof Number(householdSize) !== "number" || Number(householdSize) < 1) {
+    const householdSizeNum = Number(householdSize);
+    if (isNaN(householdSizeNum) || householdSizeNum < 1) {
       return res.status(400).json({
         message: "householdSize must be a valid number greater than 0"
       });
@@ -348,7 +369,6 @@ const registerCustomer = async (req, res) => {
       "Graduate",
       "Postgraduate"
     ];
-
     if (!allowedEducationLevels.includes(educationLevel)) {
       return res.status(400).json({ message: "Invalid education level" });
     }
@@ -381,7 +401,7 @@ const registerCustomer = async (req, res) => {
 
     /* ================= DUPLICATE CHECK ================= */
 
-    if (await Borrower.findOne({ phone }))
+    if (await Borrower.findOne({ phone: normalizedPhone }))
       return res.status(409).json({ message: "Phone already registered" });
 
     if (await Borrower.findOne({ email }))
@@ -403,14 +423,14 @@ const registerCustomer = async (req, res) => {
 
     /* ================= CREATE BORROWER ================= */
 
-    const borrower = new Borrower({
+    const borrower = await Borrower.create({
       registeredBy: req.user._id,
       registeredByModel: req.user.role === "agent" ? "Agent" : "User",
       agentId: req.user.role === "agent" ? req.user._id : null,
       accountId,
 
       fullName,
-      phone,
+      phone: normalizedPhone,
       email,
       idNumber,
 
@@ -446,13 +466,11 @@ const registerCustomer = async (req, res) => {
           ? referredByBorrowerId
           : null,
 
-      /* ===== NEW SOCIO-ECONOMIC FIELDS ===== */
       educationLevel,
-      householdSize: Number(householdSize),
+      householdSize: householdSizeNum,
       loanPurpose,
       deviceType,
 
-      /* ===== CREDIT SCORE DEFAULTS ===== */
       creditScore: 500,
       creditLevel: "High Risk",
       maxLoanLimit: 1000,
@@ -462,9 +480,7 @@ const registerCustomer = async (req, res) => {
       lastScoreUpdate: new Date()
     });
 
-    await borrower.save();
-
-    /* ================= AGENT CUSTOMER LINK ================= */
+    /* ================= AGENT LINK ================= */
 
     if (req.user.role === "agent") {
       const agent = await AgentModel.findById(req.user._id);
@@ -472,6 +488,7 @@ const registerCustomer = async (req, res) => {
     }
 
     return res.status(201).json({
+      success: true,
       message: "Customer registered successfully",
       borrower
     });
@@ -479,11 +496,13 @@ const registerCustomer = async (req, res) => {
   } catch (error) {
     console.error("❌ Error registering customer:", error);
     return res.status(500).json({
+      success: false,
       message: "Error registering customer",
       error: error.message
     });
   }
 };
+
 
 
 const getAgentProfile = asyncHandler(async (req, res) => {

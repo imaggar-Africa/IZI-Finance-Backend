@@ -31,7 +31,7 @@ router.post(
     { name: "backID", maxCount: 1 },
     { name: "livePhoto", maxCount: 1 },
   ]),
-   validateAfricaPhone,
+  //  validateAfricaPhone,
 
   customerController.registerCustomer
 );

@@ -14,6 +14,8 @@ const mongoose = require("mongoose");
 const { generateAccountId } = require("../utils/generateAccountId");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { calculateMembership } = require("../utils/membershipRules");
+const Guarantor = require("../models/Guarantor");
+const { normalizePhone } = require("../utils/normalizePhone");
 
 
 function calculateLoan(principal, repaymentDays, totalPaid) {
@@ -121,8 +123,10 @@ exports.sendOtp = async (req, res) => {
 exports.registerCustomer = async (req, res) => {
   try {
     console.log("🔥 Reached Customer Register Controller");
+    console.log("BODY:", req.body);
+    console.log("FILES:", req.files);
 
-    const {
+    let {
       fullName,
       phone,
       email,
@@ -147,18 +151,17 @@ exports.registerCustomer = async (req, res) => {
       referralSource,
       referredByBorrowerId,
 
-      // ✅ NEW FIELDS
+      // socio-economic
       educationLevel,
       householdSize,
       loanPurpose,
-      deviceType
+      deviceType,
+
+      // optional guarantor
+      guarantor
     } = req.body;
 
-    /* ================= REQUIRED FIELD VALIDATION ================= */
-    console.log("BODY:", req.body);
-console.log("FILES:", req.files);
-
-
+    /* ================= REQUIRED FIELDS ================= */
     if (
       !fullName ||
       !phone ||
@@ -171,21 +174,52 @@ console.log("FILES:", req.files);
     ) {
       return res.status(400).json({
         message:
-          "Full name, phone, email, ID number,  education level, household size, loan purpose, and device type are required."
+          "fullName, phone, email, idNumber, educationLevel, householdSize, loanPurpose, deviceType are required"
       });
     }
 
+    /* ================= TYPE + SANITIZATION ================= */
+    const cleanFullName =
+      Array.isArray(fullName)
+        ? fullName.join(" ").trim()
+        : String(fullName).trim();
+
+    const cleanEmail =
+      Array.isArray(email)
+        ? email[0].toLowerCase().trim()
+        : String(email).toLowerCase().trim();
+
+    const cleanIdNumber =
+      Array.isArray(idNumber)
+        ? idNumber[0].trim()
+        : String(idNumber).trim();
+
+    /* ================= PHONE (AFRICA ONLY) ================= */
+    const rawPhone =
+      Array.isArray(phone)
+        ? phone[0]
+        : typeof phone === "object"
+        ? phone.value || phone.phone || ""
+        : phone;
+
+    const normalizedPhone = normalizePhone(String(rawPhone).trim());
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        message:
+          "Invalid phone format. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+      });
+    }
+
+    /* ================= HOUSEHOLD ================= */
     const householdSizeNum = Number(householdSize);
-
-    /* ================= DATA TYPE & VALUE VALIDATION ================= */
-
     if (isNaN(householdSizeNum) || householdSizeNum < 1) {
-  return res.status(400).json({
-    message: "householdSize must be a valid number greater than 0"
-  });
-}
+      return res.status(400).json({
+        message: "householdSize must be a number greater than 0"
+      });
+    }
 
-
+    /* ================= ENUM VALIDATION ================= */
     const allowedEducationLevels = [
       "None",
       "Primary",
@@ -194,96 +228,54 @@ console.log("FILES:", req.files);
       "Graduate",
       "Postgraduate"
     ];
-
     if (!allowedEducationLevels.includes(educationLevel)) {
-      return res.status(400).json({
-        message: "Invalid education level"
-      });
+      return res.status(400).json({ message: "Invalid educationLevel" });
     }
 
     const allowedDeviceTypes = ["Android", "iOS", "Web", "USSD", "Other"];
-
     if (!allowedDeviceTypes.includes(deviceType)) {
-      return res.status(400).json({
-        message: "Invalid device type"
-      });
-    }
-
-    /* ================= REFERRAL VALIDATION ================= */
-
-    if (!referralSource) {
-      return res.status(400).json({
-        message: "referralSource is required"
-      });
-    }
-
-    if (referralSource === "existing_borrower") {
-      if (!referredByBorrowerId) {
-        return res.status(400).json({
-          message:
-            "referredByBorrowerId is required for existing borrower referral"
-        });
-      }
-
-      const referredBorrower = await Borrower.findById(referredByBorrowerId);
-      if (!referredBorrower) {
-        return res.status(404).json({
-          message: "Referred borrower not found"
-        });
-      }
+      return res.status(400).json({ message: "Invalid deviceType" });
     }
 
     /* ================= DUPLICATE CHECK ================= */
-
-    if (await Borrower.findOne({ phone })) {
-      return res.status(409).json({
-        message: "Phone number already registered."
-      });
+    if (await Borrower.findOne({ phone: normalizedPhone })) {
+      return res.status(409).json({ message: "Phone already registered" });
     }
 
-    if (await Borrower.findOne({ email })) {
-      return res.status(409).json({
-        message: "Email already registered."
-      });
+    if (await Borrower.findOne({ email: cleanEmail })) {
+      return res.status(409).json({ message: "Email already registered" });
     }
 
-    if (await Borrower.findOne({ idNumber })) {
-      return res.status(409).json({
-        message: "ID number already registered."
-      });
+    if (await Borrower.findOne({ idNumber: cleanIdNumber })) {
+      return res.status(409).json({ message: "ID number already registered" });
     }
 
-    /* ================= FILE UPLOAD ================= */
+    /* ================= FILE UPLOAD (SAFE MOCK) ================= */
+    const uploadMock = async (file, base) => {
+      if (!file) return null;
+      return `mock/${base}_${Date.now()}.jpg`;
+    };
 
-    const livePhotoFile = req.files.livePhoto?.[0];
-    const frontIDFile = req.files.frontID?.[0];
-    const backIDFile = req.files.backID?.[0];
-
-    const livePhotoUrl = await uploadToFirebase(livePhotoFile, "livePhoto");
-    const frontIDUrl = await uploadToFirebase(frontIDFile, "frontID");
-    const backIDUrl = await uploadToFirebase(backIDFile, "backID");
+    const livePhoto = await uploadMock(req.files?.livePhoto?.[0], "livePhoto");
+    const frontID  = await uploadMock(req.files?.frontID?.[0], "frontID");
+    const backID   = await uploadMock(req.files?.backID?.[0], "backID");
 
     const accountId = await generateAccountId();
 
     /* ================= CREATE BORROWER ================= */
-
-    const borrower = new Borrower({
+    const borrower = await Borrower.create({
       registeredBy: req.user._id,
       registeredByModel: req.user.role === "agent" ? "Agent" : "User",
-      agentId: req.user.role === "agent" ? req.user._id : null,
+
       accountId,
+      fullName: cleanFullName,
+      phone: normalizedPhone,
+      email: cleanEmail,
+      idNumber: cleanIdNumber,
 
-      fullName,
-      phone,
-      email,
-      idNumber,
-
-      livePhoto: livePhotoUrl,
-      frontID: frontIDUrl,
-      backID: backIDUrl,
-
-      isVerified: true,
-      status: "Active",
+      livePhoto,
+      frontID,
+      backID,
 
       dateOfBirth,
       gender,
@@ -310,37 +302,89 @@ console.log("FILES:", req.files);
           ? referredByBorrowerId
           : null,
 
-      /* ================= NEW SOCIO-ECONOMIC FIELDS ================= */
       educationLevel,
-      householdSize,
+      householdSize: householdSizeNum,
       loanPurpose,
       deviceType,
 
-      /* ================= CREDIT SCORE DEFAULTS ================= */
+      isVerified: true,
+      status: "Active",
+
       creditScore: 500,
-      creditLevel: "High Risk",
-      maxLoanLimit: 1000,
-      totalLoans: 0,
-      completedLoans: 0,
-      overdueLoans: 0,
-      lastScoreUpdate: new Date()
+      creditLevel: "High Risk"
     });
 
-    await borrower.save();
+    /* ================= OPTIONAL GUARANTOR ================= */
+    let guarantorDoc = null;
 
+    if (guarantor) {
+      let g;
+      try {
+        g = typeof guarantor === "string" ? JSON.parse(guarantor) : guarantor;
+      } catch {
+        return res.status(400).json({
+          message: "Invalid guarantor format (must be JSON)"
+        });
+      }
+
+      if (!g.fullName || !g.phone || !g.relationship || !g.idNumber) {
+        return res.status(400).json({
+          message: "All guarantor fields are required"
+        });
+      }
+
+      const rawGuarantorPhone = String(
+        Array.isArray(g.phone) ? g.phone[0] : g.phone
+      ).trim();
+
+      const gPhone = normalizePhone(rawGuarantorPhone);
+
+      if (!gPhone) {
+        return res.status(400).json({
+          message:
+            "Invalid guarantor phone. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+        });
+      }
+
+      guarantorDoc = await Guarantor.create({
+        borrowerId: borrower._id,
+        fullName: String(g.fullName).trim(),
+        phone: gPhone,
+        relationship: String(g.relationship).trim(),
+        idNumber: String(g.idNumber).trim(),
+        consent: false,
+        isVerified: false
+      });
+
+      const { sendVerificationCode } = req.app.locals.otpService;
+      await sendVerificationCode(gPhone);
+    }
+
+    /* ================= RESPONSE ================= */
     return res.status(201).json({
-      message: "Customer registered successfully.",
-      borrower
+      success: true,
+      message: "Customer registered successfully",
+      borrower,
+      guarantor: guarantorDoc
+        ? {
+            id: guarantorDoc._id,
+            phone: guarantorDoc.phone,
+            consent: guarantorDoc.consent
+          }
+        : null
     });
 
   } catch (error) {
-    console.error("❌ Error registering customer:", error);
+    console.error("❌ registerCustomer error:", error);
     return res.status(500).json({
-      message: "Server error while registering customer.",
+      success: false,
+      message: "Server error while registering customer",
       error: error.message
     });
   }
 };
+
+
 
 
 // exports.UpdateBorrowerProfile = async (req, res) => {

@@ -6,12 +6,12 @@ const { protect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
 
 // borrower adds guarantor
-router.post(
-  "/",
-  protect,
-  authorizeRoles("lender", "agent"),
-  guarantorController.addGuarantor
-);
+// router.post(
+//   "/",
+//   protect,
+//   authorizeRoles("lender", "agent"),
+//   guarantorController.addGuarantor
+// );
 
 router.post(
   "/verify-otp",
