@@ -1,5 +1,5 @@
 const express = require("express");
-const { sendManualReminder } = require("../controllers/reminderController");
+const { sendManualReminder,sendReminderByBorrowerAndLoan } = require("../controllers/reminderController");
 const { protect } = require("../middleware/authMiddleware");
 const router = express.Router();
 const authorizeRoles = require("../middleware/rolemiddleware");
@@ -14,5 +14,9 @@ router.post(
   authorizeRoles("agent", "lender"),
   sendManualReminder
 );
+
+router.post("/borrower/:borrowerId/loan/:loanId", protect,
+  authorizeRoles("agent", "lender"), sendReminderByBorrowerAndLoan);
+
 
 module.exports = router;

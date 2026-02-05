@@ -168,3 +168,119 @@ Please make payment immediately.
     });
   }
 };
+
+
+/* ======================================================
+   📩 MANUAL REMINDER – BY BORROWER ID
+   ====================================================== */
+/* ======================================================
+   📩 MANUAL REMINDER – BY borrowerId + loanId
+   ====================================================== */
+exports.sendReminderByBorrowerAndLoan = async (req, res) => {
+  try {
+    const { borrowerId, loanId } = req.params;
+
+    if (!borrowerId || !loanId) {
+      return res.status(400).json({
+        success: false,
+        message: "borrowerId and loanId are required"
+      });
+    }
+
+    /* ================= BORROWER ================= */
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower || !borrower.phone) {
+      return res.status(404).json({
+        success: false,
+        message: "Borrower not found or phone missing"
+      });
+    }
+
+    /* ================= LOAN ================= */
+    const loan = await Loan.findOne({
+      _id: loanId,
+      borrowerId,
+      status: "active",
+      loanRequestStatus: "approved",
+      balance: { $gt: 0 }
+    });
+
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        message: "Active loan not found for this borrower"
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let messageType = "";
+    let messageText = "";
+
+    /* 🔔 BEFORE DUE DATE */
+    if (loan.dueDate > today) {
+      messageType = "PRE_DUE";
+
+      messageText = `Dear ${borrower.fullName},
+
+This is a reminder that your loan balance of KES ${loan.balance}
+is due on ${loan.dueDate.toDateString()}.
+
+Please pay on time to avoid penalties.
+
+- IziFinance`;
+    }
+
+    /* 🚨 AFTER DUE DATE */
+    else {
+      const penalty = Math.round(loan.balance * PENALTY_RATE);
+      const totalPayable = loan.balance + penalty;
+
+      messageType = "OVERDUE";
+
+      messageText = `⚠️ Late Payment Notice ⚠️
+
+Dear ${borrower.fullName},
+
+Your loan was due on ${loan.dueDate.toDateString()} and is now OVERDUE.
+
+Outstanding Balance : KES ${loan.balance}
+Late Payment Penalty (15%) : KES ${penalty}
+
+Total Amount Payable : KES ${totalPayable}
+
+Please make payment immediately.
+
+- IziFinance`;
+    }
+
+    await sendSMS(borrower.phone, messageText);
+
+    return res.json({
+      success: true,
+      message: "Reminder sent successfully",
+      data: {
+        borrowerId: borrower._id,
+        borrowerName: borrower.fullName,
+        phone: borrower.phone,
+        loanId: loan._id,
+        balance: loan.balance,
+        dueDate: loan.dueDate,
+        type: messageType,
+         smsMessage: messageText 
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Reminder Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+
