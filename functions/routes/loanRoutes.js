@@ -84,6 +84,5 @@ router.get(
 );
 
 
-router.get("/test-reminder", loanController.testReminder);
 
 module.exports = router;

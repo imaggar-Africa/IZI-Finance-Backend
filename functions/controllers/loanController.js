@@ -1067,62 +1067,6 @@ exports.getPaymentInstructions = async (req, res) => {
   }
 };
 
-exports.sendDueDateReminders = async () => {
-  try {
-    console.log("⏰ Running Due Date Reminder Job...");
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
-    const reminderDate = new Date(today);
-    reminderDate.setDate(reminderDate.getDate() + 2);
-
-    const loans = await Loan.find({
-      status: "active",
-      loanRequestStatus: "approved",
-      balance: { $gt: 0 },
-      dueDate: {
-        $gte: reminderDate,
-        $lt: new Date(reminderDate.getTime() + 86400000)
-      }
-    });
-
-    for (const loan of loans) {
-      if (
-        loan.lastReminderSent &&
-        new Date(loan.lastReminderSent).toDateString() === today.toDateString()
-      ) {
-        continue;
-      }
-
-      const borrower = await Customer.findById(loan.borrowerId);
-      if (!borrower?.phone) continue;
-
-      await sendSMS(
-        borrower.phone,
-        `Dear ${borrower.fullName},
-
-This is a reminder that your loan balance of KES ${loan.balance}
-is due on ${loan.dueDate.toDateString()}.
-
-Please pay on time to avoid penalties.
-
-- IziFinance`
-      );
-
-      loan.lastReminderSent = new Date();
-      await loan.save();
-    }
-
-    console.log("✅ Due Date Reminder Job Completed");
-  } catch (error) {
-    console.error("❌ Reminder Job Error:", error);
-  }
-};
-
-// TEMP TEST – REMOVE AFTER VERIFYING
-exports.testReminder = async (req, res) => {
-  await exports.sendDueDateReminders();
-  res.json({ message: "Reminder job executed manually" });
-};
 
