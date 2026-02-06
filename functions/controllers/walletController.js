@@ -450,6 +450,22 @@ exports.requestAgentWithdrawal = async (req, res) => {
       status: "pending",
     });
 
+       /* ===============================
+       2️⃣ CREATE LENDER NOTIFICATION
+    =============================== */
+    await Notification.create({
+      userId: agent.lenderId,        // ✅ LENDER USER ID
+      userModel: "User",
+      title: "Agent Withdrawal Request",
+      message: `Agent ${agent.name} (${agent.phone}) requested a withdrawal of KES ${amount}.`,
+      type: "withdraw",
+      data: {
+        withdrawalId: withdrawal._id,
+        agentId: agent._id,
+        amount
+      }
+    });
+
     await withdrawal.save();
 
     return res.status(200).json({
