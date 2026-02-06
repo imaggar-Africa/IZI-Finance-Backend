@@ -286,124 +286,140 @@ exports.stkCallback = async (req, res) => {
     /* =====================================================
        CASE 2️⃣ : LOAN REPAYMENT
     ===================================================== */
-    if (transaction.type === "repayment") {
-      const loan = await Loan.findById(transaction.loanId).session(session);
-      const borrower = await Customer.findById(transaction.userId).session(session);
+ if (transaction.type === "repayment") {
+  const loan = await Loan.findById(transaction.loanId).session(session);
+  const borrower = await Customer.findById(transaction.userId).session(session);
 
-      if (!loan || !borrower) throw new Error("Loan or Borrower not found");
+  if (!loan || !borrower) throw new Error("Loan or Borrower not found");
 
-      transaction.balanceBefore = loan.balance;
+  transaction.balanceBefore = loan.balance;
 
-      /* ===============================
-         🔥 LATE CHECK + 15% PENALTY
-      =============================== */
-      let event = "ON_TIME";
-      let daysLate = 0;
+  /* ===============================
+     1️⃣ APPLY REPAYMENT FIRST
+  =============================== */
+  loan.repaidAmount += amount;
+  loan.balance -= amount;
 
-      if (loan.dueDate && new Date() > loan.dueDate) {
-        event = "LATE";
-        daysLate = Math.ceil(
-          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
-        );
+  let event = "ON_TIME";
+  let daysLate = 0;
 
-        const penalty = Math.ceil(loan.balance * 0.15);
-        loan.balance += penalty;
-        loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+  /* ===============================
+     2️⃣ LATE CHECK + PENALTY
+  =============================== */
+  if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+    event = "LATE";
+    daysLate = Math.ceil(
+      (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+    );
 
-        // 📩 SMS ONLY TO BORROWER
-        await sendSMS(
-          borrower.phone,
-          `Dear ${borrower.fullName},
-Your loan payment is late.
+    const penalty = Math.ceil(loan.balance * 0.15);
+    loan.balance += penalty;
+    loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+
+    await sendSMS(
+      borrower.phone,
+      `Dear ${borrower.fullName},
+Your loan payment was late.
 
 Penalty (15%): KES ${penalty}
-New total balance: KES ${loan.balance}
+New balance: KES ${loan.balance}
 
-Please pay early to avoid more penalties.
 - IziFinance`
-        );
-      }
+    );
+  }
 
-      /* ===============================
-         APPLY REPAYMENT
-      =============================== */
-      loan.repaidAmount += amount;
-      loan.balance -= amount;
+  /* ===============================
+     3️⃣ CREDIT SCORE
+  =============================== */
+  const { newScore, scoreDelta } = await recalculateCreditScore({
+    currentScore: borrower.creditScore || 500,
+    event,
+    daysLate
+  });
 
-      let isFullyRepaid = false;
-      if (loan.balance <= 0) {
-        loan.balance = 0;
-        loan.status = "fully paid";
-        isFullyRepaid = true;
-      }
+  borrower.creditScore = newScore;
+  borrower.lastScoreUpdate = new Date();
+  borrower.lastCreditScoreChange = {
+    delta: scoreDelta,
+    reason:
+      event === "LATE"
+        ? `Late repayment (${daysLate} days)`
+        : "On-time repayment",
+    date: new Date()
+  };
 
-      // loan.repayments.push({
-      //   amount,
-      //   transactionId: transaction.transactionId,
-      //   date: new Date()
-      // });
+  /* ===============================
+     4️⃣ PUSH REPAYMENT RECORD
+  =============================== */
+  loan.repayments.push({
+    transactionId: transaction._id,
+    loanId: loan._id,
+    borrowerId: borrower._id,
+    amount,
+    date: new Date(),
+    expectedPaymentDate: loan.dueDate,
+    wasPaymentLate: event === "LATE",
+    daysLate,
+    creditScoreDelta: scoreDelta
+  });
 
-      loan.repayments.push({
-  transactionId: transaction._id,
-  loanId: loan._id,
-  borrowerId: borrower._id,
-  amount,
-  date: new Date(),
-  expectedPaymentDate: loan.dueDate,
-  wasPaymentLate: event === "LATE",
-  daysLate: daysLate,
-  creditScoreDelta: scoreDelta || 0
-});
+  /* ===============================
+     5️⃣ FULLY PAID CHECK
+  =============================== */
+  let isFullyRepaid = false;
+  if (loan.balance <= 0) {
+    loan.balance = 0;
+    loan.status = "fully paid";
+    isFullyRepaid = true;
+    loan.creditScoreAfter = newScore;
+  }
 
-      await loan.save({ session });
+  await loan.save({ session });
 
-      // ✅ Credit lender wallet
-      const lender = await User.findById(loan.lenderId).session(session);
-      if (lender) {
-        lender.walletBalance += amount;
-        await lender.save({ session });
-      }
+  /* ===============================
+     6️⃣ CREDIT LENDER WALLET
+  =============================== */
+  const lender = await User.findById(loan.lenderId).session(session);
+  if (lender) {
+    lender.walletBalance += amount;
+    await lender.save({ session });
+  }
 
-      borrower.loanBalance = loan.balance;
-      transaction.balanceAfter = loan.balance;
+  borrower.loanBalance = loan.balance;
+  transaction.balanceAfter = loan.balance;
 
-      /* ===============================
-         CREDIT SCORE (EVERY REPAYMENT)
-      =============================== */
-      const { newScore, scoreDelta } = await recalculateCreditScore({
-        currentScore: borrower.creditScore || 500,
-        event,
-        daysLate
-      });
-
-      borrower.creditScore = newScore;
-      borrower.lastScoreUpdate = new Date();
-      borrower.lastCreditScoreChange = {
-        delta: scoreDelta,
-        reason:
-          event === "LATE"
-            ? `Late repayment (${daysLate} days)`
-            : "On-time repayment",
-        date: new Date()
-      };
-
-      if (isFullyRepaid) {
-        borrower.completedLoans = (borrower.completedLoans || 0) + 1;
-        borrower.totalLoans = (borrower.totalLoans || 0) + 1;
-        loan.creditScoreAfter = newScore;
-        await loan.save({ session });
-
-        if (loan.requestedByAgentId) {
-          await handleAgentFullRepaymentCommission(
-            loan,
-            transaction,
-            session
-          );
-        }
-      }
-
-      await borrower.save({ session });
+  /* ===============================
+     7️⃣ NOTIFY LENDER
+  =============================== */
+  await Notification.create([{
+    userId: loan.lenderId,
+    userModel: "User",
+    title: isFullyRepaid ? "Loan Fully Repaid" : "Loan Repayment Received",
+    message: isFullyRepaid
+      ? `Loan fully repaid by ${borrower.fullName}.`
+      : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
+    type: "repayment",
+    data: {
+      loanId: loan._id,
+      borrowerId: borrower._id,
+      amountPaid: amount,
+      remainingBalance: loan.balance,
+      transactionId: transaction._id
     }
+  }], { session });
+
+  if (isFullyRepaid) {
+    borrower.completedLoans = (borrower.completedLoans || 0) + 1;
+    borrower.totalLoans = (borrower.totalLoans || 0) + 1;
+
+    if (loan.requestedByAgentId) {
+      await handleAgentFullRepaymentCommission(loan, transaction, session);
+    }
+  }
+
+  await borrower.save({ session });
+}
+
 
     /* ===============================
        SAVE & COMMIT

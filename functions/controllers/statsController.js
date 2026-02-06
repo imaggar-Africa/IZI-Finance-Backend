@@ -209,48 +209,38 @@ exports.getStats = async (req, res) => {
 
 exports.downloadStatsPDF = async (req, res) => {
   try {
-    const now = new Date();
     const { fromDate, toDate } = req.query;
+    const now = new Date();
 
     /* ================= DATE FILTER ================= */
-    const loanFilter = {
-      loanRequestStatus: "approved"
-    };
+    const loanFilter = { loanRequestStatus: "approved" };
 
     if (fromDate || toDate) {
-      loanFilter.issueDate = {};
-      if (fromDate) loanFilter.issueDate.$gte = new Date(fromDate);
-      if (toDate) loanFilter.issueDate.$lte = new Date(toDate);
+      loanFilter.createdAt = {};
+      if (fromDate) loanFilter.createdAt.$gte = new Date(fromDate);
+      if (toDate) loanFilter.createdAt.$lte = new Date(toDate);
     }
 
-    /* ================= FETCH APPROVED LOANS ================= */
+    /* ================= FETCH LOANS ================= */
     const loans = await Loan.find(loanFilter)
       .populate("borrowerId", "fullName phone");
 
     /* ================= CALCULATIONS ================= */
+    let totalPrincipal = 0;
     let totalLoanAmount = 0;
-    let totalPrincipalAmount = 0;
-    let totalCollectedAmount = 0;
-    let outstandingLoanAmount = 0;
+    let totalCollected = 0;
+    let outstanding = 0;
     let activeLoans = 0;
-    let overdueLoans = 0;
     let paidLoans = 0;
-    let totalInterestEarned = 0;
+    let overdueLoans = 0;
 
     loans.forEach((loan) => {
+      totalPrincipal += loan.amount || 0;
       totalLoanAmount += loan.totalRepayment || 0;
-      totalPrincipalAmount += loan.amount || 0;
-      outstandingLoanAmount += loan.balance || 0;
-
-      const collected = Array.isArray(loan.repayments)
+      totalCollected += Array.isArray(loan.repayments)
         ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
         : 0;
-
-      totalCollectedAmount += collected;
-
-      const principalRecovered = Math.min(collected, loan.amount || 0);
-      const interestRecovered = Math.max(0, collected - principalRecovered);
-      totalInterestEarned += interestRecovered;
+      outstanding += loan.balance || 0;
 
       if (loan.balance > 0) {
         activeLoans++;
@@ -261,82 +251,89 @@ exports.downloadStatsPDF = async (req, res) => {
     });
 
     /* ================= CREATE PDF ================= */
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 30
+    });
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      'attachment; filename="lender-stats-report.pdf"'
+      'attachment; filename="loan-details-report.pdf"'
     );
 
     doc.pipe(res);
 
-    /* ================= PAGE 1 – SUMMARY ================= */
-
-    doc
-      .fontSize(20)
-      .text("IZI Lender App – Stats Report", { align: "center" })
-      .moveDown(1);
-
-    doc
-      .fontSize(12)
-      .text(`Generated On: ${now.toLocaleString()}`)
-      .moveDown(0.5);
+    /* ================= TITLE ================= */
+    doc.fontSize(18).text("Loan Report", { align: "center" });
+    doc.moveDown(0.5);
 
     if (fromDate || toDate) {
-      doc
-        .fontSize(11)
-        .text(
-          `Report Period: ${
-            fromDate ? new Date(fromDate).toDateString() : "Start"
-          } → ${
-            toDate ? new Date(toDate).toDateString() : "Today"
-          }`
-        )
-        .moveDown(1);
+      doc.fontSize(10).text(
+        `Period: ${
+          fromDate ? new Date(fromDate).toDateString() : "Start"
+        } → ${
+          toDate ? new Date(toDate).toDateString() : "Today"
+        }`,
+        { align: "center" }
+      );
     }
 
-    doc.fontSize(14).text("Overall Statistics", { underline: true });
-    doc.moveDown(0.5);
-
-    doc.fontSize(11);
-    doc.text(`Total Loans Approved: ${loans.length}`);
-    doc.text(`Total Principal Amount: ₹${totalPrincipalAmount.toFixed(2)}`);
-    doc.text(`Total Loan Amount (With Interest): ₹${totalLoanAmount.toFixed(2)}`);
-    doc.text(`Total Collected Amount: ₹${totalCollectedAmount.toFixed(2)}`);
-    doc.text(`Total Interest Earned: ₹${totalInterestEarned.toFixed(2)}`);
-    doc.text(`Outstanding Loan Amount: ₹${outstandingLoanAmount.toFixed(2)}`);
     doc.moveDown(1);
 
-    doc.fontSize(14).text("Loan Status Breakdown", { underline: true });
+    /* ================= OVERALL SUMMARY ================= */
+    doc.fontSize(14).text("Overall Summary", { underline: true });
     doc.moveDown(0.5);
 
-    doc.fontSize(11);
-    doc.text(`Active Loans: ${activeLoans}`);
-    doc.text(`Overdue Loans: ${overdueLoans}`);
-    doc.text(`Paid Loans: ${paidLoans}`);
+    doc.fontSize(10);
+    doc.text(`Total Loans           : ${loans.length}`);
+    doc.text(`Total Principal       : KES ${totalPrincipal}`);
+    doc.text(`Total Loan Amount     : KES ${totalLoanAmount}`);
+    doc.text(`Total Collected       : KES ${totalCollected}`);
+    doc.text(`Outstanding Amount   : KES ${outstanding}`);
+    doc.text(`Active Loans          : ${activeLoans}`);
+    doc.text(`Paid Loans            : ${paidLoans}`);
+    doc.text(`Overdue Loans         : ${overdueLoans}`);
 
-    doc.moveDown(2);
-    doc.fontSize(10).text("© IZI Lender App", { align: "center" });
+    doc.moveDown(1.5);
 
-    /* ================= PAGE 2 – LOAN DETAILS ================= */
+    /* ================= TABLE ================= */
+    const rowHeight = 18;
+    let y = doc.y;
 
-    doc.addPage();
+    const col = {
+      sn: 30,
+      borrower: 60,
+      phone: 170,
+      principal: 290,
+      total: 350,
+      collected: 410,
+      balance: 480,
+      issue: 550,
+      due: 630,
+      status: 710
+    };
 
-    doc.fontSize(16).text("Loan Details", { underline: true });
-    doc.moveDown(1);
+    doc.fontSize(8).font("Helvetica-Bold");
 
-    doc.fontSize(10).text(
-      "Borrower | Phone | Principal | Total | Collected | Balance | Issue Date | Due Date | Status"
-    );
-    doc.moveDown(0.5);
+    drawRow(doc, y, col, [
+      "#",
+      "Borrower",
+      "Phone",
+      "Principal",
+      "Total",
+      "Collected",
+      "Balance",
+      "Issue Date",
+      "Due Date",
+      "Status"
+    ]);
 
-    doc.fontSize(9);
+    y += rowHeight;
+    doc.font("Helvetica");
 
     loans.forEach((loan, index) => {
-      const borrowerName = loan.borrowerId?.fullName || "N/A";
-      const phone = loan.borrowerId?.phone || "N/A";
-
       const collected = Array.isArray(loan.repayments)
         ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
         : 0;
@@ -345,15 +342,41 @@ exports.downloadStatsPDF = async (req, res) => {
       if (loan.balance > 0 && new Date(loan.dueDate) < now) status = "Overdue";
       else if (loan.balance > 0) status = "Active";
 
-      doc.text(
-        `${index + 1}. ${borrowerName} | ${phone} | ₹${loan.amount} | ₹${loan.totalRepayment} | ₹${collected} | ₹${loan.balance} | ${
-          loan.issueDate ? new Date(loan.issueDate).toDateString() : "N/A"
-        } | ${
-          loan.dueDate ? new Date(loan.dueDate).toDateString() : "N/A"
-        } | ${status}`
-      );
+      drawRow(doc, y, col, [
+        index + 1,
+        loan.borrowerId?.fullName || "N/A",
+        loan.borrowerId?.phone || "N/A",
+        loan.amount,
+        loan.totalRepayment,
+        collected,
+        loan.balance,
+        new Date(loan.createdAt).toDateString(),
+        new Date(loan.dueDate).toDateString(),
+        status
+      ]);
 
-      doc.moveDown(0.3);
+      y += rowHeight;
+
+      if (y > doc.page.height - 40) {
+        doc.addPage({ layout: "landscape", margin: 30 });
+        y = 40;
+
+        doc.fontSize(8).font("Helvetica-Bold");
+        drawRow(doc, y, col, [
+          "#",
+          "Borrower",
+          "Phone",
+          "Principal",
+          "Total",
+          "Collected",
+          "Balance",
+          "Issue Date",
+          "Due Date",
+          "Status"
+        ]);
+        y += rowHeight;
+        doc.font("Helvetica");
+      }
     });
 
     doc.end();
@@ -363,3 +386,34 @@ exports.downloadStatsPDF = async (req, res) => {
     res.status(500).json({ message: "Failed to generate PDF" });
   }
 };
+
+/* ================= HELPER ================= */
+function drawRow(doc, y, col, row) {
+  const height = 18;
+  const cells = [
+    [col.sn, 30],
+    [col.borrower, 110],
+    [col.phone, 120],
+    [col.principal, 60],
+    [col.total, 60],
+    [col.collected, 70],
+    [col.balance, 70],
+    [col.issue, 80],
+    [col.due, 80],
+    [col.status, 60]
+  ];
+
+  cells.forEach(([x, w], i) => {
+    doc.rect(x, y, w, height).stroke();
+    doc.text(String(row[i]), x + 3, y + 4, {
+      width: w - 6,
+      ellipsis: true
+    });
+  });
+}
+
+
+
+
+
+
