@@ -12,6 +12,7 @@ const AgentModel = require("../models/AgentModel");
 const { recalculateCreditScore } = require("../utils/creditScore");
 
 
+
 // Single callback for all STK Push transactions
 
 
@@ -107,11 +108,18 @@ const { recalculateCreditScore } = require("../utils/creditScore");
 //         isFullyRepaid = true;
 //       }
 
-//       loan.repayments.push({
-//         amount: Number(Amount),
-//         transactionId: transaction.transactionId,
-//         date: new Date()
-//       });
+// loan.repayments.push({
+//   loanId: loan._id,                 // ✅ REQUIRED
+//   transactionId: transaction._id,
+//   borrowerId: borrower._id,
+//   amount,
+//   date: new Date(),
+//   expectedPaymentDate: loan.dueDate, // ✅ REQUIRED
+//   wasPaymentLate: event === "LATE",
+//   daysLate,
+//   creditScoreDelta: scoreDelta || 0
+// });
+
 
 //       await loan.save({ session });
 
@@ -200,252 +208,425 @@ const { recalculateCreditScore } = require("../utils/creditScore");
 //   }
 // };
 
-exports.stkCallback = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+// exports.stkCallback = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
 
-  try {
+//   try {
+//     const stk = req.body?.Body?.stkCallback;
+//     if (!stk?.CheckoutRequestID) {
+//       throw new Error("CheckoutRequestID missing in callback");
+//     }
+
+//     const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = stk;
+
+//     /* ===============================
+//        EXTRACT AMOUNT + RECEIPT
+//     =============================== */
+//     let amount = 0;
+//     let mpesaReceipt = "";
+
+//     if (CallbackMetadata?.Item) {
+//       CallbackMetadata.Item.forEach(item => {
+//         if (item.Name === "Amount") amount = Number(item.Value);
+//         if (item.Name === "MpesaReceiptNumber") mpesaReceipt = item.Value;
+//       });
+//     }
+
+//     /* ===============================
+//        FIND TRANSACTION
+//     =============================== */
+//     const transaction = await Transaction.findOne({
+//       checkoutRequestID: CheckoutRequestID
+//     }).session(session);
+
+//     if (!transaction) throw new Error("Transaction not found");
+
+//     /* ===============================
+//        DUPLICATE CALLBACK PROTECTION
+//     =============================== */
+//     if (transaction.status === "successful") {
+//       await session.commitTransaction();
+//       session.endSession();
+//       return res.json({ message: "Duplicate callback ignored" });
+//     }
+
+//     /* ===============================
+//        HANDLE FAILED MPESA
+//     =============================== */
+//     if (ResultCode !== 0) {
+//       transaction.status = "failed";
+//       transaction.failureReason = ResultDesc;
+//       transaction.mpesaPayload = req.body;
+
+//       await transaction.save({ session });
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.json({ message: "Payment failed handled" });
+//     }
+
+//     /* ===============================
+//        MARK TRANSACTION SUCCESS
+//     =============================== */
+//     transaction.status = "successful";
+//     transaction.transactionId = mpesaReceipt || transaction.transactionId;
+
+//     /* =====================================================
+//        CASE 1️⃣ : LOAN ISSUED (B2C SUCCESS)
+//     ===================================================== */
+//     if (transaction.type === "loan issued") {
+//       const loan = await Loan.findById(transaction.loanId).session(session);
+//       const lender = await User.findById(transaction.userId).session(session);
+
+//       if (!loan || !lender) throw new Error("Loan or Lender not found");
+
+//       transaction.balanceBefore = lender.walletBalance;
+//       lender.walletBalance -= amount;
+//       transaction.balanceAfter = lender.walletBalance;
+
+//       await lender.save({ session });
+
+//       loan.status = "active";
+//       await loan.save({ session });
+//     }
+
+//     /* =====================================================
+//        CASE 2️⃣ : LOAN REPAYMENT
+//     ===================================================== */
+//  if (transaction.type === "repayment") {
+//   const loan = await Loan.findById(transaction.loanId).session(session);
+//   const borrower = await Customer.findById(transaction.userId).session(session);
+
+//   if (!loan || !borrower) throw new Error("Loan or Borrower not found");
+
+//   transaction.balanceBefore = loan.balance;
+
+//   /* ===============================
+//      1️⃣ APPLY REPAYMENT FIRST
+//   =============================== */
+//   loan.repaidAmount += amount;
+//   loan.balance -= amount;
+
+//   let event = "ON_TIME";
+//   let daysLate = 0;
+
+//   /* ===============================
+//      2️⃣ LATE CHECK + PENALTY
+//   =============================== */
+//   if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+//     event = "LATE";
+//     daysLate = Math.ceil(
+//       (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+//     );
+
+//     const penalty = Math.ceil(loan.balance * 0.15);
+//     loan.balance += penalty;
+//     loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+
+//     await sendSMS(
+//       borrower.phone,
+//       `Dear ${borrower.fullName},
+// Your loan payment was late.
+
+// Penalty (15%): KES ${penalty}
+// New balance: KES ${loan.balance}
+
+// - IziFinance`
+//     );
+//   }
+
+//   /* ===============================
+//      3️⃣ CREDIT SCORE
+//   =============================== */
+//   const { newScore, scoreDelta } = await recalculateCreditScore({
+//     currentScore: borrower.creditScore || 500,
+//     event,
+//     daysLate
+//   });
+
+//   borrower.creditScore = newScore;
+//   borrower.lastScoreUpdate = new Date();
+//   borrower.lastCreditScoreChange = {
+//     delta: scoreDelta,
+//     reason:
+//       event === "LATE"
+//         ? `Late repayment (${daysLate} days)`
+//         : "On-time repayment",
+//     date: new Date()
+//   };
+
+//   /* ===============================
+//      4️⃣ PUSH REPAYMENT RECORD
+//   =============================== */
+//   loan.repayments.push({
+//     transactionId: transaction._id,
+//     loanId: loan._id,
+//     borrowerId: borrower._id,
+//     amount,
+//     date: new Date(),
+//     expectedPaymentDate: loan.dueDate,
+//     wasPaymentLate: event === "LATE",
+//     daysLate,
+//     creditScoreDelta: scoreDelta
+//   });
+
+//   /* ===============================
+//      5️⃣ FULLY PAID CHECK
+//   =============================== */
+//   let isFullyRepaid = false;
+//   if (loan.balance <= 0) {
+//     loan.balance = 0;
+//     loan.status = "fully paid";
+//     isFullyRepaid = true;
+//     loan.creditScoreAfter = newScore;
+//   }
+
+//   await loan.save({ session });
+
+//   /* ===============================
+//      6️⃣ CREDIT LENDER WALLET
+//   =============================== */
+//   const lender = await User.findById(loan.lenderId).session(session);
+//   if (lender) {
+//     lender.walletBalance += amount;
+//     await lender.save({ session });
+//   }
+
+//   borrower.loanBalance = loan.balance;
+//   transaction.balanceAfter = loan.balance;
+
+//   /* ===============================
+//      7️⃣ NOTIFY LENDER
+//   =============================== */
+//   await Notification.create([{
+//     userId: loan.lenderId,
+//     userModel: "User",
+//     title: isFullyRepaid ? "Loan Fully Repaid" : "Loan Repayment Received",
+//     message: isFullyRepaid
+//       ? `Loan fully repaid by ${borrower.fullName}.`
+//       : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
+//     type: "repayment",
+//     data: {
+//       loanId: loan._id,
+//       borrowerId: borrower._id,
+//       amountPaid: amount,
+//       remainingBalance: loan.balance,
+//       transactionId: transaction._id
+//     }
+//   }], { session });
+
+//   if (isFullyRepaid) {
+//     borrower.completedLoans = (borrower.completedLoans || 0) + 1;
+//     borrower.totalLoans = (borrower.totalLoans || 0) + 1;
+
+//     if (loan.requestedByAgentId) {
+//       await handleAgentFullRepaymentCommission(loan, transaction, session);
+//     }
+//   }
+
+//   await borrower.save({ session });
+// }
+
+
+//     /* ===============================
+//        SAVE & COMMIT
+//     =============================== */
+//     await transaction.save({ session });
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.json({
+//       success: true,
+//       message: "STK callback processed successfully",
+//       transactionId: transaction._id
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) await session.abortTransaction();
+//     session.endSession();
+
+//     console.error("❌ STK CALLBACK ERROR:", error);
+//     return res.status(500).json({
+//       message: "Error processing STK callback",
+//       error: error.message
+//     });
+//   }
+// };
+
+// local
+exports.stkCallback = async (req, res) => {
+   try {
     const stk = req.body?.Body?.stkCallback;
     if (!stk?.CheckoutRequestID) {
-      throw new Error("CheckoutRequestID missing in callback");
+      throw new Error("CheckoutRequestID missing");
     }
 
     const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = stk;
 
-    /* ===============================
-       EXTRACT AMOUNT + RECEIPT
-    =============================== */
     let amount = 0;
     let mpesaReceipt = "";
 
-    if (CallbackMetadata?.Item) {
-      CallbackMetadata.Item.forEach(item => {
-        if (item.Name === "Amount") amount = Number(item.Value);
-        if (item.Name === "MpesaReceiptNumber") mpesaReceipt = item.Value;
-      });
-    }
+    CallbackMetadata?.Item?.forEach(i => {
+      if (i.Name === "Amount") amount = Number(i.Value);
+      if (i.Name === "MpesaReceiptNumber") mpesaReceipt = i.Value;
+    });
 
-    /* ===============================
-       FIND TRANSACTION
-    =============================== */
     const transaction = await Transaction.findOne({
       checkoutRequestID: CheckoutRequestID
-    }).session(session);
+    });
 
     if (!transaction) throw new Error("Transaction not found");
 
-    /* ===============================
-       DUPLICATE CALLBACK PROTECTION
-    =============================== */
+    // 🔁 Duplicate callback
     if (transaction.status === "successful") {
-      await session.commitTransaction();
-      session.endSession();
       return res.json({ message: "Duplicate callback ignored" });
     }
 
-    /* ===============================
-       HANDLE FAILED MPESA
-    =============================== */
+    // ❌ Failed payment
     if (ResultCode !== 0) {
       transaction.status = "failed";
       transaction.failureReason = ResultDesc;
-      transaction.mpesaPayload = req.body;
-
-      await transaction.save({ session });
-      await session.commitTransaction();
-      session.endSession();
-
-      return res.json({ message: "Payment failed handled" });
+      await transaction.save();
+      return res.json({ message: "Payment failed" });
     }
 
-    /* ===============================
-       MARK TRANSACTION SUCCESS
-    =============================== */
     transaction.status = "successful";
-    transaction.transactionId = mpesaReceipt || transaction.transactionId;
+    transaction.transactionId = mpesaReceipt;
 
-    /* =====================================================
-       CASE 1️⃣ : LOAN ISSUED (B2C SUCCESS)
-    ===================================================== */
-    if (transaction.type === "loan issued") {
-      const loan = await Loan.findById(transaction.loanId).session(session);
-      const lender = await User.findById(transaction.userId).session(session);
+    /* ===================== REPAYMENT FLOW ===================== */
+    if (transaction.type === "repayment") {
+      const loan = await Loan.findById(transaction.loanId);
+      const borrower = await Customer.findById(transaction.userId);
 
-      if (!loan || !lender) throw new Error("Loan or Lender not found");
+      if (!loan || !borrower) {
+        throw new Error("Loan or Borrower not found");
+      }
 
-      transaction.balanceBefore = lender.walletBalance;
-      lender.walletBalance -= amount;
-      transaction.balanceAfter = lender.walletBalance;
+      transaction.balanceBefore = loan.balance;
 
-      await lender.save({ session });
+      /* 1️⃣ Apply repayment */
+      loan.repaidAmount += amount;
+      loan.balance -= amount;
 
-      loan.status = "active";
-      await loan.save({ session });
-    }
+      let event = "ON_TIME";
+      let daysLate = 0;
 
-    /* =====================================================
-       CASE 2️⃣ : LOAN REPAYMENT
-    ===================================================== */
- if (transaction.type === "repayment") {
-  const loan = await Loan.findById(transaction.loanId).session(session);
-  const borrower = await Customer.findById(transaction.userId).session(session);
+      /* 2️⃣ Late penalty */
+      if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+        event = "LATE";
+        daysLate = Math.ceil(
+          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+        );
 
-  if (!loan || !borrower) throw new Error("Loan or Borrower not found");
+        const penalty = Math.ceil(loan.balance * 0.15);
+        loan.balance += penalty;
 
-  transaction.balanceBefore = loan.balance;
+        await sendSMS(
+          borrower.phone,
+          `Dear ${borrower.fullName},
+Your payment was late.
 
-  /* ===============================
-     1️⃣ APPLY REPAYMENT FIRST
-  =============================== */
-  loan.repaidAmount += amount;
-  loan.balance -= amount;
-
-  let event = "ON_TIME";
-  let daysLate = 0;
-
-  /* ===============================
-     2️⃣ LATE CHECK + PENALTY
-  =============================== */
-  if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
-    event = "LATE";
-    daysLate = Math.ceil(
-      (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
-    );
-
-    const penalty = Math.ceil(loan.balance * 0.15);
-    loan.balance += penalty;
-    loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
-
-    await sendSMS(
-      borrower.phone,
-      `Dear ${borrower.fullName},
-Your loan payment was late.
-
-Penalty (15%): KES ${penalty}
-New balance: KES ${loan.balance}
+Penalty: KES ${penalty}
+New Balance: KES ${loan.balance}
 
 - IziFinance`
-    );
-  }
+        );
+      }
 
-  /* ===============================
-     3️⃣ CREDIT SCORE
-  =============================== */
-  const { newScore, scoreDelta } = await recalculateCreditScore({
-    currentScore: borrower.creditScore || 500,
-    event,
-    daysLate
-  });
+      /* 3️⃣ Credit score update */
+      const { newScore, scoreDelta } = recalculateCreditScore({
+        currentScore: borrower.creditScore || 500,
+        event,
+        daysLate
+      });
 
-  borrower.creditScore = newScore;
-  borrower.lastScoreUpdate = new Date();
-  borrower.lastCreditScoreChange = {
-    delta: scoreDelta,
-    reason:
-      event === "LATE"
-        ? `Late repayment (${daysLate} days)`
-        : "On-time repayment",
-    date: new Date()
-  };
+      borrower.creditScore = newScore;
+      borrower.lastScoreUpdate = new Date();
+      borrower.lastCreditScoreChange = {
+        delta: scoreDelta,
+        reason: event === "LATE"
+          ? `Late repayment (${daysLate} days)`
+          : "On-time repayment",
+        date: new Date()
+      };
 
-  /* ===============================
-     4️⃣ PUSH REPAYMENT RECORD
-  =============================== */
-  loan.repayments.push({
-    transactionId: transaction._id,
-    loanId: loan._id,
-    borrowerId: borrower._id,
-    amount,
-    date: new Date(),
-    expectedPaymentDate: loan.dueDate,
-    wasPaymentLate: event === "LATE",
-    daysLate,
-    creditScoreDelta: scoreDelta
-  });
+      /* 4️⃣ Save repayment history */
+    loan.repayments.push({
+  loanId: loan._id,                 // ✅ REQUIRED
+  transactionId: transaction._id,
+  borrowerId: borrower._id,
+  amount,
+  date: new Date(),
+  expectedPaymentDate: loan.dueDate, // ✅ REQUIRED
+  wasPaymentLate: event === "LATE",
+  daysLate,
+  creditScoreDelta: scoreDelta || 0
+});
 
-  /* ===============================
-     5️⃣ FULLY PAID CHECK
-  =============================== */
-  let isFullyRepaid = false;
-  if (loan.balance <= 0) {
-    loan.balance = 0;
-    loan.status = "fully paid";
-    isFullyRepaid = true;
-    loan.creditScoreAfter = newScore;
-  }
 
-  await loan.save({ session });
+      /* 5️⃣ Fully paid check */
+      let isFullyPaid = false;
+      if (loan.balance <= 0) {
+        loan.balance = 0;
+        loan.status = "fully paid";
+        loan.creditScoreAfter = newScore;
+        isFullyPaid = true;
+      }
 
-  /* ===============================
-     6️⃣ CREDIT LENDER WALLET
-  =============================== */
-  const lender = await User.findById(loan.lenderId).session(session);
-  if (lender) {
-    lender.walletBalance += amount;
-    await lender.save({ session });
-  }
+      await loan.save();
 
-  borrower.loanBalance = loan.balance;
-  transaction.balanceAfter = loan.balance;
+      /* 6️⃣ Credit lender wallet */
+      const lender = await User.findById(loan.lenderId);
+      if (lender) {
+        lender.walletBalance += amount;
+        await lender.save();
+      }
 
-  /* ===============================
-     7️⃣ NOTIFY LENDER
-  =============================== */
-  await Notification.create([{
-    userId: loan.lenderId,
-    userModel: "User",
-    title: isFullyRepaid ? "Loan Fully Repaid" : "Loan Repayment Received",
-    message: isFullyRepaid
-      ? `Loan fully repaid by ${borrower.fullName}.`
-      : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
-    type: "repayment",
-    data: {
-      loanId: loan._id,
-      borrowerId: borrower._id,
-      amountPaid: amount,
-      remainingBalance: loan.balance,
-      transactionId: transaction._id
+      borrower.loanBalance = loan.balance;
+      await borrower.save();
+
+      transaction.balanceAfter = loan.balance;
+
+      /* 7️⃣ Lender notification */
+      await Notification.create({
+        userId: loan.lenderId,
+        userModel: "User",
+        title: isFullyPaid ? "Loan Fully Repaid" : "Loan Repayment Received",
+        message: isFullyPaid
+          ? `Loan fully repaid by ${borrower.fullName}`
+          : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
+        type: "repayment",
+        data: {
+          loanId: loan._id,
+          borrowerId: borrower._id,
+          amountPaid: amount,
+          remainingBalance: loan.balance,
+          transactionId: transaction._id
+        }
+      });
+
+      /* 8️⃣ Agent commission (only once) */
+      if (isFullyPaid && loan.requestedByAgentId) {
+        await handleAgentFullRepaymentCommission(loan, transaction);
+      }
     }
-  }], { session });
 
-  if (isFullyRepaid) {
-    borrower.completedLoans = (borrower.completedLoans || 0) + 1;
-    borrower.totalLoans = (borrower.totalLoans || 0) + 1;
-
-    if (loan.requestedByAgentId) {
-      await handleAgentFullRepaymentCommission(loan, transaction, session);
-    }
-  }
-
-  await borrower.save({ session });
-}
-
-
-    /* ===============================
-       SAVE & COMMIT
-    =============================== */
-    await transaction.save({ session });
-    await session.commitTransaction();
-    session.endSession();
+    await transaction.save();
 
     return res.json({
       success: true,
-      message: "STK callback processed successfully",
-      transactionId: transaction._id
+      message: "STK callback processed successfully"
     });
 
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
-    session.endSession();
-
     console.error("❌ STK CALLBACK ERROR:", error);
     return res.status(500).json({
-      message: "Error processing STK callback",
+      success: false,
       error: error.message
     });
   }
 };
-
 
 
 
