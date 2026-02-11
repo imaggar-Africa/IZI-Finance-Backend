@@ -25,7 +25,7 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
       // ✅ Build truly unique filename
       const ext = path.extname(file.originalname) || ".jpg";
       const safeBase = baseName.replace(/[^a-zA-Z0-9_-]/g, "");
-      const uniqueId = uuidv4(); // 🔥 CRITICAL FIX
+      const uniqueId = randomUUID(); // 🔥 CRITICAL FIX
 
       const fileName = `${folder}/${safeBase}_${uniqueId}${ext}`;
       const fileRef = bucket.file(fileName);

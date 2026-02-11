@@ -45,10 +45,11 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
       if (!file) return resolve(null);
 
       // Bucket safety check
-      if (!bucket || bucket.isConfigured === false || typeof bucket.file !== "function") {
-        console.warn("⚠️ Firebase Storage unavailable. Skipping upload:", baseName);
-        return resolve(null);
-      }
+     if (!bucket || typeof bucket.file !== "function") {
+  console.warn("⚠️ Firebase Storage unavailable.");
+  return resolve(null);
+}
+
 
       const ext = path.extname(file.originalname) || ".jpg";
       const safeBase = baseName.replace(/[^a-zA-Z0-9_-]/g, "");
@@ -250,15 +251,25 @@ exports.registerCustomer = async (req, res) => {
       return res.status(409).json({ message: "ID number already registered" });
     }
 
-    /* ================= FILE UPLOAD (SAFE MOCK) ================= */
-    const uploadMock = async (file, base) => {
-      if (!file) return null;
-      return `mock/${base}_${Date.now()}.jpg`;
-    };
+   
+const livePhoto = await uploadToFirebase(
+  req.files?.livePhoto?.[0],
+  "livePhoto",
+  "borrowers"
+);
 
-    const livePhoto = await uploadMock(req.files?.livePhoto?.[0], "livePhoto");
-    const frontID  = await uploadMock(req.files?.frontID?.[0], "frontID");
-    const backID   = await uploadMock(req.files?.backID?.[0], "backID");
+const frontID = await uploadToFirebase(
+  req.files?.frontID?.[0],
+  "frontID",
+  "borrowers"
+);
+
+const backID = await uploadToFirebase(
+  req.files?.backID?.[0],
+  "backID",
+  "borrowers"
+);
+
 
     const accountId = await generateAccountId();
 
