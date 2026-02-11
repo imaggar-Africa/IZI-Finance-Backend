@@ -780,8 +780,27 @@ exports.getAllLoanRequests = async (req, res) => {
     loanRequestStatus: "pending"
   }).populate("borrowerId requestedByAgentId lenderId");
 
+ loans.forEach((loan) => {
+  const borrower = loan.borrowerId;
+
+  if (!borrower) return;
+
+  const isFirstLoan =
+    (borrower.totalLoans || 0) === 0 &&
+    (borrower.completedLoans || 0) === 0;
+
+  loan._doc.existingUser = !isFirstLoan;
+
+  // 🔥 If first-time borrower → merge borrower details into loan
+  if (isFirstLoan) {
+    Object.assign(loan._doc, borrower.toObject());
+  }
+});
+
+
   res.json({ loans });
 };
+
 
 /* =====================================================
    1️⃣1️⃣ REVIEW LOAN REQUEST
