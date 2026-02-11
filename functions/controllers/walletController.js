@@ -94,6 +94,148 @@ exports.deposit = async (req, res) => {
 
 
 // Withdraw money from wallet (B2C)
+// exports.withdraw = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const userId = req.user._id;
+//     const { amount } = req.body;
+
+//     if (!amount || amount <= 0) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({ message: "Valid amount is required" });
+//     }
+
+//     const user = await User.findById(userId).session(session);
+//     if (!user) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(404).json({ message: "User not found" });
+//     }
+
+//     if (!user.phone) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({ message: "User phone number not found" });
+//     }
+
+//     // ✅ BETTER VALIDATION: Check if amount is valid number
+//     const withdrawalAmount = Number(amount);
+//     if (isNaN(withdrawalAmount) || withdrawalAmount <= 0) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({ message: "Invalid amount" });
+//     }
+
+//     if (user.walletBalance < withdrawalAmount) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({ 
+//         message: "Insufficient balance", 
+//         currentBalance: user.walletBalance,
+//         requestedAmount: withdrawalAmount 
+//       });
+//     }
+
+//     // ✅ DON'T DEDUCT BALANCE IMMEDIATELY - just validate
+//     const balanceBefore = user.walletBalance;
+//     const expectedBalanceAfter = balanceBefore - withdrawalAmount;
+
+//     console.log(`💰 Balance validation: ${balanceBefore} -> ${expectedBalanceAfter} (will deduct on M-Pesa success)`);
+
+//     // Create a pending withdrawal transaction WITHOUT deducting balance
+//     const withdrawalTransaction = await Transaction.create(
+//       [{
+//         userId,
+//         type: "withdrawal",
+//         userModel: "User",
+//         amount: withdrawalAmount,
+//         status: "pending",
+//         phone: user.phone,
+//         balanceBefore: balanceBefore,
+//         balanceAfter: expectedBalanceAfter, // Expected balance after successful withdrawal
+//         createdAt: new Date(),
+//       }],
+//       { session }
+//     );
+
+//     const transaction = withdrawalTransaction[0];
+
+//     console.log(`📝 Transaction created: ${transaction._id}, Amount: ${transaction.amount}`);
+
+//     // --- LIVE ENVIRONMENT ONLY ---
+//     const normalizedPhone = user.phone.startsWith('+') ? user.phone : `+${user.phone}`;
+    
+//     console.log(`🚀 Initiating B2C payment to: ${normalizedPhone}, Amount: ${withdrawalAmount}`);
+    
+//     const b2cResponse = await initiateB2C(normalizedPhone, withdrawalAmount);
+
+//     if (!b2cResponse || !b2cResponse.OriginatorConversationID) {
+//       throw new Error("Invalid B2C response from M-Pesa");
+//     }
+
+//     // ✅ CRITICAL FIX: Save ALL relevant IDs for callback matching
+//     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+//     transaction.conversationID = b2cResponse.ConversationID;
+    
+//     await transaction.save({ session });
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     console.log(`📞 B2C Initiated: 
+//       OriginatorConversationID: ${b2cResponse.OriginatorConversationID}
+//       ConversationID: ${b2cResponse.ConversationID}
+//     `);
+
+//     return res.status(200).json({
+//       message: "Withdrawal initiated. Awaiting MPESA confirmation.",
+//       transaction: {
+//         id: transaction._id,
+//         amount: transaction.amount,
+//         status: transaction.status,
+//         checkoutRequestID: transaction.checkoutRequestID
+//       },
+//       b2cResponse: {
+//         ConversationID: b2cResponse.ConversationID,
+//         OriginatorConversationID: b2cResponse.OriginatorConversationID,
+//         ResponseDescription: b2cResponse.ResponseDescription
+//       },
+//     });
+
+//   } catch (error) {
+//     try {
+//       if (session.inTransaction()) {
+//         console.log("🔄 Aborting transaction due to error");
+//         await session.abortTransaction();
+//       }
+//     } catch (abortError) {
+//       console.error("Error aborting transaction:", abortError);
+//     } finally {
+//       session.endSession();
+//     }
+    
+//     console.error("🔥 Withdrawal Error:", error);
+    
+//     // ✅ USER-FRIENDLY ERROR MESSAGES
+//     let errorMessage = "Error processing withdrawal";
+//     if (error.message.includes("insufficient balance")) {
+//       errorMessage = "Insufficient balance for withdrawal";
+//     } else if (error.message.includes("phone")) {
+//       errorMessage = "Invalid phone number format";
+//     } else if (error.message.includes("M-Pesa")) {
+//       errorMessage = "M-Pesa service temporarily unavailable";
+//     }
+    
+//     res.status(500).json({ 
+//       message: errorMessage, 
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+//     });
+//   }
+// };
+
 exports.withdraw = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -102,140 +244,116 @@ exports.withdraw = async (req, res) => {
     const userId = req.user._id;
     const { amount } = req.body;
 
-    if (!amount || amount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Valid amount is required" });
+    /* ===============================
+       1️⃣ BASIC VALIDATION
+    =============================== */
+    if (!amount || Number(amount) <= 0) {
+      throw new Error("Valid withdrawal amount required");
     }
 
-    const user = await User.findById(userId).session(session);
-    if (!user) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    if (!user.phone) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "User phone number not found" });
-    }
-
-    // ✅ BETTER VALIDATION: Check if amount is valid number
     const withdrawalAmount = Number(amount);
-    if (isNaN(withdrawalAmount) || withdrawalAmount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Invalid amount" });
+    if (isNaN(withdrawalAmount)) {
+      throw new Error("Invalid amount format");
     }
 
-    if (user.walletBalance < withdrawalAmount) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ 
-        message: "Insufficient balance", 
-        currentBalance: user.walletBalance,
-        requestedAmount: withdrawalAmount 
-      });
+    /* ===============================
+       2️⃣ FETCH USER
+    =============================== */
+    const user = await User.findById(userId).session(session);
+    if (!user) throw new Error("User not found");
+
+    if (!user.phone) throw new Error("User phone number not found");
+
+    /* ===============================
+       3️⃣ MPESA B2C CHARGE
+    =============================== */
+    const mpesaCharge = getB2CCharge(withdrawalAmount);
+    const totalDebit = withdrawalAmount + mpesaCharge;
+
+    if (user.walletBalance < totalDebit) {
+      throw new Error(
+        `Insufficient balance. Required: ${totalDebit}, Available: ${user.walletBalance}`
+      );
     }
 
-    // ✅ DON'T DEDUCT BALANCE IMMEDIATELY - just validate
     const balanceBefore = user.walletBalance;
-    const expectedBalanceAfter = balanceBefore - withdrawalAmount;
+    const balanceAfter = balanceBefore - totalDebit;
 
-    console.log(`💰 Balance validation: ${balanceBefore} -> ${expectedBalanceAfter} (will deduct on M-Pesa success)`);
-
-    // Create a pending withdrawal transaction WITHOUT deducting balance
-    const withdrawalTransaction = await Transaction.create(
-      [{
-        userId,
-        type: "withdrawal",
-        userModel: "User",
-        amount: withdrawalAmount,
-        status: "pending",
-        phone: user.phone,
-        balanceBefore: balanceBefore,
-        balanceAfter: expectedBalanceAfter, // Expected balance after successful withdrawal
-        createdAt: new Date(),
-      }],
+    /* ===============================
+       4️⃣ CREATE PENDING TRANSACTION
+    =============================== */
+    const [transaction] = await Transaction.create(
+      [
+        {
+          userId,
+          userModel: "User",
+          type: "withdraw",               // ✅ ENUM FIX
+          amount: withdrawalAmount,
+          charge: mpesaCharge,
+          totalDebit,
+          status: "pending",
+          phone: user.phone,
+          balanceBefore,
+          balanceAfter,                   // expected after success
+        }
+      ],
       { session }
     );
 
-    const transaction = withdrawalTransaction[0];
+    /* ===============================
+       5️⃣ INITIATE MPESA B2C
+    =============================== */
+    const normalizedPhone = user.phone.startsWith("+")
+      ? user.phone
+      : `+${user.phone}`;
 
-    console.log(`📝 Transaction created: ${transaction._id}, Amount: ${transaction.amount}`);
+    const b2cResponse = await initiateB2C(
+      normalizedPhone,
+      withdrawalAmount,
+      transaction._id
+    );
 
-    // --- LIVE ENVIRONMENT ONLY ---
-    const normalizedPhone = user.phone.startsWith('+') ? user.phone : `+${user.phone}`;
-    
-    console.log(`🚀 Initiating B2C payment to: ${normalizedPhone}, Amount: ${withdrawalAmount}`);
-    
-    const b2cResponse = await initiateB2C(normalizedPhone, withdrawalAmount);
-
-    if (!b2cResponse || !b2cResponse.OriginatorConversationID) {
+    if (!b2cResponse?.OriginatorConversationID) {
       throw new Error("Invalid B2C response from M-Pesa");
     }
 
-    // ✅ CRITICAL FIX: Save ALL relevant IDs for callback matching
     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
     transaction.conversationID = b2cResponse.ConversationID;
-    
     await transaction.save({ session });
 
+    /* ===============================
+       6️⃣ COMMIT
+    =============================== */
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`📞 B2C Initiated: 
-      OriginatorConversationID: ${b2cResponse.OriginatorConversationID}
-      ConversationID: ${b2cResponse.ConversationID}
-    `);
-
     return res.status(200).json({
-      message: "Withdrawal initiated. Awaiting MPESA confirmation.",
+      success: true,
+      message: "Withdrawal initiated. Awaiting M-Pesa confirmation.",
       transaction: {
         id: transaction._id,
-        amount: transaction.amount,
+        amount: withdrawalAmount,
+        mpesaCharge,
+        totalDebit,
         status: transaction.status,
         checkoutRequestID: transaction.checkoutRequestID
-      },
-      b2cResponse: {
-        ConversationID: b2cResponse.ConversationID,
-        OriginatorConversationID: b2cResponse.OriginatorConversationID,
-        ResponseDescription: b2cResponse.ResponseDescription
-      },
+      }
     });
 
   } catch (error) {
-    try {
-      if (session.inTransaction()) {
-        console.log("🔄 Aborting transaction due to error");
-        await session.abortTransaction();
-      }
-    } catch (abortError) {
-      console.error("Error aborting transaction:", abortError);
-    } finally {
-      session.endSession();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
     }
-    
-    console.error("🔥 Withdrawal Error:", error);
-    
-    // ✅ USER-FRIENDLY ERROR MESSAGES
-    let errorMessage = "Error processing withdrawal";
-    if (error.message.includes("insufficient balance")) {
-      errorMessage = "Insufficient balance for withdrawal";
-    } else if (error.message.includes("phone")) {
-      errorMessage = "Invalid phone number format";
-    } else if (error.message.includes("M-Pesa")) {
-      errorMessage = "M-Pesa service temporarily unavailable";
-    }
-    
-    res.status(500).json({ 
-      message: errorMessage, 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    session.endSession();
+
+    console.error("🔥 Withdraw Error:", error.message);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
-
 
 exports.depositSavings = async (req, res) => {
   try {
