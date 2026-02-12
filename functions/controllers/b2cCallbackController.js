@@ -1460,7 +1460,7 @@ exports.b2cCallback = async (req, res) => {
     session.startTransaction();
 
     /* ===============================
-       FAILURE FLOW (UNCHANGED)
+       FAILURE FLOW
     =============================== */
 
     if (ResultCode !== 0) {
@@ -1469,7 +1469,6 @@ exports.b2cCallback = async (req, res) => {
       transaction.failureReason = ResultDesc;
 
       await transaction.save({ session });
-
       await session.commitTransaction();
       session.endSession();
 
@@ -1486,7 +1485,7 @@ exports.b2cCallback = async (req, res) => {
     transaction.mpesaPayload = Result;
     transaction.processedAt = new Date();
 
-    /* 🔥 DUPLICATE SAFE FIX START */
+    /* ✅ DUPLICATE SAFE TRANSACTION ID */
 
     if (MpesaTransactionID) {
       const existingTx = await Transaction.findOne({
@@ -1496,13 +1495,9 @@ exports.b2cCallback = async (req, res) => {
       if (!existingTx) {
         transaction.transactionId = MpesaTransactionID;
       } else {
-        console.log(
-          "⚠️ Duplicate transactionId detected, skipping overwrite"
-        );
+        console.log("⚠️ Duplicate transactionId detected — skipping overwrite");
       }
     }
-
-    /* 🔥 DUPLICATE SAFE FIX END */
 
     if (
       !transaction.checkoutRequestID &&
@@ -1514,7 +1509,6 @@ exports.b2cCallback = async (req, res) => {
 
     /* ===============================
        CUSTOMER WITHDRAWAL LOGIC
-       (YOUR ORIGINAL LOGIC KEPT)
     =============================== */
 
     if (transaction.type === "customer withdrawal") {
@@ -1539,6 +1533,7 @@ exports.b2cCallback = async (req, res) => {
 
         customer.savingsBalance = balanceAfter;
 
+        /* ✅ Store MPESA charge properly */
         transaction.mpesaCharge = fee;
         transaction.balanceBefore = balanceBefore;
         transaction.balanceAfter = balanceAfter;
@@ -1554,7 +1549,7 @@ exports.b2cCallback = async (req, res) => {
         await sendSMS(
           customer.phone,
           `Dear ${customer.fullName}, your savings withdrawal of KES ${transaction.amount} has been processed successfully.
-B2C charge: KES ${transaction.charge}.
+B2C charge: KES ${transaction.mpesaCharge}.
 New savings balance: KES ${customer.savingsBalance}.
 REF: ${transaction._id}
 - izifinance`
@@ -1604,6 +1599,7 @@ REF: ${transaction._id}
     });
   }
 };
+
 
 
 
