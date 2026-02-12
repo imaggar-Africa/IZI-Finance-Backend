@@ -1485,7 +1485,7 @@ exports.b2cCallback = async (req, res) => {
     transaction.mpesaPayload = Result;
     transaction.processedAt = new Date();
 
-    /* ✅ DUPLICATE SAFE TRANSACTION ID */
+    /* ✅ SAFE TRANSACTION ID */
 
     if (MpesaTransactionID) {
       const existingTx = await Transaction.findOne({
@@ -1494,8 +1494,6 @@ exports.b2cCallback = async (req, res) => {
 
       if (!existingTx) {
         transaction.transactionId = MpesaTransactionID;
-      } else {
-        console.log("⚠️ Duplicate transactionId detected — skipping overwrite");
       }
     }
 
@@ -1505,6 +1503,34 @@ exports.b2cCallback = async (req, res) => {
     ) {
       transaction.checkoutRequestID =
         ConversationID || OriginatorConversationID;
+    }
+
+    /* =========================================================
+       🔥 NEW: LOAN ISSUED SUCCESS HANDLING (ADDED BLOCK)
+    ========================================================= */
+
+    if (transaction.type === "loan issued") {
+
+      const loan = await Loan.findById(transaction.loanId).session(session);
+      if (!loan) throw new Error("Loan not found");
+
+      const lender = await User.findById(loan.lenderId).session(session);
+      if (!lender) throw new Error("Lender not found");
+
+      const balanceBefore = lender.walletBalance;
+
+      lender.walletBalance -= Number(transaction.amount);
+
+      transaction.balanceBefore = balanceBefore;
+      transaction.balanceAfter = lender.walletBalance;
+
+      // ✅ Activate loan
+      loan.status = "active";
+      loan.loanRequestStatus = "approved";
+      loan.disbursedAt = new Date();
+
+      await lender.save({ session });
+      await loan.save({ session });
     }
 
     /* ===============================
@@ -1533,46 +1559,22 @@ exports.b2cCallback = async (req, res) => {
 
         customer.savingsBalance = balanceAfter;
 
-        /* ✅ Store MPESA charge properly */
         transaction.mpesaCharge = fee;
         transaction.balanceBefore = balanceBefore;
         transaction.balanceAfter = balanceAfter;
 
         await customer.save({ session });
       }
-
-      await transaction.save({ session });
-
-      postCommitTasks.push(async () => {
-        if (!customer) return;
-
-        await sendSMS(
-          customer.phone,
-          `Dear ${customer.fullName}, your savings withdrawal of KES ${transaction.amount} has been processed successfully.
-B2C charge: KES ${transaction.mpesaCharge}.
-New savings balance: KES ${customer.savingsBalance}.
-REF: ${transaction._id}
-- izifinance`
-        );
-      });
     }
 
     /* ===============================
-       COMMIT
+       FINAL SAVE + COMMIT
     =============================== */
 
     await transaction.save({ session });
 
     await session.commitTransaction();
     session.endSession();
-
-    await Promise.all(
-      postCommitTasks.map((fn) =>
-        fn().catch((e) =>
-          console.error("Post-commit task error:", e)
-        )
-      )
-    );
 
     return res.status(200).json({
       message: "B2C callback processed successfully",
@@ -1599,6 +1601,7 @@ REF: ${transaction._id}
     });
   }
 };
+
 
 
 
