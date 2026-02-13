@@ -27,6 +27,17 @@ if (!process.env.FUNCTIONS_EMULATOR && !process.env.K_SERVICE) {
 const cron = require("node-cron");
 const { sendDueDateReminders } = require("./controllers/loanController");
 
+// Security & Validation Middleware
+const {
+  helmetMiddleware,
+  generalRateLimit,
+  authRateLimit,
+  walletRateLimit,
+  mongoSanitizeMiddleware,
+  xssProtectionMiddleware,
+} = require("./middleware/securityMiddleware");
+const { sanitizeAll } = require("./middleware/sanitizationMiddleware");
+
 const app = express();
 let initialized = false;
 
@@ -34,6 +45,21 @@ let initialized = false;
  * MIDDLEWARE (SAFE)
  *************************************************/
 app.use(cors({ origin: true }));
+
+// Security Headers
+app.use(helmetMiddleware);
+
+// General Rate Limiting (applied globally)
+app.use(generalRateLimit);
+
+// MongoDB Injection Protection
+app.use(mongoSanitizeMiddleware);
+
+// XSS Protection
+app.use(xssProtectionMiddleware);
+
+// Input Sanitization (body, query, params)
+app.use(sanitizeAll);
 
 /*************************************************
  * HEALTH CHECK (ALB / ECS)
@@ -100,13 +126,18 @@ cron.schedule("0 9 * * *", async () => {
   app.use("/api/agent", jsonParser, require("./routes/agentRoutes"));
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));
   app.use("/api/mpesa",jsonParser,  require("./routes/mpesaCallbackRoutes"));
-  app.use("/api/auth", jsonParser, require("./routes/authRoutes"));
+  
+  // Auth routes with stricter rate limiting
+  app.use("/api/auth", authRateLimit, jsonParser, require("./routes/authRoutes"));
   app.use(
     "/api/auth/borrower",
+    authRateLimit,
     jsonParser,
     require("./routes/borrowerauthRouter")
   );
-  app.use("/api/wallet", jsonParser, require("./routes/walletRoutes"));
+  
+  // Wallet routes with stricter rate limiting
+  app.use("/api/wallet", walletRateLimit, jsonParser, require("./routes/walletRoutes"));
   app.use("/api/loans", jsonParser, require("./routes/loanRoutes"));
   app.use("/api", jsonParser, require("./routes/activityRoutes"));
   app.use("/api/suggestions", jsonParser, require("./routes/suggestionRoutes"));
@@ -131,14 +162,13 @@ cron.schedule("0 9 * * *", async () => {
   /*************************************************
    * ERROR HANDLING
    *************************************************/
-  app.use((_req, res) =>
-    res.status(404).json({ message: "API Route Not Found" })
-  );
+  const { errorHandler, notFoundHandler } = require("./middleware/errorMiddleware");
+  
+  // 404 Handler
+  app.use(notFoundHandler);
 
-  app.use((err, _req, res, _next) => {
-    console.error("🔥 SERVER ERROR:", err);
-    res.status(500).json({ message: "Internal Server Error" });
-  });
+  // Global Error Handler
+  app.use(errorHandler);
 
   initialized = true;
   console.log("✅ App initialization complete");

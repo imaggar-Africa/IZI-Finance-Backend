@@ -611,6 +611,29 @@ New Balance: KES ${loan.balance}
         await handleAgentFullRepaymentCommission(loan, transaction);
       }
     }
+    /* ===================== SAVINGS (LENDER DEPOSIT) ===================== */
+if (transaction.type === "savings") {
+
+  const user = await User.findById(transaction.userId);
+  if (!user) throw new Error("User not found");
+
+  transaction.balanceBefore = user.walletBalance;
+
+  user.walletBalance += amount;
+
+  transaction.balanceAfter = user.walletBalance;
+
+  await user.save();
+
+  await Notification.create({
+    userId: user._id,
+    userModel: "User",
+    title: "Wallet Deposit Successful",
+    message: `KES ${amount} has been added to your wallet.`,
+    type: "deposit"
+  });
+}
+
 
     await transaction.save();
 

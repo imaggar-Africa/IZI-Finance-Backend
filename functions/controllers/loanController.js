@@ -136,29 +136,223 @@ exports.trackRepayment = async (req, res) => {
 /* =====================================================
    2️⃣ ISSUE LOAN (DIRECT LENDER)
 ===================================================== */
+// exports.issueLoan = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const lenderId = req.user._id;
+//     const {
+//       borrowerId,
+//       amount,
+//       totalInterest,
+//       duration,
+//       repaymentFrequency,
+//       phoneNumber
+//     } = req.body;
+
+//     /* ---------------- VALIDATION ---------------- */
+//     if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency || !phoneNumber) {
+//       throw new Error("All fields are required");
+//     }
+
+//     /* ---------------- LENDER ---------------- */
+//     const lender = await User.findById(lenderId).session(session);
+//     if (!lender) throw new Error("Lender not found");
+//     if (lender.walletBalance < amount) {
+//       throw new Error("Insufficient wallet balance");
+//     }
+
+//     /* ---------------- BORROWER ---------------- */
+//     const borrower = await Customer.findById(borrowerId).session(session);
+//     if (!borrower) throw new Error("Borrower not found");
+
+//     if (borrower.isDeleted) throw new Error("Borrower account is inactive");
+//     if (!borrower.isVerified) throw new Error("Borrower is not verified");
+
+//     /* ---------------- CREDIT CHECK ---------------- */
+//     const eligibility = evaluateLoanByCreditScore({
+//       creditScore: borrower.creditScore || 500,
+//       requestedAmount: amount,
+//       borrower
+//     });
+
+//     if (!eligibility.allowed || amount > eligibility.approvedAmount) {
+//       throw new Error(
+//         `Loan not allowed. Max eligible amount: ${eligibility.approvedAmount}`
+//       );
+//     }
+
+//     /* ---------------- EXISTING LOAN CHECK ---------------- */
+//     const existingLoan = await Loan.findOne({
+//       borrowerId,
+//       status: { $in: ["pending", "active", "overdue"] },
+//       loanRequestStatus: { $ne: "rejected" }
+//     }).session(session);
+
+//     if (existingLoan) {
+//       throw new Error("Borrower already has an existing loan");
+//     }
+
+//     /* ---------------- CALCULATIONS ---------------- */
+//     const totalRepayment = Number(amount) + Number(totalInterest);
+//     const dailyRepayment =
+//       totalRepayment /
+//       (duration *
+//         (repaymentFrequency === "weekly"
+//           ? 7
+//           : repaymentFrequency === "monthly"
+//           ? 30
+//           : 1));
+
+//     /* ---------------- CREATE LOAN ---------------- */
+//    const [loan] = await Loan.create(
+//   [
+//     {
+//       lenderId,
+//       borrowerId,
+
+//       billRefNumber: borrower.idNumber, // ✅ REQUIRED
+//       requestedByAgentId: null,         // ✅ because lender direct
+
+//       clientId: borrower.idNumber,
+//       fullName: borrower.fullName,
+//       phoneNumber,
+//       lenderPhone: lender.phone,
+
+//       amount,
+//       interest: totalInterest,
+//       totalRepayment,
+//       balance: totalRepayment,
+//       dailyRepayment,
+//       duration,
+
+//       issueDate: new Date(),
+//       dueDate: new Date(Date.now() + duration * 86400000),
+
+//       status: "pending",
+//       loanRequestStatus: "approved",
+
+//       repaidAmount: 0,
+//       repayments: []
+//     }
+//   ],
+//   { session }
+// );
+
+
+//     /* ---------------- CREATE PENDING TRANSACTION ---------------- */
+//     const [transaction] = await Transaction.create(
+//       [
+//         {
+//           userId: lenderId,
+//           userModel: "User",
+//           loanId: loan._id,
+//           type: "loan issued",
+//           amount,
+//           status: "pending",
+//           phone: phoneNumber,
+//           description: "Loan disbursement",
+
+//           // ✅ wallet not touched yet
+//           balanceBefore: lender.walletBalance,
+//           balanceAfter: lender.walletBalance
+//         }
+//       ],
+//       { session }
+//     );
+
+//     /* =====================================================
+//        🧪 SANDBOX MODE (NO CALLBACK COMES)
+//     ===================================================== */
+//     if (global.config.mpesaEnv === "sandbox") {
+//       transaction.status = "successful";
+//       loan.status = "active";
+
+//       lender.walletBalance -= amount;
+
+//       await lender.save({ session });
+//       await loan.save({ session });
+//       await transaction.save({ session });
+
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.status(201).json({
+//         success: true,
+//         message: "Loan issued successfully (sandbox mode)",
+//         loan,
+//         transaction
+//       });
+//     }
+
+//     /* =====================================================
+//        🚀 LIVE MODE (WAIT FOR STK CALLBACK)
+//     ===================================================== */
+//     const b2cResponse = await initiateB2C(
+//       phoneNumber,
+//       amount,
+//       transaction._id
+//     );
+
+//     if (b2cResponse?.OriginatorConversationID) {
+//       transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+//       await transaction.save({ session });
+//     }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(201).json({
+//       success: true,
+//       message: "Loan initiated. Awaiting M-Pesa confirmation",
+//       loan,
+//       transaction
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) await session.abortTransaction();
+//     session.endSession();
+
+//     console.error("❌ issueLoan error:", error);
+//     return res.status(500).json({ message: error.message });
+//   }
+// };
+
+
 exports.issueLoan = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const lenderId = req.user._id;
+
     const {
       borrowerId,
       amount,
       totalInterest,
       duration,
       repaymentFrequency,
-      phoneNumber
+      phoneNumber,
+      agentId // ✅ NEW (optional)
     } = req.body;
 
     /* ---------------- VALIDATION ---------------- */
-    if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency || !phoneNumber) {
+    if (
+      !borrowerId ||
+      !amount ||
+      !totalInterest ||
+      !duration ||
+      !repaymentFrequency ||
+      !phoneNumber
+    ) {
       throw new Error("All fields are required");
     }
 
     /* ---------------- LENDER ---------------- */
     const lender = await User.findById(lenderId).session(session);
     if (!lender) throw new Error("Lender not found");
+
     if (lender.walletBalance < amount) {
       throw new Error("Insufficient wallet balance");
     }
@@ -196,6 +390,7 @@ exports.issueLoan = async (req, res) => {
 
     /* ---------------- CALCULATIONS ---------------- */
     const totalRepayment = Number(amount) + Number(totalInterest);
+
     const dailyRepayment =
       totalRepayment /
       (duration *
@@ -206,11 +401,17 @@ exports.issueLoan = async (req, res) => {
           : 1));
 
     /* ---------------- CREATE LOAN ---------------- */
+
     const [loan] = await Loan.create(
       [
         {
           lenderId,
+          issuedByLenderId: lenderId, // ✅ Lender approved
+          requestedByAgentId: agentId || null, // ✅ Agent if exists
+
           borrowerId,
+          billRefNumber: borrower.idNumber, // ✅ REQUIRED
+
           clientId: borrower.idNumber,
           fullName: borrower.fullName,
           phoneNumber,
@@ -226,7 +427,7 @@ exports.issueLoan = async (req, res) => {
           issueDate: new Date(),
           dueDate: new Date(Date.now() + duration * 86400000),
 
-          status: "pending",                 // ✅ activated only after success
+          status: "pending", // will become active after B2C success
           loanRequestStatus: "approved",
 
           repaidAmount: 0,
@@ -237,6 +438,7 @@ exports.issueLoan = async (req, res) => {
     );
 
     /* ---------------- CREATE PENDING TRANSACTION ---------------- */
+
     const [transaction] = await Transaction.create(
       [
         {
@@ -247,9 +449,7 @@ exports.issueLoan = async (req, res) => {
           amount,
           status: "pending",
           phone: phoneNumber,
-          description: "Loan disbursement",
 
-          // ✅ wallet not touched yet
           balanceBefore: lender.walletBalance,
           balanceAfter: lender.walletBalance
         }
@@ -257,9 +457,8 @@ exports.issueLoan = async (req, res) => {
       { session }
     );
 
-    /* =====================================================
-       🧪 SANDBOX MODE (NO CALLBACK COMES)
-    ===================================================== */
+    /* ================= SANDBOX MODE ================= */
+
     if (global.config.mpesaEnv === "sandbox") {
       transaction.status = "successful";
       loan.status = "active";
@@ -281,9 +480,8 @@ exports.issueLoan = async (req, res) => {
       });
     }
 
-    /* =====================================================
-       🚀 LIVE MODE (WAIT FOR STK CALLBACK)
-    ===================================================== */
+    /* ================= LIVE MODE ================= */
+
     const b2cResponse = await initiateB2C(
       phoneNumber,
       amount,
@@ -291,7 +489,8 @@ exports.issueLoan = async (req, res) => {
     );
 
     if (b2cResponse?.OriginatorConversationID) {
-      transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+      transaction.checkoutRequestID =
+        b2cResponse.OriginatorConversationID;
       await transaction.save({ session });
     }
 

@@ -47,6 +47,7 @@ originatorConversationID: {
 
 
   amount: { type: Number, required: true },
+  mpesaCharge: { type: Number, default: 0 },
   balanceBefore: { type: Number, default: 0 },
   balanceAfter: { type: Number, default: 0 },
 

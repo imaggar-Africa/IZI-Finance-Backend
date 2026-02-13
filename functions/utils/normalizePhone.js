@@ -6,10 +6,10 @@ exports.normalizePhone = (phone) => {
   const cleaned = phone.replace(/\s+/g, "");
 
   const patterns = [
-    /^\+2547\d{8}$/,  // Kenya
-    /^\+2567\d{8}$/,  // Uganda
-    /^\+2557\d{8}$/,  // Tanzania
-    /^\+2507\d{8}$/,  // Rwanda
+    /^\+254\d{9}$/,  // Kenya
+    /^\+256\d{9}$/,  // Uganda
+    /^\+255\d{9}$/,  // Tanzania
+    /^\+250\d{9}$/,  // Rwanda
     /^\+234\d{10}$/,  // Nigeria
     /^\+233\d{9}$/    // Ghana
   ];

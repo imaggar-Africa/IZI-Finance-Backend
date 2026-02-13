@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const loanSchema = new mongoose.Schema({
   lenderId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   borrowerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true },
-  requestedByAgentId: { type: mongoose.Schema.Types.ObjectId, ref: "Agent", required: true }, // Agent who requested
+  requestedByAgentId: { type: mongoose.Schema.Types.ObjectId, ref: "Agent" }, // Agent who requested
   issuedByLenderId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Lender who approved
 
   clientId: { type: String}, // National ID for M-Pesa BillRef
