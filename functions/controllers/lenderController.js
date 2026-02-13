@@ -80,7 +80,8 @@ exports.getAllCustomersForLender = async (req, res) => {
           status: { $in: ["active", "overdue"] }
         }).sort({ createdAt: -1 });
 
-        const creditScore = loan?.creditScoreAfter ?? null;
+        const creditScore = customer.creditScore ?? null;
+
 
         // ✅ ADD: Risk Level Calculation (TASK REQUIREMENT)
         let riskLevel = null;
