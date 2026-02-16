@@ -158,6 +158,10 @@ cron.schedule("0 9 * * *", async () => {
   app.use("/api", urlEncodedParser, require("./routes/paymentPage"));
   app.use("/api", urlEncodedParser, require("./routes/stkPayment"));
   app.use("/debug", require("./routes/debug"));
+  app.use("/api/groups", require("./routes/groupRoutes"));
+  app.use("/api/agent-groups", require("./routes/agentGroupRoutes"));
+
+
 
   /*************************************************
    * ERROR HANDLING
