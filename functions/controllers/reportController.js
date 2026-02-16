@@ -2,6 +2,7 @@ const Loan = require("../models/Loan");
 const Customer = require("../models/customer");
 const Transaction = require("../models/Transaction");
 const Agent = require("../models/AgentModel");
+const AgentCommission = require("../models/AgentCommission");
 
 /* ===========================
    DASHBOARD REPORT
@@ -40,18 +41,93 @@ exports.getDashboardReport = async (req, res) => {
    LOANS REPORT
 =========================== */
 exports.getLoansReport = async (req, res) => {
-  const loans = await Loan.find().populate("borrowerId lenderId");
+  try {
+    const loans = await Loan.find()
+      .populate("borrowerId", "fullName creditLevel")
+      .populate("lenderId");
 
-  res.json({
-    success: true,
-    summary: {
+    const formattedLoans = loans.map((loan) => {
+      /* =============================
+         INSTALLMENT CALCULATION
+      ============================= */
+
+      let repaymentAmount = 0;
+
+      if (loan.repaymentPlan === "daily") {
+        repaymentAmount = loan.dailyRepayment || 0;
+      } else if (loan.repaymentPlan === "weekly") {
+        repaymentAmount = Math.round(
+          (loan.totalRepayment || 0) / Math.ceil(loan.duration / 7)
+        );
+      } else if (loan.repaymentPlan === "monthly") {
+        repaymentAmount = Math.round(
+          (loan.totalRepayment || 0) / Math.ceil(loan.duration / 30)
+        );
+      }
+
+      /* =============================
+         REPAYMENT STATUS
+      ============================= */
+
+      let repaymentStatus = loan.status;
+
+      if (loan.isDefaulted) {
+        repaymentStatus = "defaulted";
+      }
+
+      return {
+        loan_id: loan._id.toString(),
+        borrower_name: loan.borrowerId?.fullName || "N/A",
+        loan_amount: loan.amount || 0,
+        total_repayment: loan.totalRepayment || 0,
+        repayment_plan: loan.repaymentPlan || "daily",
+        repayment_amount: repaymentAmount,
+        outstanding_balance: loan.balance || 0,
+        repayment_status: repaymentStatus,
+        credit_score_band:
+          loan.borrowerId?.creditLevel || "Unknown",
+        issue_date: loan.issueDate
+          ? loan.issueDate.toISOString().split("T")[0]
+          : null,
+        due_date: loan.dueDate
+          ? loan.dueDate.toISOString().split("T")[0]
+          : null,
+      };
+    });
+
+    /* =============================
+       SUMMARY
+    ============================= */
+
+    const summary = {
       count: loans.length,
-      totalAmount: loans.reduce((s, l) => s + l.amount, 0),
-      totalInterest: loans.reduce((s, l) => s + l.interest, 0)
-    },
-    data: loans
-  });
+      totalAmount: loans.reduce(
+        (sum, loan) => sum + (loan.amount || 0),
+        0
+      ),
+      totalInterest: loans.reduce(
+        (sum, loan) => sum + (loan.interest || 0),
+        0
+      ),
+      totalOutstanding: loans.reduce(
+        (sum, loan) => sum + (loan.balance || 0),
+        0
+      ),
+    };
+
+    res.json({
+      success: true,
+      summary,
+      data: formattedLoans,
+    });
+
+  } catch (err) {
+    console.error("Loans report error:", err);
+    res.status(500).json({ message: err.message });
+  }
 };
+
+
 
 /* ===========================
    REPAYMENTS REPORT
@@ -126,23 +202,70 @@ exports.getBorrowersReport = async (req, res) => {
    AGENTS REPORT
 =========================== */
 exports.getAgentsReport = async (req, res) => {
-  const agents = await Agent.find();
+  try {
+    const agents = await Agent.find().lean();
 
-  const data = await Promise.all(
-    agents.map(async (a) => {
-      const loans = await Loan.find({ requestedByAgentId: a._id });
+    const data = await Promise.all(
+      agents.map(async (agent) => {
 
-      return {
-        agentId: a._id,
-        name: a.fullName,
-        loansHandled: loans.length,
-        totalDisbursed: loans.reduce((s, l) => s + l.amount, 0)
-      };
-    })
-  );
+        // Loans handled by agent
+        const loans = await Loan.find({
+          requestedByAgentId: agent._id,
+          loanRequestStatus: "approved"
+        });
 
-  res.json({ success: true, data });
+        const totalDisbursed = loans.reduce(
+          (sum, loan) => sum + (loan.amount || 0),
+          0
+        );
+
+        // Total customers handled
+        const totalCustomers = await Customer.countDocuments({
+          registeredBy: agent._id
+        });
+
+        // Commission earned
+        const commissions = await AgentCommission.find({
+          agentId: agent._id,
+          status: "approved"
+        });
+
+        const commissionEarned = commissions.reduce(
+          (sum, c) => sum + (c.amount || 0),
+          0
+        );
+
+        return {
+          _id: agent._id,
+          lenderId: agent.lenderId,
+          name: agent.fullName || agent.name,
+          phone: agent.phone,
+          status: agent.status,
+          password:agent.password,
+          region: agent.region || "N/A",
+          totalEarnings: commissionEarned,
+          walletBalance: agent.walletBalance || 0,
+          commissionEarned,
+          totalCustomers,
+          role: "agent",
+          loansHandled: loans.length,
+          totalDisbursed
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      count: data.length,
+      data
+    });
+
+  } catch (error) {
+    console.error("Agents report error:", error);
+    res.status(500).json({ message: error.message });
+  }
 };
+
 
 /* ===========================
    AUDIT LOGS (BASIC)
@@ -242,3 +365,139 @@ exports.getLoanRepaymentReport = async (req, res) => {
     });
   }
 };
+
+
+/* ===========================
+   MARITAL STATUS REPORT
+=========================== */
+exports.getMaritalStatusReport = async (req, res) => {
+  try {
+    const data = await Customer.aggregate([
+      {
+        $group: {
+          _id: "$maritalStatus",
+          value: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          label: "$_id",
+          value: 1
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      count: data.length,
+      data
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+
+/* ===========================
+   LOAN AMOUNT BY BUSINESS TYPE
+=========================== */
+exports.getBusinessTypeLoanReport = async (req, res) => {
+  try {
+    const data = await Loan.aggregate([
+      // 🔹 Join customer collection
+      {
+        $lookup: {
+          from: "customers",              // collection name (check exact name in MongoDB)
+          localField: "borrowerId",       // field in Loan
+          foreignField: "_id",            // field in Customer
+          as: "borrower"
+        }
+      },
+
+      // 🔹 Convert array to object
+      { $unwind: "$borrower" },
+
+      // 🔹 Group by occupation
+      {
+        $group: {
+          _id: { $ifNull: ["$borrower.occupation", "Unknown"] },
+          value: { $sum: "$amount" }
+        }
+      },
+
+      // 🔹 Format output
+      {
+        $project: {
+          _id: 0,
+          type: "$_id",
+          value: 1
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data
+    });
+
+  } catch (err) {
+    console.error("Business type report error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+
+/* ===========================
+   REPAYMENT PERCENTAGE BY REGION
+=========================== */
+exports.getRegionalRepaymentReport = async (req, res) => {
+  try {
+    const data = await Loan.aggregate([
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "borrower"
+        }
+      },
+      { $unwind: "$borrower" },
+
+      {
+        $group: {
+          _id: "$borrower.physicalAddress",
+          totalLoan: { $sum: "$amount" },
+          totalRepaid: { $sum: "$repaidAmount" }
+        }
+      },
+
+      {
+        $project: {
+          _id: 0,
+          region: "$_id",
+          percent: {
+            $cond: [
+              { $eq: ["$totalLoan", 0] },
+              0,
+              {
+                $multiply: [
+                  { $divide: ["$totalRepaid", "$totalLoan"] },
+                  100
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]);
+
+    res.json({ success: true, data });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+

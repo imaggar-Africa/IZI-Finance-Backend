@@ -43,7 +43,7 @@ const generalRateLimit = rateLimit({
 // Stricter rate limit for authentication routes - 5 requests per 15 minutes
 const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  max: 50, // Limit each IP to 5 requests per windowMs
   message: {
     success: false,
     message: "Too many authentication attempts, please try again later.",

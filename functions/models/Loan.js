@@ -17,6 +17,12 @@ const loanSchema = new mongoose.Schema({
   // fee: { type: Number, required: true, min: 0 },
   totalRepayment: { type: Number, required: true, min: 0 },
   dailyRepayment: { type: Number, required: true, min: 0 },
+  repaymentPlan: {
+  type: String,
+  enum: ["daily", "weekly", "monthly"],
+  required: true
+},
+
 
   repaidAmount: { type: Number, default: 0 },
   balance: { type: Number, default: function() { return this.totalRepayment; } },

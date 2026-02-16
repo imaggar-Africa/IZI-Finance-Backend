@@ -419,6 +419,7 @@ exports.issueLoan = async (req, res) => {
 
           amount,
           interest: totalInterest,
+          repaymentPlan: repaymentFrequency,
           totalRepayment,
           balance: totalRepayment,
           dailyRepayment,
