@@ -517,6 +517,16 @@ exports.getBusinessTypeLoanReport = async (req, res) => {
 =========================== */
 exports.getRegionalRepaymentReport = async (req, res) => {
   try {
+
+    const countryMap = {
+      "Kenya": "KE",
+      "Uganda": "UG",
+      "Nigeria": "NG",
+      "India": "IN",
+      "Rwanda": "RW",
+      "Tanzania": "TZ"
+    };
+
     const data = await Loan.aggregate([
       {
         $lookup: {
@@ -529,39 +539,53 @@ exports.getRegionalRepaymentReport = async (req, res) => {
       { $unwind: "$borrower" },
 
       {
-        $group: {
-          _id: "$borrower.physicalAddress",
-          totalLoan: { $sum: "$amount" },
-          totalRepaid: { $sum: "$repaidAmount" }
+        $addFields: {
+          country: {
+            $trim: {
+              input: {
+                $arrayElemAt: [
+                  { $split: ["$borrower.physicalAddress", ","] },
+                  -1
+                ]
+              }
+            }
+          }
         }
       },
 
       {
-        $project: {
-          _id: 0,
-          region: "$_id",
-          percent: {
-            $cond: [
-              { $eq: ["$totalLoan", 0] },
-              0,
-              {
-                $multiply: [
-                  { $divide: ["$totalRepaid", "$totalLoan"] },
-                  100
-                ]
-              }
-            ]
-          }
+        $group: {
+          _id: "$country",
+          totalLoan: { $sum: "$amount" },
+          totalRepaid: { $sum: "$repaidAmount" }
         }
       }
     ]);
 
-    res.json({ success: true, data });
+    // Convert country to code + calculate percent
+    const formatted = data.map(item => {
+
+      const percent =
+        item.totalLoan === 0
+          ? 0
+          : Math.round((item.totalRepaid / item.totalLoan) * 100);
+
+      return {
+        region: countryMap[item._id] || item._id,
+        percent
+      };
+    });
+
+    res.json({
+      success: true,
+      data: formatted
+    });
 
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
 
 /* ===========================
    PROFIT & INTEREST DETAILED REPORT
