@@ -39,6 +39,8 @@ const {
 const { sanitizeAll } = require("./middleware/sanitizationMiddleware");
 
 const app = express();
+app.set("trust proxy", 1);
+
 let initialized = false;
 
 /*************************************************
@@ -50,7 +52,10 @@ app.use(cors({ origin: true }));
 app.use(helmetMiddleware);
 
 // General Rate Limiting (applied globally)
-app.use(generalRateLimit);
+if (process.env.NODE_ENV !== "development") {
+  app.use(generalRateLimit);
+}
+
 
 // MongoDB Injection Protection
 app.use(mongoSanitizeMiddleware);
