@@ -518,13 +518,14 @@ exports.getBusinessTypeLoanReport = async (req, res) => {
 exports.getRegionalRepaymentReport = async (req, res) => {
   try {
 
-    const countryMap = {
-      "Kenya": "KE",
-      "Uganda": "UG",
-      "Nigeria": "NG",
-      "India": "IN",
-      "Rwanda": "RW",
-      "Tanzania": "TZ"
+    // Phone prefix → Country code map
+    const phoneCountryMap = {
+      "254": "KE",
+      "256": "UG",
+      "234": "NG",
+      "91": "IN",
+      "250": "RW",
+      "255": "TZ"
     };
 
     const data = await Loan.aggregate([
@@ -538,31 +539,38 @@ exports.getRegionalRepaymentReport = async (req, res) => {
       },
       { $unwind: "$borrower" },
 
+      // Extract phone digits without "+"
       {
         $addFields: {
-          country: {
-            $trim: {
-              input: {
-                $arrayElemAt: [
-                  { $split: ["$borrower.physicalAddress", ","] },
-                  -1
-                ]
-              }
+          phoneDigits: {
+            $replaceAll: {
+              input: "$borrower.phone",
+              find: "+",
+              replacement: ""
             }
+          }
+        }
+      },
+
+      // Extract first 3 digits
+      {
+        $addFields: {
+          countryCode: {
+            $substr: ["$phoneDigits", 0, 3]
           }
         }
       },
 
       {
         $group: {
-          _id: "$country",
+          _id: "$countryCode",
           totalLoan: { $sum: "$amount" },
           totalRepaid: { $sum: "$repaidAmount" }
         }
       }
     ]);
 
-    // Convert country to code + calculate percent
+    // Calculate percent + map country code
     const formatted = data.map(item => {
 
       const percent =
@@ -571,7 +579,7 @@ exports.getRegionalRepaymentReport = async (req, res) => {
           : Math.round((item.totalRepaid / item.totalLoan) * 100);
 
       return {
-        region: countryMap[item._id] || item._id,
+        region: phoneCountryMap[item._id] || item._id,
         percent
       };
     });
@@ -583,6 +591,136 @@ exports.getRegionalRepaymentReport = async (req, res) => {
 
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+};
+
+
+exports.getRegionPerformanceReport = async (req, res) => {
+  try {
+
+    /* ================= PHONE → COUNTRY MAP ================= */
+    function getCountryFromPhone(phone) {
+      if (!phone) return "Unknown";
+
+      const clean = phone.replace(/\s/g, "");
+
+      if (clean.startsWith("+254")) return "KENYA"; // Kenya
+      if (clean.startsWith("+256")) return "UGANDA"; // Uganda
+      if (clean.startsWith("+234")) return "NIGERIA"; // Nigeria
+      if (clean.startsWith("+250")) return "RWANDA"; // Rwanda
+      if (clean.startsWith("+255")) return "TANZANIA"; // Tanzania
+      if (clean.startsWith("+233")) return "GHANA";  // Ghana
+
+      return "Unknown";
+    }
+
+    /* ================= FETCH DATA ================= */
+    const customers = await Customer.find().lean();
+
+    const regionGroups = {};
+
+    for (const customer of customers) {
+
+      const loans = await Loan.find({
+        borrowerId: customer._id,
+        loanRequestStatus: "approved"
+      }).lean();
+
+      const totalLoanAmount = loans.reduce(
+        (sum, l) => sum + (l.amount || 0),
+        0
+      );
+
+      const totalOutstanding = loans.reduce(
+        (sum, l) => sum + (l.balance || 0),
+        0
+      );
+
+      const totalRepaid = loans.reduce(
+        (sum, l) =>
+          sum +
+          (Array.isArray(l.repayments)
+            ? l.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+            : 0),
+        0
+      );
+
+      const region = getCountryFromPhone(customer.phone);
+
+      if (!regionGroups[region]) {
+        regionGroups[region] = {
+          totalLoan: 0,
+          totalRepaid: 0,
+          borrowers: []
+        };
+      }
+
+      regionGroups[region].totalLoan += totalLoanAmount;
+      regionGroups[region].totalRepaid += totalRepaid;
+
+      regionGroups[region].borrowers.push({
+        full_name: customer.fullName,
+        borrower_id: customer._id,
+        date_of_birth: customer.dateOfBirth,
+        phone: customer.phone,
+        email: customer.email,
+        address: customer.physicalAddress || "",
+        region,
+        status: customer.status,
+        marital_status: customer.maritalStatus,
+        gender: customer.gender,
+        occupation: customer.occupation,
+        loan_credit_score: customer.creditScore || 500,
+        number_of_active_loans: loans.filter(l => l.balance > 0).length,
+        total_loans: loans.length,
+        total_loan_amount: totalLoanAmount,
+        total_outstanding_amount: totalOutstanding,
+        balance: totalOutstanding,
+        interest: loans.reduce((s, l) => s + (l.interest || 0), 0),
+        repayment_due_date:
+          loans.length > 0
+            ? loans.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0].dueDate
+            : null,
+        payment_histories:
+          loans.length > 0 && Array.isArray(loans[0].repayments)
+            ? loans[0].repayments.map(r => ({
+                payment_date: r.date,
+                amount: r.amount,
+                status: r.wasPaymentLate ? "Late" : "Paid"
+              }))
+            : []
+      });
+    }
+
+    /* ================= CALCULATE PERCENT ================= */
+    const result = Object.keys(regionGroups).map(region => {
+      const g = regionGroups[region];
+
+      const percent =
+        g.totalLoan === 0
+          ? 0
+          : Math.round((g.totalRepaid / g.totalLoan) * 100);
+
+      return {
+        region,
+        percent,
+        borrowers: g.borrowers
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: result.length,
+      data: result
+    });
+
+  } catch (error) {
+    console.error("Region performance error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
   }
 };
 

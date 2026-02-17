@@ -15,7 +15,7 @@ const {
   getBusinessTypeLoanReport,
   getRegionalRepaymentReport,
   getDetailedProfitReport,
-  getRegionalPerformanceReport
+  getRegionPerformanceReport
 } = require("../controllers/reportController");
 
 router.get("/summary",protect, getDashboardReport);
@@ -30,6 +30,7 @@ router.get("/marital-status",protect, getMaritalStatusReport);
 router.get("/business-type-loans",protect, getBusinessTypeLoanReport);
 router.get("/regional-repayment",protect, getRegionalRepaymentReport);
 router.get("/profit-detailed",protect, getDetailedProfitReport);
+router.get("/region-performance-detailed",protect,getRegionPerformanceReport);
 
 
 module.exports = router;
