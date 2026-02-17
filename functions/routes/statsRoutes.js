@@ -14,4 +14,11 @@ router.get(
   statsController.downloadStatsPDF
 );
 
+router.get(
+  "/overall-report-pdf",
+  protect,
+  statsController.downloadFullOverallReportPDF
+);
+
+
 module.exports = router;

@@ -413,6 +413,145 @@ function drawRow(doc, y, col, row) {
 }
 
 
+exports.downloadFullOverallReportPDF = async (req, res) => {
+  try {
+    const now = new Date();
+
+    /* ================= FETCH DATA ================= */
+    const loans = await Loan.find({ loanRequestStatus: "approved" })
+      .populate("borrowerId", "fullName phone");
+
+    const customers = await Customer.find({});
+
+    /* ================= CALCULATIONS ================= */
+    let totalPrincipal = 0;
+    let totalRepayment = 0;
+    let totalCollected = 0;
+    let totalOutstanding = 0;
+
+    loans.forEach((loan) => {
+      totalPrincipal += loan.amount || 0;
+      totalRepayment += loan.totalRepayment || 0;
+      totalOutstanding += loan.balance || 0;
+
+      if (Array.isArray(loan.repayments)) {
+        totalCollected += loan.repayments.reduce(
+          (s, r) => s + (r.amount || 0),
+          0
+        );
+      }
+    });
+
+    /* ================= CREATE PDF ================= */
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 30
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="overall-system-report.pdf"'
+    );
+
+    doc.pipe(res);
+
+    /* =======================================================
+       1️⃣ TITLE
+    ======================================================= */
+    doc.fontSize(18).text("Overall System Report", { align: "center" });
+    doc.moveDown();
+
+    doc.fontSize(10).text(`Generated On: ${now.toDateString()}`, {
+      align: "center"
+    });
+
+    doc.moveDown(2);
+
+    /* =======================================================
+       2️⃣ OVERALL SUMMARY
+    ======================================================= */
+    doc.fontSize(14).text("Overall Financial Summary", { underline: true });
+    doc.moveDown(0.5);
+
+    doc.fontSize(10);
+    doc.text(`Total Customers       : ${customers.length}`);
+    doc.text(`Total Loans Issued    : ${loans.length}`);
+    doc.text(`Total Principal       : KES ${totalPrincipal}`);
+    doc.text(`Total Repayment       : KES ${totalRepayment}`);
+    doc.text(`Total Collected       : KES ${totalCollected}`);
+    doc.text(`Total Outstanding     : KES ${totalOutstanding}`);
+
+    doc.addPage({ layout: "landscape", margin: 30 });
+
+    /* =======================================================
+       3️⃣ CUSTOMER DETAILS TABLE
+    ======================================================= */
+    doc.fontSize(14).text("Customer Details", { underline: true });
+    doc.moveDown();
+
+    customers.forEach((customer, index) => {
+      doc.fontSize(9).text(
+        `${index + 1}. ${customer.fullName} | ${customer.phone} | ${customer.email} | ${customer.physicalAddress}`
+      );
+    });
+
+    doc.addPage({ layout: "landscape", margin: 30 });
+
+    /* =======================================================
+       4️⃣ LOAN DETAILS TABLE
+    ======================================================= */
+    doc.fontSize(14).text("Loan Details", { underline: true });
+    doc.moveDown();
+
+    loans.forEach((loan, index) => {
+      const collected = Array.isArray(loan.repayments)
+        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+        : 0;
+
+      let status = "Paid";
+      if (loan.balance > 0 && new Date(loan.dueDate) < now)
+        status = "Overdue";
+      else if (loan.balance > 0)
+        status = "Active";
+
+      doc.fontSize(9).text(
+        `${index + 1}. ${loan.borrowerId?.fullName || "N/A"} | Principal: ${
+          loan.amount
+        } | Total: ${loan.totalRepayment} | Collected: ${collected} | Balance: ${
+          loan.balance
+        } | Status: ${status}`
+      );
+    });
+
+    doc.addPage({ layout: "landscape", margin: 30 });
+
+    /* =======================================================
+       5️⃣ REPAYMENT DETAILS
+    ======================================================= */
+    doc.fontSize(14).text("Repayment Details", { underline: true });
+    doc.moveDown();
+
+    loans.forEach((loan) => {
+      if (Array.isArray(loan.repayments)) {
+        loan.repayments.forEach((repayment) => {
+          doc.fontSize(9).text(
+            `${loan.borrowerId?.fullName || "N/A"} | ${
+              repayment.date
+            } | Amount: ${repayment.amount}`
+          );
+        });
+      }
+    });
+
+    doc.end();
+
+  } catch (error) {
+    console.error("Full report PDF error:", error);
+    res.status(500).json({ message: "Failed to generate full report" });
+  }
+};
 
 
 

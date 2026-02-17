@@ -465,7 +465,7 @@ exports.getMaritalStatusReport = async (req, res) => {
 
 /* ===========================
    LOAN AMOUNT BY BUSINESS TYPE
-=========================== */
+== ======================== */
 exports.getBusinessTypeLoanReport = async (req, res) => {
   try {
     const data = await Loan.aggregate([
@@ -642,5 +642,6 @@ exports.getDetailedProfitReport = async (req, res) => {
     console.error("Profit report error:", error);
     res.status(500).json({ message: error.message });
   }
-};
+};                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+
 

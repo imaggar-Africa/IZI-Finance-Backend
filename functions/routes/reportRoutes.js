@@ -14,7 +14,8 @@ const {
   getMaritalStatusReport,
   getBusinessTypeLoanReport,
   getRegionalRepaymentReport,
-  getDetailedProfitReport
+  getDetailedProfitReport,
+  getRegionalPerformanceReport
 } = require("../controllers/reportController");
 
 router.get("/summary",protect, getDashboardReport);
