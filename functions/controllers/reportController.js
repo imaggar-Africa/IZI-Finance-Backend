@@ -168,35 +168,98 @@ exports.getProfitReport = async (req, res) => {
 };
 
 /* ===========================
-   BORROWERS REPORT
+   BORROWERS PROFESSIONAL REPORT
 =========================== */
 exports.getBorrowersReport = async (req, res) => {
-  const borrowers = await Customer.find();
+  try {
+    const borrowers = await Customer.find().lean();
 
-  const data = await Promise.all(
-    borrowers.map(async (b) => {
-      const loan = await Loan.findOne({ borrowerId: b._id }).sort({ createdAt: -1 });
+    const data = await Promise.all(
+      borrowers.map(async (b, index) => {
 
-      const creditScore = b.creditScore || 500;
-      const rating = +(creditScore / 1000).toFixed(2);
+        const loans = await Loan.find({ borrowerId: b._id }).lean();
 
-      return {
-        borrowerId: b._id,
-        fullName: b.fullName,
-        creditScore,
-        rating,
-        activeLoanBalance: loan ? loan.balance : 0,
-        isDefaulted: loan ? loan.isDefaulted : false
-      };
-    })
-  );
+        const activeLoans = loans.filter(
+          l => l.status === "active"
+        );
 
-  res.json({
-    success: true,
-    count: data.length,
-    data
-  });
+        const totalLoanAmount = loans.reduce(
+          (sum, l) => sum + (l.amount || 0),
+          0
+        );
+
+        const totalOutstanding = loans.reduce(
+          (sum, l) => sum + (l.balance || 0),
+          0
+        );
+
+        const latestLoan = loans.sort(
+          (a, b2) => new Date(b2.createdAt) - new Date(a.createdAt)
+        )[0];
+
+        return {
+          full_name: b.fullName || "N/A",
+
+          // ✅ Custom Borrower ID Format
+          borrower_id: `BRW-${1000 + index + 1}`,
+
+          date_of_birth: b.dateOfBirth
+            ? b.dateOfBirth.toISOString().split("T")[0]
+            : null,
+
+          phone: b.phone || null,
+          email: b.email || null,
+          address: b.physicalAddress || null,
+          status: b.status || "Active",
+
+          document_live_photo: b.livePhoto || null,
+          document_front_id_photo: b.frontID || null,
+          document_back_id_photo: b.backID || null,
+
+          marital_status: b.maritalStatus || null,
+          gender: b.gender || null,
+          occupation: b.occupation || null,
+
+          loan_credit_score: b.creditScore || 500,
+
+          number_of_active_loans: activeLoans.length,
+          total_loans: loans.length,
+          total_loan_amount: totalLoanAmount,
+          total_outstanding_amount: totalOutstanding,
+
+          balance: latestLoan ? latestLoan.balance || 0 : 0,
+          interest: latestLoan ? latestLoan.interest || 0 : 0,
+
+          repayment_due_date: latestLoan?.dueDate
+            ? latestLoan.dueDate.toISOString().split("T")[0]
+            : null,
+
+          payment_histories: latestLoan?.repayments?.length
+            ? latestLoan.repayments.map(r => ({
+                payment_date: r.date
+                  ? new Date(r.date).toISOString().split("T")[0]
+                  : null,
+                amount: r.amount || 0,
+                status: r.wasPaymentLate ? "Late" : "Paid"
+              }))
+            : []
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      count: data.length,
+      borrowers: data
+    });
+
+  } catch (error) {
+    console.error("Borrower report error:", error);
+    res.status(500).json({ message: error.message });
+  }
 };
+
+
 
 /* ===========================
    AGENTS REPORT
@@ -500,4 +563,60 @@ exports.getRegionalRepaymentReport = async (req, res) => {
   }
 };
 
+/* ===========================
+   PROFIT & INTEREST DETAILED REPORT
+=========================== */
+exports.getDetailedProfitReport = async (req, res) => {
+  try {
+    const loans = await Loan.find().populate("borrowerId", "fullName");
+
+    let totalPrincipal = 0;
+    let totalInterestExpected = 0;
+    let totalInterestCollected = 0;
+    let totalProfit = 0;
+
+    const data = loans.map((loan) => {
+      const principal = loan.amount || 0;
+      const interest = loan.interest || 0;
+      const totalRepayment = loan.totalRepayment || 0;
+      const repaidAmount = loan.repaidAmount || 0;
+
+      const interestCollected = Math.max(0, repaidAmount - principal);
+
+      totalPrincipal += principal;
+      totalInterestExpected += interest;
+      totalInterestCollected += interestCollected;
+      totalProfit += interestCollected;
+
+      return {
+        borrowerId: loan.borrowerId?._id || null,
+        fullName: loan.borrowerId?.fullName || "N/A",
+        loanAmount: principal,
+        interestExpected: interest,
+        totalRepayment,
+        interestCollected,
+        status: loan.status,
+        dueDate: loan.dueDate
+          ? loan.dueDate.toISOString().split("T")[0]
+          : null
+      };
+    });
+
+    res.json({
+      success: true,
+      summary: {
+        totalLoans: loans.length,
+        totalPrincipal,
+        totalInterestExpected,
+        totalInterestCollected,
+        netProfit: totalProfit
+      },
+      data
+    });
+
+  } catch (error) {
+    console.error("Profit report error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
 
