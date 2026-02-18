@@ -150,10 +150,15 @@ exports.getStats = async (req, res) => {
   try {
     const { fromDate, toDate } = req.query;
 
-    const loans = await Loan.find({ loanRequestStatus: "approved" })
-      .populate("borrowerId", "fullName phone");
+    const lenderId = req.user._id;
 
-       const customers = await Customer.find({});
+const loans = await Loan.find({
+  loanRequestStatus: "approved",
+  lenderId: lenderId
+}).populate("borrowerId", "fullName phone");
+
+
+       const customers = await Customer.find({ registeredBy: lenderId});
 
     const last7 = getRange("7d");
     const last1m = getRange("1m");
@@ -213,7 +218,13 @@ exports.downloadStatsPDF = async (req, res) => {
     const now = new Date();
 
     /* ================= DATE FILTER ================= */
-    const loanFilter = { loanRequestStatus: "approved" };
+    const lenderId = req.user._id;
+
+const loanFilter = {
+  loanRequestStatus: "approved",
+  lenderId: lenderId
+};
+
 
     if (fromDate || toDate) {
       loanFilter.createdAt = {};
@@ -418,10 +429,15 @@ exports.downloadFullOverallReportPDF = async (req, res) => {
     const now = new Date();
 
     /* ================= FETCH DATA ================= */
-    const loans = await Loan.find({ loanRequestStatus: "approved" })
-      .populate("borrowerId", "fullName phone");
+   const lenderId = req.user._id;
 
-    const customers = await Customer.find({});
+const loans = await Loan.find({
+  loanRequestStatus: "approved",
+  lenderId: lenderId
+}).populate("borrowerId", "fullName phone");
+
+
+    const customers = await Customer.find({registeredBy: lenderId});
 
     /* ================= CALCULATIONS ================= */
     let totalPrincipal = 0;
