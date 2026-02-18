@@ -1255,7 +1255,6 @@ exports.getActiveLoansByAgent = async (req, res) => {
 };
 
 
-// controllers/loanController.js
 exports.getPaymentInstructions = async (req, res) => {
   try {
     const { loanId } = req.params;
@@ -1287,5 +1286,127 @@ exports.getPaymentInstructions = async (req, res) => {
 };
 
 
+
+exports.getCustomerStatement = async (req, res) => {
+  try {
+    const { borrowerId } = req.params;
+    const { from, to } = req.query;
+
+    if (!from || !to) {
+      return res.status(400).json({ message: "from and to dates are required" });
+    }
+
+    const startDate = new Date(from);
+    const endDate = new Date(to);
+    endDate.setHours(23, 59, 59, 999);
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const transactions = await Transaction.find({
+      userId: borrowerId,
+      userModel: "Customer",
+      status: "successful",
+      createdAt: { $gte: startDate, $lte: endDate }
+    }).sort({ createdAt: 1 });
+
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+
+    transactions.forEach(tx => {
+      if (tx.type.includes("deposit")) {
+        totalDeposits += tx.amount;
+      }
+      if (tx.type.includes("withdraw")) {
+        totalWithdrawals += tx.amount;
+      }
+    });
+
+    const openingBalance =
+      borrower.savingsBalance - totalDeposits + totalWithdrawals;
+
+    return res.status(200).json({
+      customer: borrower.fullName,
+      phone: borrower.phone,
+      period: `${from} to ${to}`,
+      openingBalance,
+      totalDeposits,
+      totalWithdrawals,
+      closingBalance: borrower.savingsBalance,
+      transactions
+    });
+
+  } catch (error) {
+    console.error("Statement error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+
+exports.sendStatementSMS = async (req, res) => {
+  try {
+    const { borrowerId, from, to } = req.body;
+
+    if (!borrowerId || !from || !to) {
+      return res.status(400).json({
+        message: "borrowerId, from, to are required"
+      });
+    }
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const transactions = await Transaction.find({
+      userId: borrowerId,
+      userModel: "Customer",
+      status: "successful",
+      createdAt: {
+        $gte: new Date(from),
+        $lte: new Date(to)
+      }
+    });
+
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+
+    transactions.forEach(tx => {
+      if (tx.type.includes("deposit")) {
+        totalDeposits += tx.amount;
+      }
+      if (tx.type.includes("withdraw")) {
+        totalWithdrawals += tx.amount;
+      }
+    });
+
+    const message = `
+IZI FINANCE STATEMENT
+
+Customer: ${borrower.fullName}
+Period: ${from} - ${to}
+
+Deposits: KES ${totalDeposits}
+Withdrawals: KES ${totalWithdrawals}
+Current Balance: KES ${borrower.savingsBalance}
+
+Thank you.
+`;
+
+    await sendSMS(borrower.phone, message);
+
+    return res.status(200).json({
+      success: true,
+      message: "Statement SMS sent successfully",
+      smsContent: message 
+    });
+
+  } catch (error) {
+    console.error("SMS statement error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
 
 

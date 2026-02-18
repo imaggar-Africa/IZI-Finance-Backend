@@ -83,6 +83,20 @@ router.get(
   loanController.getPaymentInstructions
 );
 
+// routes/reportRoutes.js
+router.get(
+  "/customer-statement/:borrowerId",
+  protect,
+  authorizeRoles("lender"),
+loanController.getCustomerStatement
+);
+
+router.post(
+  "/send-statement-sms",
+  protect,
+  authorizeRoles("lender"),
+  loanController.sendStatementSMS
+);
 
 
 module.exports = router;

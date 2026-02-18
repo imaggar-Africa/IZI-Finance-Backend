@@ -612,7 +612,7 @@ New Balance: KES ${loan.balance}
       }
     }
     /* ===================== SAVINGS (LENDER DEPOSIT) ===================== */
-if (transaction.type === "savings") {
+    if (transaction.type === "savings") {
 
   const user = await User.findById(transaction.userId);
   if (!user) throw new Error("User not found");
@@ -632,7 +632,30 @@ if (transaction.type === "savings") {
     message: `KES ${amount} has been added to your wallet.`,
     type: "deposit"
   });
-}
+    }
+
+   /* ===================== CUSTOMER SAVINGS DEPOSIT ===================== */
+    if (transaction.type === "customer deposit") {
+
+  const borrower = await Customer.findById(transaction.userId);
+  if (!borrower) throw new Error("Borrower not found");
+
+  transaction.balanceBefore = borrower.savingsBalance;
+
+  borrower.savingsBalance += amount;
+
+  transaction.balanceAfter = borrower.savingsBalance;
+
+  await borrower.save();
+
+  await Notification.create({
+    userId: borrower._id,
+    userModel: "Customer",
+    title: "Savings Deposit Successful",
+    message: `KES ${amount} has been added to your savings.`,
+    type: "deposit"
+  });
+    }
 
 
     await transaction.save();
@@ -650,9 +673,6 @@ if (transaction.type === "savings") {
     });
   }
 };
-
-
-
 
 
 // ✅ Agent Commission Handler for Full Repayment

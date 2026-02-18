@@ -11,8 +11,8 @@ let isSMSInitialized = false;
 const initSMS = () => {
   if (isSMSInitialized) return;
 
-  const AT_USERNAME = (global.config?.atUsername || "").trim();
-  const AT_API_KEY = (global.config?.atApiKey || "").trim();
+  const AT_USERNAME = (process.env.AT_USERNAME || "").trim();
+  const AT_API_KEY = (process.env.AT_API_KEY || "").trim();
 
   if (!AT_USERNAME || !AT_API_KEY) {
     console.warn("⚠️ AfricasTalking credentials missing; SMS disabled");
@@ -34,6 +34,7 @@ const initSMS = () => {
 
   isSMSInitialized = true;
 };
+
 
 // ------------------------------
 // Send SMS function
