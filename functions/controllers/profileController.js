@@ -1,6 +1,7 @@
 const Profile = require('../models/Profile');
 const User = require("../models/User");
 const uploadToFirebase = require("../utils/uploadToFirebase");
+const bcrypt = require("bcryptjs");
 
 exports.getProfile = async (req, res) => {
   try {
@@ -114,4 +115,47 @@ exports.getCustomerProfile = async (req, res) => {
     } catch (error) {
       res.status(500).json({ message: "Server error", error });
     }
+};
+
+exports.changeLenderPassword = async (req, res) => {
+  try {
+    if (req.user.role !== "lender") {
+      return res.status(403).json({ message: "Only lenders allowed" });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        message: "Current password and new password are required" 
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        message: "New password must be at least 6 characters"
+      });
+    }
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Current password is incorrect" });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+
+    await user.save();
+
+    return res.json({ message: "Password updated successfully" });
+
+  } catch (error) {
+    console.error("Password change error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
