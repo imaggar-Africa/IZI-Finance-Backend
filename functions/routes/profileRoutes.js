@@ -22,11 +22,11 @@ router.put(
 
 router.get("/customer/:phone", protect, profileController.getCustomerProfile);
 
-router.put(
-  "/change-password",
-  protect,
-  profileController.changeLenderPassword
-);
+// router.put(
+//   "/change-password",
+//   protect,
+//   profileController.changeLenderPassword
+// );
 
 
 module.exports = router;
