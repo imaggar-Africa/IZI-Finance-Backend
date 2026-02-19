@@ -349,13 +349,25 @@ exports.issueLoan = async (req, res) => {
       throw new Error("All fields are required");
     }
 
+    
     /* ---------------- LENDER ---------------- */
-    const lender = await User.findById(lenderId).session(session);
-    if (!lender) throw new Error("Lender not found");
+const lender = await User.findById(lenderId).session(session);
+if (!lender) throw new Error("Lender not found");
 
-    if (lender.walletBalance < amount) {
-      throw new Error("Insufficient wallet balance");
-    }
+/* 🔒 COMPANY KYC RESTRICTION */
+if (
+  lender.accountType === "company" &&
+  lender.kycStatus !== "approved"
+) {
+  throw new Error("Company KYC not approved. Cannot issue loan.");
+}
+
+if (lender.walletBalance < amount) {
+  throw new Error("Insufficient wallet balance");
+}
+
+
+  
 
     /* ---------------- BORROWER ---------------- */
     const borrower = await Customer.findById(borrowerId).session(session);
@@ -1013,6 +1025,7 @@ exports.reviewLoanRequest = async (req, res) => {
     const { loanId, action } = req.body;
     const lenderId = req.user._id;
 
+
     /* ===============================
        1️⃣ BASIC VALIDATION
     =============================== */
@@ -1023,6 +1036,10 @@ exports.reviewLoanRequest = async (req, res) => {
     if (!["approved", "rejected"].includes(action)) {
       throw new Error("action must be 'approved' or 'rejected'");
     }
+
+
+
+
 
     /* ===============================
        2️⃣ FETCH LOAN
@@ -1051,6 +1068,15 @@ exports.reviewLoanRequest = async (req, res) => {
     const borrower = loan.borrowerId;
     const agent = loan.requestedByAgentId;
     const lender = loan.lenderId;
+
+    
+    /* 🔒 COMPANY KYC RESTRICTION */
+if (
+  lender.accountType === "company" &&
+  lender.kycStatus !== "approved"
+) {
+  throw new Error("Company KYC not approved. Cannot approve loan.");
+}
 
     /* ===============================
        4️⃣ REJECTION FLOW

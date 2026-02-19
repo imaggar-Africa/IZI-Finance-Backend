@@ -6,6 +6,8 @@ const { issueSession, signAccess } = require("../utils/tokens-redis");
 const OTP = require("../models/OTP");
 const uploadToFirebase = require("../utils/uploadToFirebase");
 const Loan = require("../models/Loan");
+const { normalizePhone } = require("../utils/normalizePhone");
+const { generateAccountId } = require("../utils/generateAccountId");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents

@@ -163,8 +163,9 @@ cron.schedule("0 9 * * *", async () => {
   app.use("/api", urlEncodedParser, require("./routes/paymentPage"));
   app.use("/api", urlEncodedParser, require("./routes/stkPayment"));
   app.use("/debug", require("./routes/debug"));
-  app.use("/api/groups", require("./routes/groupRoutes"));
-  app.use("/api/agent-groups", require("./routes/agentGroupRoutes"));
+  app.use("/api/groups",jsonParser, require("./routes/groupRoutes"));
+  app.use("/api/agent-groups",jsonParser, require("./routes/agentGroupRoutes"));
+  app.use("/api/kyc/company",jsonParser, require("./routes/companyKycRoutes"));
 
 
 

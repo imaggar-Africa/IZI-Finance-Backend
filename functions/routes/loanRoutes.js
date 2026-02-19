@@ -4,10 +4,11 @@ const router = express.Router();
 const loanController = require("../controllers/loanController");
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
+const loanRestriction = require("../middleware/loanRestriction");
 
 2
 // Issue loan
-router.post("/issue", protect, loanController.issueLoan);
+router.post("/issue", protect,loanRestriction, loanController.issueLoan);
 
 // Outstanding loans (borrower)
 router.post(
@@ -64,6 +65,7 @@ router.get(
 router.post(
   "/review-loan",
   protect,
+  loanRestriction,
   authorizeRoles("lender"),
   loanController.reviewLoanRequest
 );

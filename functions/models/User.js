@@ -11,6 +11,18 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true
     },
+   accountType: {
+  type: String,
+  enum: ["individual", "company"],
+  required: true
+},
+
+kycStatus: {
+  type: String,
+  enum: ["pending", "approved", "rejected"],
+  default: "pending"
+},
+
 
     phone: {
       type: String,
