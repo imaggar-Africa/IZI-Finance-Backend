@@ -20,62 +20,105 @@ const { generateAccountId } = require("../utils/generateAccountId");
 
 const registerAgent = async (req, res) => {
   try {
-    const lenderId = req.user._id; // from protect middleware
-    const { name, phone, password } = req.body;
-    console.log("ph:",phone);
-    
+    const lenderId = req.user._id;
+
+    const {
+      name,
+      phone,
+      password,
+      registrationCommissionPercent,
+      repaymentCommissionType,
+      repaymentCommissionPercent,
+      repaymentCommissionFixed
+    } = req.body;
+
     if (!name || !phone || !password) {
-      return res.status(400).json({ message: "Please provide name, phone, and password" });
+      return res.status(400).json({
+        message: "Name, phone and password are required"
+      });
     }
 
-        // ✅ Password must be exactly 6 digits (numbers only)
+    // Password must be 6 digits
     const passwordRegex = /^\d{6}$/;
     if (!passwordRegex.test(password)) {
       return res.status(400).json({
-        message: "Password must be exactly 6 digits and contain only numbers (e.g., 123456)"
+        message: "Password must be exactly 6 digits"
       });
     }
-    // Only lenders can register agents
+
     if (req.user.role !== "lender") {
-      console.log();
-      
-      return res.status(403).json({ message: "Only lenders can register agents" });
+      return res.status(403).json({
+        message: "Only lenders can register agents"
+      });
     }
 
-    // Check if phone already exists
     const existingAgent = await AgentModel.findOne({ phone });
     if (existingAgent) {
-      return res.status(400).json({ message: "Agent with this phone number already exists" });
+      return res.status(400).json({
+        message: "Agent with this phone already exists"
+      });
     }
-const plainPassword = password; // keep a copy
-    // Create agent
+
+    // Validate commission logic
+    if (repaymentCommissionType === "percentage" && !repaymentCommissionPercent) {
+      return res.status(400).json({
+        message: "Repayment commission percentage required"
+      });
+    }
+
+    if (repaymentCommissionType === "fixed" && !repaymentCommissionFixed) {
+      return res.status(400).json({
+        message: "Repayment commission fixed amount required"
+      });
+    }
+
     const agent = await AgentModel.create({
       lenderId,
       name,
-      role:"agent",
       phone,
-      password
+      password,
+      registrationCommissionPercent: registrationCommissionPercent || 0,
+      repaymentCommissionType,
+      repaymentCommissionPercent:
+        repaymentCommissionType === "percentage"
+          ? repaymentCommissionPercent
+          : 0,
+      repaymentCommissionFixed:
+        repaymentCommissionType === "fixed"
+          ? repaymentCommissionFixed
+          : 0
     });
 
-    if (agent) {
-      return res.status(201).json({
-        _id: agent._id,
-        name: agent.name,
-        phone: agent.phone,
-        password: plainPassword ,// return it safely
-        status: agent.status,
-        totalCustomers: agent.totalCustomers,
-        totalEarnings: agent.totalEarnings,
-        role: agent.role
-      });
-    } else {
-      return res.status(400).json({ message: "Invalid agent data" });
-    }
+   return res.status(201).json({
+  success: true,
+  agent: {
+    id: agent._id,
+    name: agent.name,
+    phone: agent.phone,
+
+    registrationCommissionPercent:
+      agent.registrationCommissionPercent,
+
+    repaymentCommissionType:
+      agent.repaymentCommissionType,
+
+    repaymentCommissionPercent:
+      agent.repaymentCommissionPercent,
+
+    repaymentCommissionFixed:
+      agent.repaymentCommissionFixed
+  }
+});
+
+
   } catch (error) {
-    console.error("Error registering agent:", error);
-    return res.status(500).json({ message: "Server error while registering agent" });
+    console.error("Register agent error:", error);
+    return res.status(500).json({
+      message: "Server error"
+    });
   }
 };
+
 
 
 
