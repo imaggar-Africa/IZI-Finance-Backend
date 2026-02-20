@@ -6,7 +6,7 @@ const agentSchema = new mongoose.Schema(
   {
     lenderId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User", 
+      ref: "User",
       required: true
     },
 
@@ -78,7 +78,17 @@ const agentSchema = new mongoose.Schema(
     role: {
       type: String,
       default: "agent"
-    }
+    },
+
+    /* ===============================
+       🔥 ADD THIS BACK
+    =============================== */
+    customers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Customer"
+      }
+    ]
   },
   { timestamps: true }
 );
