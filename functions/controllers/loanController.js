@@ -560,8 +560,8 @@ exports.getFullyPaidLoans = async (req, res) => {
       status: "fully paid"
     }).populate("borrowerId");
 
-    // Total fully paid loans
-    const totalLoansPaid = loans.length;
+    // ✅ Calculate total fully paid amount
+    let totalFullyPaidAmount = 0;
 
     // Count fully paid loans per borrower
     const loanCountMap = {};
@@ -570,8 +570,12 @@ exports.getFullyPaidLoans = async (req, res) => {
       const borrowerId = loan.borrowerId?._id?.toString();
       if (!borrowerId) return;
 
+      // Count loans per borrower
       loanCountMap[borrowerId] =
         (loanCountMap[borrowerId] || 0) + 1;
+
+      // Sum total repayment amount
+      totalFullyPaidAmount += loan.totalRepayment || 0;
     });
 
     // Add fullyPaidLoanCount inside borrower data
@@ -592,7 +596,7 @@ exports.getFullyPaidLoans = async (req, res) => {
 
     res.status(200).json({
       totalCustomers,
-      totalLoansPaid,
+      totalFullyPaidAmount, // ✅ replaced totalLoansPaid
       loans: updatedLoans
     });
 

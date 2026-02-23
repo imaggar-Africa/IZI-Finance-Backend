@@ -4,7 +4,8 @@ const { sendMoneyToBorrower } = require("../utils/mpesa");
 const AgentModel = require("../models/AgentModel");
 const Loan = require("../models/Loan");
 
-const Customer = require("../models/customer.js")
+const Customer = require("../models/customer.js");
+const Guarantor = require("../models/Guarantor.js");
 // Send money to borrower (B2C)
 exports.sendMoneyToBorrower = async (req, res) => {
   try {
@@ -71,9 +72,26 @@ exports.getAllCustomersForLender = async (req, res) => {
       .populate("agentId", "name phone status")
       .sort({ createdAt: -1 });
 
+    // ✅ NEW: Fetch all guarantors in single query (optimized)
+    const customerIds = customers.map(c => c._id);
+
+    const allGuarantors = await Guarantor.find({
+      borrowerId: { $in: customerIds },
+      isDeleted: false
+    });
+
+    // ✅ Group guarantors by borrowerId
+    const guarantorMap = {};
+    allGuarantors.forEach(g => {
+      const id = g.borrowerId.toString();
+      if (!guarantorMap[id]) guarantorMap[id] = [];
+      guarantorMap[id].push(g);
+    });
+
     // 3️⃣ Attach outstanding loan + computed status
     const customersWithStatus = await Promise.all(
       customers.map(async (customer) => {
+
         const loan = await Loan.findOne({
           borrowerId: customer._id,
           loanRequestStatus: "approved",
@@ -82,8 +100,7 @@ exports.getAllCustomersForLender = async (req, res) => {
 
         const creditScore = customer.creditScore ?? null;
 
-
-        // ✅ ADD: Risk Level Calculation (TASK REQUIREMENT)
+        // ✅ Risk Level Calculation
         let riskLevel = null;
         if (creditScore !== null) {
           if (creditScore >= 800) riskLevel = "Low";
@@ -91,11 +108,12 @@ exports.getAllCustomersForLender = async (req, res) => {
           else riskLevel = "High";
         }
 
-        // ✅ Base customer object
+        // ✅ Base customer object (ONLY addition: guarantors)
         const baseCustomer = {
           ...customer.toObject(),
           creditScore,
-          riskLevel
+          riskLevel,
+          guarantors: guarantorMap[customer._id.toString()] || []
         };
 
         // 🔹 No active loan
