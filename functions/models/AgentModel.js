@@ -27,6 +27,27 @@ const agentSchema = new mongoose.Schema(
       required: true
     },
 
+    enforcementLevel: {
+  type: Number,
+  enum: [0, 1, 2, 3], // 0 = normal
+  default: 0
+},
+
+warningReason: {
+  type: String,
+  default: null
+},
+
+suspensionUntil: {
+  type: Date,
+  default: null
+},
+
+blockReason: {
+  type: String,
+  default: null
+},
+
     /* ===============================
        REGISTRATION COMMISSION
     =============================== */
@@ -56,7 +77,7 @@ const agentSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["Active", "Inactive"],
+      enum: ["Active", "Inactive","Suspended","blocked"],
       default: "Active"
     },
 

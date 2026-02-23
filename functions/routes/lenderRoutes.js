@@ -9,5 +9,8 @@ router.post("/send-money", lenderController.sendMoneyToBorrower);
 router.get("/customers", protect, authorizeRoles("lender"),lenderController.getAllCustomersForLender);
 router.post("/assign-customer", protect, authorizeRoles("lender"), lenderController.assignCustomerToAgent);
 router.get("/agents", protect,authorizeRoles("lender"), lenderController.getAgentsByLender);
+router.put("/agent/:agentId", protect,authorizeRoles("lender"), lenderController.editAgent);
+router.delete("/agent/:agentId", protect,authorizeRoles("lender"), lenderController.removeAgent);
+router.patch("/agent/:agentId/enforce", protect,authorizeRoles("lender"), lenderController.enforceAgent);
 
 module.exports = router;

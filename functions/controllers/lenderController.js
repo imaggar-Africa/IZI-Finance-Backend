@@ -486,26 +486,105 @@ exports.removeAgent = async (req, res) => {
       return res.status(404).json({ message: "Agent not found" });
     }
 
+    // 🔐 Ownership check
     if (agent.lenderId.toString() !== lenderId.toString()) {
       return res.status(403).json({
         message: "You are not allowed to remove this agent"
       });
     }
 
+    // ✅ Soft delete properly
     agent.isDeleted = true;
-    agent.status = "removed";
+    agent.status = "Inactive";   // 👈 use valid enum value
+    agent.enforcementLevel = 3;  // permanently blocked
+    agent.blockReason = "Removed by lender";
+    agent.suspensionUntil = null;
+    agent.warningReason = null;
+
     await agent.save();
 
+    // 🔄 Optional: Unassign customers
+    await Customer.updateMany(
+      { assignedAgent: agentId },
+      { $unset: { assignedAgent: "" } }
+    );
+
     res.status(200).json({
-      message: "Agent removed successfully"
+      success: true,
+      message: "Agent marked as InActive successfully"
     });
 
   } catch (error) {
     console.error("❌ Error removing agent:", error);
     res.status(500).json({
+      success: false,
       message: "Server error",
       error: error.message
     });
   }
 };
 
+exports.enforceAgent = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const { agentId } = req.params;
+    const { level, reason, suspensionHours } = req.body;
+
+    const agent = await AgentModel.findById(agentId);
+    if (!agent) {
+      return res.status(404).json({ message: "Agent not found" });
+    }
+
+    // Ownership validation
+    if (agent.lenderId.toString() !== lenderId.toString()) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // LEVEL 1 — WARNING
+    if (level === 1) {
+      agent.enforcementLevel = 1;
+      agent.warningReason = reason || "Policy warning issued";
+      agent.status = "Active";
+    }
+
+    // LEVEL 2 — TEMP SUSPENSION
+    else if (level === 2) {
+      const hours = suspensionHours || 24; // default 24h
+      const suspensionDate = new Date();
+      suspensionDate.setHours(suspensionDate.getHours() + hours);
+
+      agent.enforcementLevel = 2;
+      agent.suspensionUntil = suspensionDate;
+      agent.blockReason = reason || "Temporary suspension";
+      agent.status = "Suspended";
+    }
+
+    // LEVEL 3 — PERMANENT BLOCK
+    else if (level === 3) {
+      agent.enforcementLevel = 3;
+      agent.status = "Blocked";
+      agent.blockReason = reason || "Permanent block";
+      agent.suspensionUntil = null;
+    }
+
+    else {
+      return res.status(400).json({
+        message: "Invalid enforcement level (1, 2, or 3 required)"
+      });
+    }
+
+    await agent.save();
+
+    res.status(200).json({
+      message: "Enforcement applied successfully",
+      agent
+    });
+
+  } catch (error) {
+    console.error("❌ Enforcement error:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
