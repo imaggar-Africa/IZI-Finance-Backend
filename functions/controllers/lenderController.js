@@ -72,7 +72,27 @@ exports.getAllCustomersForLender = async (req, res) => {
       .populate("agentId", "name phone status")
       .sort({ createdAt: -1 });
 
-    // ✅ NEW: Fetch all guarantors in single query (optimized)
+    /* =====================================================
+       ✅ NEW: FETCH REFERRED BORROWERS (OPTIMIZED)
+    ===================================================== */
+
+    const referredIds = customers
+      .map(c => c.referredByBorrowerId)
+      .filter(id => id !== null);
+
+    const referredBorrowers = await Customer.find({
+      _id: { $in: referredIds }
+    }).select("fullName phone");
+
+    const referredMap = {};
+    referredBorrowers.forEach(rb => {
+      referredMap[rb._id.toString()] = rb;
+    });
+
+    /* =====================================================
+       ✅ FETCH GUARANTORS (EXISTING OPTIMIZED LOGIC)
+    ===================================================== */
+
     const customerIds = customers.map(c => c._id);
 
     const allGuarantors = await Guarantor.find({
@@ -80,7 +100,6 @@ exports.getAllCustomersForLender = async (req, res) => {
       isDeleted: false
     });
 
-    // ✅ Group guarantors by borrowerId
     const guarantorMap = {};
     allGuarantors.forEach(g => {
       const id = g.borrowerId.toString();
@@ -108,12 +127,16 @@ exports.getAllCustomersForLender = async (req, res) => {
           else riskLevel = "High";
         }
 
-        // ✅ Base customer object (ONLY addition: guarantors)
+        // ✅ Base customer object (ONLY additions: guarantors + referredByBorrower)
         const baseCustomer = {
           ...customer.toObject(),
           creditScore,
           riskLevel,
-          guarantors: guarantorMap[customer._id.toString()] || []
+          guarantors: guarantorMap[customer._id.toString()] || [],
+          referredByBorrower:
+            customer.referredByBorrowerId
+              ? referredMap[customer.referredByBorrowerId.toString()] || null
+              : null
         };
 
         // 🔹 No active loan
@@ -397,3 +420,92 @@ exports.updateCustomerProfile = async (req, res) => {
     });
   }
 };
+
+
+exports.editAgent = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const { agentId } = req.params;
+    const { name, phone, email, status } = req.body;
+
+    const agent = await AgentModel.findById(agentId);
+    if (!agent) {
+      return res.status(404).json({ message: "Agent not found" });
+    }
+
+    // ✅ Ownership check
+    if (agent.lenderId.toString() !== lenderId.toString()) {
+      return res.status(403).json({
+        message: "You are not allowed to edit this agent"
+      });
+    }
+
+    // ✅ Phone uniqueness check
+    if (phone && phone !== agent.phone) {
+      const existing = await AgentModel.findOne({
+        phone,
+        _id: { $ne: agentId }
+      });
+
+      if (existing) {
+        return res.status(409).json({
+          message: "Phone number already in use"
+        });
+      }
+
+      agent.phone = phone;
+    }
+
+    if (name) agent.name = name;
+    if (email) agent.email = email;
+    if (status) agent.status = status;
+
+    await agent.save();
+
+    res.status(200).json({
+      message: "Agent updated successfully",
+      agent
+    });
+
+  } catch (error) {
+    console.error("❌ Error editing agent:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+exports.removeAgent = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const { agentId } = req.params;
+
+    const agent = await AgentModel.findById(agentId);
+    if (!agent) {
+      return res.status(404).json({ message: "Agent not found" });
+    }
+
+    if (agent.lenderId.toString() !== lenderId.toString()) {
+      return res.status(403).json({
+        message: "You are not allowed to remove this agent"
+      });
+    }
+
+    agent.isDeleted = true;
+    agent.status = "removed";
+    await agent.save();
+
+    res.status(200).json({
+      message: "Agent removed successfully"
+    });
+
+  } catch (error) {
+    console.error("❌ Error removing agent:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
