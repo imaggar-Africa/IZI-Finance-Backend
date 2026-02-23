@@ -807,89 +807,142 @@ exports.getBorrowerSummary = async (req, res) => {
 /* =====================================================
    🆕 EDIT BORROWER PROFILE (SAFE UPDATE)
 ===================================================== */
+
 exports.updateBorrowerProfile = async (req, res) => {
   try {
     const { customerId } = req.params;
 
-    // 1️⃣ Ensure customer exists
-    const customer = await Borrower.findById(customerId);
-    if (!customer) {
-      return res.status(404).json({
-        message: "Customer not found"
-      });
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
     }
 
-    /* =====================================================
-       ✅ SAFE FULL UPDATE (All Borrower Fields Editable)
-    ===================================================== */
+    const borrower = await Borrower.findById(customerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
 
-    // Fields that must NEVER be edited
-    const restrictedFields = [
+    /* ================= BORROWER UPDATE ================= */
+
+    const restrictedBorrowerFields = [
       "_id",
+      "creditScore",
+      "creditLevel",
+      "maxLoanLimit",
+      "totalLoans",
+      "completedLoans",
+      "overdueLoans",
+      "lastScoreUpdate",
       "createdAt",
       "updatedAt",
       "__v",
-      "creditScore",        // system controlled
-      "registeredBy",
-      "registeredByModel",
       "isDeleted"
     ];
 
-    const updateData = {};
+    const borrowerUpdateData = {};
 
-    // Take everything from body except restricted fields
     Object.keys(req.body).forEach((key) => {
-      if (!restrictedFields.includes(key)) {
-        updateData[key] = req.body[key];
+      if (
+        !restrictedBorrowerFields.includes(key) &&
+        !key.startsWith("guarantor")
+      ) {
+        borrowerUpdateData[key] = req.body[key];
       }
     });
 
-    /* =====================================================
-       🆕 PHOTO UPDATE (KEEPING YOUR EXISTING FLOW)
-    ===================================================== */
+    if (borrowerUpdateData.phone) {
+      const normalized = normalizePhone(borrowerUpdateData.phone);
+      if (!normalized) {
+        return res.status(400).json({ message: "Invalid borrower phone" });
+      }
+      borrowerUpdateData.phone = normalized;
+    }
 
-    if (req.files?.livePhoto?.[0]) {
-      updateData.livePhoto = await uploadToFirebase(
-        req.files.livePhoto[0],
-        "livePhoto"
+    borrowerUpdateData.updatedAt = Date.now();
+
+    if (Object.keys(borrowerUpdateData).length > 0) {
+      await Borrower.updateOne(
+        { _id: customerId },
+        { $set: borrowerUpdateData }
       );
     }
 
-    if (req.files?.frontID?.[0]) {
-      updateData.frontID = await uploadToFirebase(
-        req.files.frontID[0],
-        "frontID"
-      );
+    /* ================= GUARANTOR UPDATE ================= */
+
+    const guarantor = await Guarantor.findOne({
+      $or: [
+        { borrowerId: customerId },
+        { borrowerId: new mongoose.Types.ObjectId(customerId) }
+      ],
+      isDeleted: false
+    });
+
+    if (guarantor) {
+      const guarantorUpdateData = {};
+
+      if (req.body.guarantorFullName)
+        guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
+
+    const relationshipInput =
+  req.body.guarantorRelationship || req.body.relationship;
+
+if (relationshipInput !== undefined) {
+  guarantorUpdateData.relationship =
+    String(relationshipInput).trim();
+}
+
+      if (req.body.guarantorIdNumber)
+        guarantorUpdateData.idNumber =
+          req.body.guarantorIdNumber.trim();
+
+      if (req.body.guarantorPhone) {
+        const normalizedPhone = normalizePhone(req.body.guarantorPhone);
+
+        if (!normalizedPhone) {
+          return res.status(400).json({
+            message: "Invalid guarantor phone"
+          });
+        }
+
+        if (normalizedPhone !== guarantor.phone) {
+          guarantorUpdateData.phone = normalizedPhone;
+          guarantorUpdateData.consent = false;
+          guarantorUpdateData.isVerified = false;
+          guarantorUpdateData.consent_timestamp = null;
+        }
+      }
+
+      if (Object.keys(guarantorUpdateData).length > 0) {
+        await Guarantor.updateOne(
+          { _id: guarantor._id },
+          { $set: guarantorUpdateData }
+        );
+      }
     }
 
-    if (req.files?.backID?.[0]) {
-      updateData.backID = await uploadToFirebase(
-        req.files.backID[0],
-        "backID"
-      );
-    }
+    /* ================= FINAL FETCH ================= */
 
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({
-        message: "No valid fields provided for update"
-      });
-    }
-
-    // 4️⃣ Partial update
-    const updatedCustomer = await Borrower.findByIdAndUpdate(
-      customerId,
-      { $set: updateData },
-      { new: true }
-    );
+    const updatedBorrower = await Borrower.findById(customerId);
+    const updatedGuarantor = await Guarantor.findOne({
+      borrowerId: customerId,
+      isDeleted: false
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Customer updated successfully",
-      customer: updatedCustomer
+      message: "Customer and guarantor updated successfully",
+      borrower: updatedBorrower,
+      guarantor: updatedGuarantor
     });
 
   } catch (error) {
     console.error("❌ updateBorrowerProfile error:", error);
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: "Duplicate guarantor phone for this borrower"
+      });
+    }
+
     return res.status(500).json({
       message: "Server error",
       error: error.message

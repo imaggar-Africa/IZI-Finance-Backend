@@ -57,7 +57,7 @@ const guarantorSchema = new mongoose.Schema(
   {
     borrowerId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "customer",
+      ref: "Customer",
       required: true,
       index: true,
     },

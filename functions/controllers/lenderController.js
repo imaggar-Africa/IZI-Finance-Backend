@@ -3,6 +3,8 @@ const Transaction = require("../models/Transaction");
 const { sendMoneyToBorrower } = require("../utils/mpesa");
 const AgentModel = require("../models/AgentModel");
 const Loan = require("../models/Loan");
+const { normalizePhone } = require("../utils/normalizePhone");
+
 
 const Customer = require("../models/customer.js");
 const Guarantor = require("../models/Guarantor.js");
@@ -348,73 +350,138 @@ exports.getAgentsByLender = async (req, res) => {
 /* =====================================================
    🆕 EDIT CUSTOMER PROFILE (LENDER ONLY)
 ===================================================== */
-exports.updateCustomerProfile = async (req, res) => {
+exports.updateBorrowerProfile = async (req, res) => {
   try {
-    const lenderId = req.user._id;
     const { customerId } = req.params;
 
-    const {
-      fullName,
-      phone,
-      idNumber,
-      address,
-      isVerified
-    } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
 
-    // 🔹 Fetch customer
-    const customer = await Customer.findById(customerId);
-    if (!customer || customer.isDeleted) {
+    const borrower = await Borrower.findById(customerId);
+    if (!borrower) {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    // 🔹 Validate ownership (lender or lender's agent)
-    const agents = await AgentModel.find({ lenderId }).select("_id");
-    const agentIds = agents.map(a => a._id.toString());
+    /* ================= BORROWER UPDATE ================= */
 
-    const isOwned =
-      (customer.registeredBy?.toString() === lenderId.toString() &&
-        customer.registeredByModel === "User") ||
-      (agentIds.includes(customer.registeredBy?.toString()) &&
-        customer.registeredByModel === "Agent");
+    const restrictedBorrowerFields = [
+      "_id",
+      "creditScore",
+      "creditLevel",
+      "maxLoanLimit",
+      "totalLoans",
+      "completedLoans",
+      "overdueLoans",
+      "lastScoreUpdate",
+      "createdAt",
+      "updatedAt",
+      "__v",
+      "isDeleted"
+    ];
 
-    if (!isOwned) {
-      return res.status(403).json({
-        message: "You are not allowed to edit this customer"
-      });
+    const borrowerUpdateData = {};
+
+    Object.keys(req.body).forEach((key) => {
+      if (
+        !restrictedBorrowerFields.includes(key) &&
+        !key.startsWith("guarantor")
+      ) {
+        borrowerUpdateData[key] = req.body[key];
+      }
+    });
+
+    if (borrowerUpdateData.phone) {
+      const normalized = normalizePhone(borrowerUpdateData.phone);
+      if (!normalized) {
+        return res.status(400).json({ message: "Invalid borrower phone" });
+      }
+      borrowerUpdateData.phone = normalized;
     }
 
-    // 🔹 Phone uniqueness check
-    if (phone && phone !== customer.phone) {
-      const existing = await Customer.findOne({
-        phone,
-        _id: { $ne: customerId }
-      });
+    borrowerUpdateData.updatedAt = Date.now();
 
-      if (existing) {
-        return res.status(409).json({
-          message: "Phone number already in use"
-        });
+    if (Object.keys(borrowerUpdateData).length > 0) {
+      await Borrower.updateOne(
+        { _id: customerId },
+        { $set: borrowerUpdateData }
+      );
+    }
+
+    /* ================= GUARANTOR UPDATE ================= */
+
+    const guarantor = await Guarantor.findOne({
+      $or: [
+        { borrowerId: customerId },
+        { borrowerId: new mongoose.Types.ObjectId(customerId) }
+      ],
+      isDeleted: false
+    });
+
+    if (guarantor) {
+      const guarantorUpdateData = {};
+
+      if (req.body.guarantorFullName)
+        guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
+
+      if (req.body.guarantorRelationship)
+        guarantorUpdateData.relationship =
+          req.body.guarantorRelationship.trim();
+
+      if (req.body.guarantorIdNumber)
+        guarantorUpdateData.idNumber =
+          req.body.guarantorIdNumber.trim();
+
+      if (req.body.guarantorPhone) {
+        const normalizedPhone = normalizePhone(req.body.guarantorPhone);
+
+        if (!normalizedPhone) {
+          return res.status(400).json({
+            message: "Invalid guarantor phone"
+          });
+        }
+
+        if (normalizedPhone !== guarantor.phone) {
+          guarantorUpdateData.phone = normalizedPhone;
+          guarantorUpdateData.consent = false;
+          guarantorUpdateData.isVerified = false;
+          guarantorUpdateData.consent_timestamp = null;
+        }
       }
 
-      customer.phone = phone;
+      if (Object.keys(guarantorUpdateData).length > 0) {
+        await Guarantor.updateOne(
+          { _id: guarantor._id },
+          { $set: guarantorUpdateData }
+        );
+      }
     }
 
-    // 🔹 Update allowed fields only
-    if (fullName) customer.fullName = fullName;
-    if (idNumber) customer.idNumber = idNumber;
-    if (address) customer.address = address;
-    if (typeof isVerified === "boolean") customer.isVerified = isVerified;
+    /* ================= FINAL FETCH ================= */
 
-    await customer.save();
+    const updatedBorrower = await Borrower.findById(customerId);
+    const updatedGuarantor = await Guarantor.findOne({
+      borrowerId: customerId,
+      isDeleted: false
+    });
 
     return res.status(200).json({
-      message: "Customer profile updated successfully",
-      customer
+      success: true,
+      message: "Customer and guarantor updated successfully",
+      borrower: updatedBorrower,
+      guarantor: updatedGuarantor
     });
 
   } catch (error) {
-    console.error("❌ Error updating customer:", error);
-    res.status(500).json({
+    console.error("❌ updateBorrowerProfile error:", error);
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: "Duplicate guarantor phone for this borrower"
+      });
+    }
+
+    return res.status(500).json({
       message: "Server error",
       error: error.message
     });
