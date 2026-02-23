@@ -424,9 +424,13 @@ exports.updateBorrowerProfile = async (req, res) => {
       if (req.body.guarantorFullName)
         guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
 
-      if (req.body.guarantorRelationship)
-        guarantorUpdateData.relationship =
-          req.body.guarantorRelationship.trim();
+        const relationshipInput =
+  req.body.guarantorRelationship || req.body.relationship;
+
+if (relationshipInput !== undefined) {
+  guarantorUpdateData.relationship =
+    String(relationshipInput).trim();
+}
 
       if (req.body.guarantorIdNumber)
         guarantorUpdateData.idNumber =
