@@ -554,26 +554,111 @@ exports.getActiveLoansByPhone = async (req, res) => {
    4️⃣ GET FULLY PAID LOANS
 ===================================================== */
 exports.getFullyPaidLoans = async (req, res) => {
-  const loans = await Loan.find({
-    loanRequestStatus: "approved",
-    status: "fully paid"
-  }).populate("borrowerId");
+  try {
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      status: "fully paid"
+    }).populate("borrowerId");
 
-  res.status(200).json({ loans });
+    // Total fully paid loans
+    const totalLoansPaid = loans.length;
+
+    // Count fully paid loans per borrower
+    const loanCountMap = {};
+
+    loans.forEach((loan) => {
+      const borrowerId = loan.borrowerId?._id?.toString();
+      if (!borrowerId) return;
+
+      loanCountMap[borrowerId] =
+        (loanCountMap[borrowerId] || 0) + 1;
+    });
+
+    // Add fullyPaidLoanCount inside borrower data
+    const updatedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      if (loanObj.borrowerId && loanObj.borrowerId._id) {
+        const borrowerId = loanObj.borrowerId._id.toString();
+        loanObj.borrowerId.fullyPaidLoanCount =
+          loanCountMap[borrowerId] || 0;
+      }
+
+      return loanObj;
+    });
+
+    // Unique customers
+    const totalCustomers = Object.keys(loanCountMap).length;
+
+    res.status(200).json({
+      totalCustomers,
+      totalLoansPaid,
+      loans: updatedLoans
+    });
+
+  } catch (error) {
+    console.error("Error fetching fully paid loans:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 /* =====================================================
    5️⃣ GET FULLY PAID LOANS BY CUSTOMER
 ===================================================== */
 exports.getFullyPaidLoansByCustomer = async (req, res) => {
-  const { borrowerId } = req.params;
+  try {
+    const { borrowerId } = req.params;
 
-  const loans = await Loan.find({
-    borrowerId,
-    status: "fully paid"
-  });
+    const loans = await Loan.find({
+      borrowerId,
+      status: "fully paid"
+    }).populate("repayments"); // assuming you store payments separately
 
-  res.status(200).json({ loans });
+    let totalPaidAmount = 0;
+    let latestPaidDate = null;
+
+    const updatedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      // Total paid calculation (assuming loan has totalPaid field OR repayments array)
+      let loanTotalPaid = 0;
+      let lastPaymentDate = null;
+
+      if (loanObj.repayments && loanObj.repayments.length > 0) {
+        loanObj.repayments.forEach((payment) => {
+          loanTotalPaid += payment.amount || 0;
+
+          if (!lastPaymentDate || new Date(payment.date) > new Date(lastPaymentDate)) {
+            lastPaymentDate = payment.date;
+          }
+        });
+      }
+
+      totalPaidAmount += loanTotalPaid;
+
+      if (!latestPaidDate || new Date(lastPaymentDate) > new Date(latestPaidDate)) {
+        latestPaidDate = lastPaymentDate;
+      }
+
+      // Add required new fields (without removing old ones)
+      loanObj.loanDisbursedDate = loanObj.disbursedAt || loanObj.createdAt || null;
+      loanObj.allPaymentsDoneDate = lastPaymentDate || null;
+      loanObj.loanClosedDate = loanObj.closedAt || lastPaymentDate || null;
+
+      return loanObj;
+    });
+
+    res.status(200).json({
+      totalLoansCount: loans.length,
+      totalPaidAmount,
+      paidOnDate: latestPaidDate,
+      loans: updatedLoans
+    });
+
+  } catch (error) {
+    console.error("Error fetching fully paid loans by customer:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 /* =====================================================
