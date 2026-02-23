@@ -819,31 +819,33 @@ exports.updateBorrowerProfile = async (req, res) => {
       });
     }
 
-    // 2️⃣ Fields lender is ALLOWED to update
-    const allowedFields = [
-      "fullName",
-      "altPhoneNumber",
-      "physicalAddress",
-      "gpsLocation",
-      "occupation",
-      "monthlyIncomeRange",
-      "market",
-      "town",
-      "nextOfKinName",
-      "nextOfKinPhone",
-      "status"
+    /* =====================================================
+       ✅ SAFE FULL UPDATE (All Borrower Fields Editable)
+    ===================================================== */
+
+    // Fields that must NEVER be edited
+    const restrictedFields = [
+      "_id",
+      "createdAt",
+      "updatedAt",
+      "__v",
+      "creditScore",        // system controlled
+      "registeredBy",
+      "registeredByModel",
+      "isDeleted"
     ];
 
-    // 3️⃣ Build safe update object (TEXT FIELDS)
     const updateData = {};
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        updateData[field] = req.body[field];
+
+    // Take everything from body except restricted fields
+    Object.keys(req.body).forEach((key) => {
+      if (!restrictedFields.includes(key)) {
+        updateData[key] = req.body[key];
       }
     });
 
     /* =====================================================
-       🆕 PHOTO UPDATE (ADDITIVE ONLY)
+       🆕 PHOTO UPDATE (KEEPING YOUR EXISTING FLOW)
     ===================================================== */
 
     if (req.files?.livePhoto?.[0]) {
@@ -867,14 +869,13 @@ exports.updateBorrowerProfile = async (req, res) => {
       );
     }
 
-    // ❌ Nothing to update
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({
         message: "No valid fields provided for update"
       });
     }
 
-    // 4️⃣ Partial update (NO validation error)
+    // 4️⃣ Partial update
     const updatedCustomer = await Borrower.findByIdAndUpdate(
       customerId,
       { $set: updateData },
