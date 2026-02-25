@@ -11,6 +11,7 @@ const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
+const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
 
 /* =====================================================
    🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
@@ -326,7 +327,6 @@ exports.issueLoan = async (req, res) => {
 
   try {
     const lenderId = req.user._id;
-
     const {
       borrowerId,
       amount,
@@ -334,10 +334,10 @@ exports.issueLoan = async (req, res) => {
       duration,
       repaymentFrequency,
       phoneNumber,
-      agentId // ✅ NEW (optional)
+      agentId
     } = req.body;
 
-    /* ---------------- VALIDATION ---------------- */
+    /* ================= VALIDATION ================= */
     if (
       !borrowerId ||
       !amount ||
@@ -349,60 +349,52 @@ exports.issueLoan = async (req, res) => {
       throw new Error("All fields are required");
     }
 
-    
-    /* ---------------- LENDER ---------------- */
-const lender = await User.findById(lenderId).session(session);
-if (!lender) throw new Error("Lender not found");
+    /* ================= LENDER ================= */
+    const lender = await User.findById(lenderId).session(session);
+    if (!lender) throw new Error("Lender not found");
 
-/* 🔒 COMPANY KYC RESTRICTION */
-if (
-  lender.accountType === "company" &&
-  lender.kycStatus !== "approved"
-) {
-  throw new Error("Company KYC not approved. Cannot issue loan.");
-}
+    /* 🔒 COMPANY KYC RESTRICTION */
+    if (
+      lender.accountType === "company" &&
+      lender.kycStatus !== "approved"
+    ) {
+      throw new Error("Company KYC not approved. Cannot issue loan.");
+    }
 
-if (lender.walletBalance < amount) {
-  throw new Error("Insufficient wallet balance");
-}
+    /* ✅ WALLET BALANCE CHECK (WITH FEE) */
+    const estimatedFee = getB2CCharge(Number(amount));
+    const totalDebit = Number(amount) + estimatedFee;
 
-
-  
-
-    /* ---------------- BORROWER ---------------- */
-    const borrower = await Customer.findById(borrowerId).session(session);
-    if (!borrower) throw new Error("Borrower not found");
-
-    if (borrower.isDeleted) throw new Error("Borrower account is inactive");
-    if (!borrower.isVerified) throw new Error("Borrower is not verified");
-
-    /* ---------------- CREDIT CHECK ---------------- */
-    const eligibility = evaluateLoanByCreditScore({
-      creditScore: borrower.creditScore || 500,
-      requestedAmount: amount,
-      borrower
-    });
-
-    if (!eligibility.allowed || amount > eligibility.approvedAmount) {
+    if (lender.walletBalance < totalDebit) {
       throw new Error(
-        `Loan not allowed. Max eligible amount: ${eligibility.approvedAmount}`
+        `Insufficient wallet balance. Required: ${totalDebit}`
       );
     }
 
-    /* ---------------- EXISTING LOAN CHECK ---------------- */
-    const existingLoan = await Loan.findOne({
+    /* ================= BORROWER ================= */
+    const borrower = await Customer.findById(borrowerId).session(session);
+    if (!borrower) throw new Error("Borrower not found");
+    if (borrower.isDeleted) throw new Error("Borrower account inactive");
+    if (!borrower.isVerified) throw new Error("Borrower not verified");
+
+    /* ================= DUPLICATE CHECK (ONLY ACTIVE) ================= */
+    const activeLoan = await Loan.findOne({
       borrowerId,
-      status: { $in: ["pending", "active", "overdue"] },
-      loanRequestStatus: { $ne: "rejected" }
+      status: "active"
     }).session(session);
 
-    if (existingLoan) {
-      throw new Error("Borrower already has an existing loan");
+    if (activeLoan) {
+      throw new Error("Borrower already has an active loan");
     }
 
-    /* ---------------- CALCULATIONS ---------------- */
-    const totalRepayment = Number(amount) + Number(totalInterest);
+    /* ================= PAYBILL FLOAT CHECK ================= */
+    const paybillBalance = await getMpesaPaybillBalance();
+    if (paybillBalance < amount) {
+      throw new Error("Insufficient float. Please top up.");
+    }
 
+    /* ================= CALCULATIONS ================= */
+    const totalRepayment = Number(amount) + Number(totalInterest);
     const dailyRepayment =
       totalRepayment /
       (duration *
@@ -412,18 +404,16 @@ if (lender.walletBalance < amount) {
           ? 30
           : 1));
 
-    /* ---------------- CREATE LOAN ---------------- */
-
+    /* ================= CREATE LOAN ================= */
     const [loan] = await Loan.create(
       [
         {
           lenderId,
-          issuedByLenderId: lenderId, // ✅ Lender approved
-          requestedByAgentId: agentId || null, // ✅ Agent if exists
+          issuedByLenderId: lenderId,
+          requestedByAgentId: agentId || null,
 
           borrowerId,
-          billRefNumber: borrower.idNumber, // ✅ REQUIRED
-
+          billRefNumber: borrower.idNumber,
           clientId: borrower.idNumber,
           fullName: borrower.fullName,
           phoneNumber,
@@ -440,8 +430,8 @@ if (lender.walletBalance < amount) {
           issueDate: new Date(),
           dueDate: new Date(Date.now() + duration * 86400000),
 
-          status: "pending", // will become active after B2C success
-          loanRequestStatus: "approved",
+          status: "pending",
+          loanRequestStatus: "initiated",
 
           repaidAmount: 0,
           repayments: []
@@ -450,8 +440,7 @@ if (lender.walletBalance < amount) {
       { session }
     );
 
-    /* ---------------- CREATE PENDING TRANSACTION ---------------- */
-
+    /* ================= CREATE TRANSACTION ================= */
     const [transaction] = await Transaction.create(
       [
         {
@@ -461,51 +450,30 @@ if (lender.walletBalance < amount) {
           type: "loan issued",
           amount,
           status: "pending",
-          phone: phoneNumber,
-
-          balanceBefore: lender.walletBalance,
-          balanceAfter: lender.walletBalance
+          phone: phoneNumber
         }
       ],
       { session }
     );
 
-    /* ================= SANDBOX MODE ================= */
-
-    if (global.config.mpesaEnv === "sandbox") {
-      transaction.status = "successful";
-      loan.status = "active";
-
-      lender.walletBalance -= amount;
-
-      await lender.save({ session });
-      await loan.save({ session });
-      await transaction.save({ session });
-
-      await session.commitTransaction();
-      session.endSession();
-
-      return res.status(201).json({
-        success: true,
-        message: "Loan issued successfully (sandbox mode)",
-        loan,
-        transaction
-      });
-    }
-
-    /* ================= LIVE MODE ================= */
-
+    /* ================= INITIATE B2C ================= */
     const b2cResponse = await initiateB2C(
       phoneNumber,
       amount,
       transaction._id
     );
 
-    if (b2cResponse?.OriginatorConversationID) {
-      transaction.checkoutRequestID =
-        b2cResponse.OriginatorConversationID;
-      await transaction.save({ session });
+    if (!b2cResponse?.OriginatorConversationID) {
+      throw new Error("B2C initiation failed");
     }
+
+    transaction.checkoutRequestID =
+      b2cResponse.OriginatorConversationID;
+
+    loan.loanRequestStatus = "processing";
+
+    await transaction.save({ session });
+    await loan.save({ session });
 
     await session.commitTransaction();
     session.endSession();
@@ -518,11 +486,12 @@ if (lender.walletBalance < amount) {
     });
 
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     session.endSession();
 
-    console.error("❌ issueLoan error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(400).json({ message: error.message });
   }
 };
 
@@ -1220,9 +1189,18 @@ if (creditScore >= 800) {
     /* ===============================
        6️⃣ LENDER WALLET CHECK
     =============================== */
-    if (lender.walletBalance < loan.amount) {
-      throw new Error("Insufficient wallet balance");
-    }
+/* ===============================
+   6️⃣ LENDER WALLET CHECK (AMOUNT + FEE)
+=============================== */
+const estimatedFee = getB2CCharge(Number(loan.amount));
+const totalDebit = Number(loan.amount) + estimatedFee;
+
+if (lender.walletBalance < totalDebit) {
+  throw new Error(
+    `Insufficient wallet balance. Required: ${totalDebit}`
+  );
+}
+
 
     /* ===============================
        7️⃣ APPROVE LOAN (NOT ACTIVE YET)

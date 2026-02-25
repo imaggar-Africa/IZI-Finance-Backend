@@ -32,9 +32,9 @@ const loanSchema = new mongoose.Schema({
   dueDate: { type: Date, required: true },
 billRefNumber: { type: String, required: true }, // National ID used for repayment
 
-  status: { type: String, enum: ["pending", "active", "fully paid", "overdue"], default: "active" },
+  status: { type: String, enum: ["pending", "active", "fully paid", "overdue"]},
   // ✅ New loan request status
-  loanRequestStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  loanRequestStatus: { type: String, enum: ["pending","initiated","processing","failed", "approved", "rejected"], default: "pending" },
   // rejectReason: { type: String, default: null },
  repayments: [
   {

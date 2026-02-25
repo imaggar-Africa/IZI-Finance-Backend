@@ -1,5 +1,6 @@
 const africastalking = require("africastalking");
 const { normalizePhone } = require("./normalizePhone");
+const smsQueue = require("../queues/sms.queue");
 
 // ------------------------------
 // AfricasTalking SMS client
@@ -41,8 +42,6 @@ const initSMS = () => {
 // ------------------------------
 exports.sendSMS = async (phoneNumber, message) => {
   try {
-    if (!isSMSInitialized) initSMS();
-
     const normalizedPhone = normalizePhone(phoneNumber);
 
     if (!normalizedPhone) {
@@ -50,30 +49,20 @@ exports.sendSMS = async (phoneNumber, message) => {
       return { success: false, message: "Invalid phone number" };
     }
 
-    if (!smsClient) {
-      return { success: false, message: "SMS client not initialized" };
-    }
+    await smsQueue.add("send-sms", {
+      phoneNumber: normalizedPhone,
+      message
+    });
 
-    console.log("📨 Sending SMS ->", normalizedPhone, message);
+    console.log("📥 SMS queued ->", normalizedPhone);
 
-    const payload = {
-      to: [normalizedPhone],
-      message,
+    return {
+      success: true,
+      message: "SMS queued successfully"
     };
 
-    // Include sender ID only if not sandbox
-    const senderId = global.config?.atSenderId?.trim();
-    if (senderId && global.config.atUsername !== "sandbox") {
-      payload.from = senderId;
-    }
-
-    const result = await smsClient.send(payload);
-
-    console.log("📩 SMS Response:", JSON.stringify(result, null, 2));
-    return result;
-
   } catch (error) {
-    console.error("❌ Error sending SMS:", error.message);
+    console.error("❌ Error queueing SMS:", error.message);
     return { success: false, error: error.message };
   }
 };

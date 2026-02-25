@@ -4,6 +4,337 @@ const PDFDocument = require("pdfkit");
 const Customer = require("../models/customer");
 
 
+
+
+const buildLoanFilter = (filters) => {
+  const query = {
+    loanRequestStatus: "approved"
+  }
+
+  // Loan type
+  if (filters.loanType === "active") query.status = "active"
+  if (filters.loanType === "restructured") query.isRestructured = true
+  if (filters.loanType === "writtenOff") query.isWrittenOff = true
+
+  // Date range (FIXED: issueDate)
+  if (filters.from && filters.to) {
+    query.issueDate = {
+      $gte: new Date(filters.from),
+      $lte: new Date(filters.to)
+    }
+  }
+
+  // Agent
+  if (filters.agentId) {
+    query.requestedByAgentId = filters.agentId
+  }
+
+  // Borrower cycle (derived from loanCycle stored)
+  if (filters.cycle === "first") query.loanCycle = 1
+  if (filters.cycle === "repeat") query.loanCycle = { $gt: 1 }
+  if (filters.cycle === "3plus") query.loanCycle = { $gte: 3 }
+
+  // Risk score (creditScoreAfter in loan)
+  if (filters.risk === "low") query.creditScoreAfter = { $gte: 750 }
+  if (filters.risk === "medium")
+    query.creditScoreAfter = { $gte: 600, $lt: 750 }
+  if (filters.risk === "high") query.creditScoreAfter = { $lt: 600 }
+
+  return query
+}
+
+
+
+exports.getLoanSummary = async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      status = "all",
+      agentId,
+      groupId,
+      borrowerCycle,
+      riskCategory
+    } = req.query;
+
+    // 🔹 BASE FILTER – DISBURSED LOANS ONLY
+    const match = {
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "fully paid"] }
+    };
+
+    // 🔹 Date filter
+if (startDate && endDate) {
+  const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+
+  match.issueDate = {
+    $gte: start,
+    $lte: end
+  };
+}
+
+    // 🔹 Status override
+    if (status === "active") {
+      match.status = "active";
+      match.isDefaulted = false;
+    }
+
+    if (status === "closed") {
+      match.status = "fully paid";
+      match.balance = 0;
+    }
+
+    if (status === "written-off") {
+      match.isDefaulted = true;
+    }
+
+    // 🔹 Geography filters
+    if (agentId) match.requestedByAgentId = agentId;
+    if (groupId) match.groupId = groupId;
+
+    // 🔹 Borrower cycle
+    if (borrowerCycle === "first") match.loanCycle = 1;
+    if (borrowerCycle === "repeat") match.loanCycle = { $gte: 2 };
+    if (borrowerCycle === "3+") match.loanCycle = { $gte: 3 };
+
+    // 🔹 Risk category
+    if (riskCategory === "low") match.creditScoreAfter = { $gte: 750 };
+    if (riskCategory === "medium")
+      match.creditScoreAfter = { $gte: 600, $lt: 750 };
+    if (riskCategory === "high") match.creditScoreAfter = { $lt: 600 };
+
+    // 🔹 AGGREGATION
+    const summary = await Loan.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+
+          totalLoans: { $sum: 1 },
+
+          totalDisbursedAmount: { $sum: "$amount" },
+
+          totalOutstandingAmount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "active"] },
+                "$balance",
+                0
+              ]
+            }
+          },
+
+          activeLoans: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "active"] }, 1, 0]
+            }
+          },
+
+          closedLoans: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$status", "fully paid"] },
+                    { $eq: ["$balance", 0] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+
+          writtenOffLoans: {
+            $sum: {
+              $cond: [{ $eq: ["$isDefaulted", true] }, 1, 0]
+            }
+          },
+
+          averageLoanSize: { $avg: "$amount" }
+        }
+      }
+    ]);
+
+    const data = summary[0] || {};
+
+    return res.json({
+      dateRange: { startDate, endDate },
+
+      totalLoans: data.totalLoans || 0,
+      totalDisbursedAmount: data.totalDisbursedAmount || 0,
+      totalOutstandingAmount: data.totalOutstandingAmount || 0,
+      averageLoanSize: Number((data.averageLoanSize || 0).toFixed(2)), 
+
+      activeLoans: data.activeLoans || 0,
+      closedLoans: data.closedLoans || 0,
+      writtenOffLoans: data.writtenOffLoans || 0
+    });
+  } catch (error) {
+    console.error("Loan Summary Error:", error);
+    res.status(500).json({ message: "Failed to fetch loan summary" });
+  }
+};
+
+
+
+
+
+
+exports.getPAR = async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      parType,
+      agentId,
+      groupId,
+      borrowerCycle,
+      riskCategory
+    } = req.query;
+
+    if (!parType) {
+      return res.status(400).json({ message: "parType is required" });
+    }
+
+    const parDaysMap = { PAR1: 1, PAR7: 7, PAR30: 30 };
+    const parDays = parDaysMap[parType];
+    if (!parDays) {
+      return res.status(400).json({ message: "Invalid PAR type" });
+    }
+
+    const today = new Date();
+
+    // 🔹 BASE MATCH (Loan-level)
+    const match = {
+      status: "active",
+      isDefaulted: false
+    };
+
+    if (startDate && endDate) {
+      match.issueDate = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    if (agentId) {
+      match.requestedByAgentId = new mongoose.Types.ObjectId(agentId);
+    }
+
+    if (borrowerCycle === "first") match.loanCycle = 1;
+    if (borrowerCycle === "repeat") match.loanCycle = { $gte: 2 };
+    if (borrowerCycle === "3+") match.loanCycle = { $gte: 3 };
+
+    if (riskCategory === "low") match.creditScoreAfter = { $gte: 750 };
+    if (riskCategory === "medium")
+      match.creditScoreAfter = { $gte: 600, $lt: 750 };
+    if (riskCategory === "high") match.creditScoreAfter = { $lt: 600 };
+
+    const pipeline = [
+      { $match: match },
+
+      // 🔹 JOIN GroupMember
+      {
+        $lookup: {
+          from: "groupmembers",
+          localField: "borrowerId",
+          foreignField: "borrowerId",
+          as: "groupMember"
+        }
+      },
+
+      // 🔹 Unwind (borrower may not be in group)
+      { $unwind: { path: "$groupMember", preserveNullAndEmptyArrays: true } }
+    ];
+
+    // 🔹 APPLY GROUP FILTER (CORRECT PLACE)
+    if (groupId) {
+      pipeline.push({
+        $match: {
+          "groupMember.groupId": new mongoose.Types.ObjectId(groupId)
+        }
+      });
+    }
+
+    pipeline.push(
+      {
+        $addFields: {
+          overdueDays: {
+            $dateDiff: {
+              startDate: "$dueDate",
+              endDate: today,
+              unit: "day"
+            }
+          }
+        }
+      },
+      {
+        $facet: {
+          total: [
+            {
+              $group: {
+                _id: null,
+                totalOutstanding: { $sum: "$balance" },
+                totalLoans: { $sum: 1 }
+              }
+            }
+          ],
+          overdue: [
+            { $match: { overdueDays: { $gte: parDays } } },
+            {
+              $group: {
+                _id: null,
+                overdueOutstanding: { $sum: "$balance" },
+                overdueLoans: { $sum: 1 },
+                avgDaysLate: { $avg: "$overdueDays" }
+              }
+            }
+          ]
+        }
+      }
+    );
+
+    const result = await Loan.aggregate(pipeline);
+
+    const total = result[0]?.total[0] || {};
+    const overdue = result[0]?.overdue[0] || {};
+
+    const totalOutstanding = total.totalOutstanding || 0;
+    const overdueOutstanding = overdue.overdueOutstanding || 0;
+
+    const parPercentage =
+      totalOutstanding > 0
+        ? Number(((overdueOutstanding / totalOutstanding) * 100).toFixed(2))
+        : 0;
+
+    return res.json({
+      parType,
+      dateRange: { startDate, endDate },
+      totalOutstanding,
+      overdueOutstanding,
+      parPercentage,
+      totalLoans: total.totalLoans || 0,
+      overdueLoans: overdue.overdueLoans || 0,
+      averageDaysLate: Math.round(overdue.avgDaysLate || 0)
+    });
+  } catch (err) {
+    console.error("PAR API Error:", err);
+    res.status(500).json({ message: "Failed to calculate PAR" });
+  }
+};
+
+
+
+
+
+
+
+
 function getRange(type, fromDate, toDate) {
   const now = new Date();
 

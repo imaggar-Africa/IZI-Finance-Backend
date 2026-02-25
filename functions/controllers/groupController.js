@@ -1,6 +1,7 @@
 const Group = require("../models/Group");
 const GroupMember = require("../models/GroupMember");
 const Customer = require("../models/customer");
+const { sendSMS } = require("../utils/sms");
 
 /* =========================
    CREATE GROUP
@@ -43,15 +44,41 @@ exports.addMember = async (req, res) => {
       return res.status(404).json({ message: "Borrower not found" });
     }
 
+    // ✅ API-level check
     const exists = await GroupMember.findOne({ groupId, borrowerId });
     if (exists) {
-      return res.status(400).json({ message: "Borrower already in group" });
+      return res.status(400).json({
+        message: "Customer already exists in this group"
+      });
     }
 
-    const member = await GroupMember.create({
-      groupId,
-      borrowerId
-    });
+    const member = await GroupMember.create({ groupId, borrowerId });
+
+    /* ===============================
+       SEND SMS AFTER ADD
+    =============================== */
+
+    const group = await Group.findById(groupId)
+      .populate("lenderId", "name");
+
+    const members = await GroupMember.find({ groupId })
+      .populate("borrowerId", "fullName")
+      .limit(10);
+
+    const memberNames = members
+      .filter(m => m.borrowerId)
+      .map(m => m.borrowerId.fullName?.split(" ")[0])
+      .join(", ");
+
+    const adminName = group?.lenderId?.name || "Group Admin";
+
+    const message = `You have been added to the ${group.name} Group.
+
+Admin: ${adminName}
+Total Members: ${members.length}
+Members: ${memberNames}`;
+
+    await sendSMS(borrower.phone, message);
 
     res.json({
       success: true,
@@ -59,10 +86,17 @@ exports.addMember = async (req, res) => {
     });
 
   } catch (error) {
+    // ✅ Mongo duplicate key error
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: "Customer already exists in this group"
+      });
+    }
+
+    console.error("❌ addMember error:", error);
     res.status(500).json({ message: error.message });
   }
 };
-
 /* =========================
    REMOVE MEMBER
 ========================= */

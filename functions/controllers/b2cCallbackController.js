@@ -1408,7 +1408,7 @@ exports.b2cCallback = async (req, res) => {
             (param) =>
               param.Key === "TransactionID" ||
               param.Key === "TransactionReceipt"
-          );
+          );  
           if (transactionParam) {
             MpesaTransactionID = transactionParam.Value;
           }
@@ -1463,19 +1463,32 @@ exports.b2cCallback = async (req, res) => {
        FAILURE FLOW
     =============================== */
 
-    if (ResultCode !== 0) {
-      transaction.status = "failed";
-      transaction.mpesaPayload = Result;
-      transaction.failureReason = ResultDesc;
+if (ResultCode !== 0) {
 
-      await transaction.save({ session });
-      await session.commitTransaction();
-      session.endSession();
+  transaction.status = "failed";
+  transaction.mpesaPayload = Result;
+  transaction.failureReason = ResultDesc;
 
-      return res.status(200).json({
-        message: "Transaction failed"
-      });
+  await transaction.save({ session });
+
+  // 🔥 FIX: update loan properly
+  if (transaction.type === "loan issued") {
+    const loan = await Loan.findById(transaction.loanId).session(session);
+    if (loan) {
+      loan.loanRequestStatus = "failed"; // ✅ IMPORTANT
+      loan.status = "pending";           // non-blocking
+      await loan.save({ session });
     }
+  }
+
+  await session.commitTransaction();
+  session.endSession();
+
+  return res.status(200).json({
+    message: "Transaction failed"
+  });
+}
+
 
     /* ===============================
        SUCCESS FLOW
@@ -1509,29 +1522,42 @@ exports.b2cCallback = async (req, res) => {
        🔥 NEW: LOAN ISSUED SUCCESS HANDLING (ADDED BLOCK)
     ========================================================= */
 
-    if (transaction.type === "loan issued") {
+if (transaction.type === "loan issued") {
 
-      const loan = await Loan.findById(transaction.loanId).session(session);
-      if (!loan) throw new Error("Loan not found");
+  const loan = await Loan.findById(transaction.loanId).session(session);
+  if (!loan) throw new Error("Loan not found");
 
-      const lender = await User.findById(loan.lenderId).session(session);
-      if (!lender) throw new Error("Lender not found");
+  const lender = await User.findById(loan.lenderId).session(session);
+  if (!lender) throw new Error("Lender not found");
 
-      const balanceBefore = lender.walletBalance;
+  const amount = Number(transaction.amount);
+  const fee = getB2CCharge(amount);
+  const totalDebit = amount + fee;
 
-      lender.walletBalance -= Number(transaction.amount);
+  const balanceBefore = lender.walletBalance;
 
-      transaction.balanceBefore = balanceBefore;
-      transaction.balanceAfter = lender.walletBalance;
+  if (balanceBefore < totalDebit) {
+    throw new Error("Insufficient wallet balance for loan + fee");
+  }
 
-      // ✅ Activate loan
-      loan.status = "active";
-      loan.loanRequestStatus = "approved";
-      loan.disbursedAt = new Date();
+  // 🔥 DEDUCT PRINCIPAL + FEE
+  lender.walletBalance -= totalDebit;
 
-      await lender.save({ session });
-      await loan.save({ session });
-    }
+  // 🔥 TRACK TRANSACTION DETAILS
+  transaction.mpesaCharge = fee;
+  transaction.balanceBefore = balanceBefore;
+  transaction.balanceAfter = lender.walletBalance;
+
+  // ✅ FINAL LOAN STATE
+  loan.status = "active";
+  loan.loanRequestStatus = "approved";
+  loan.disbursedAt = new Date();
+
+  await lender.save({ session });
+  await loan.save({ session });
+}
+
+
 
     /* ===============================
        CUSTOMER WITHDRAWAL LOGIC

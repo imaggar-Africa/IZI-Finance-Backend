@@ -51,6 +51,12 @@ const mpesaReversalTimeout = defineSecret("MPESA_REVERSAL_TIMEOUT_URL");
 const mpesaC2bConfirmUrl = defineSecret("MPESA_CONFIRM_URL");
 const mpesaC2bValidateUrl = defineSecret("MPESA_VALIDATE_URL");
 
+
+// ----- M-Pesa Account Balance Secrets -----
+const mpesaAccountBalanceResultUrl = defineSecret(
+  "MPESA_ACCOUNT_BALANCE_RESULT_URL"
+);
+
 // ----- Set global options -----
 setGlobalOptions({
   region: "us-central1",
@@ -77,6 +83,10 @@ setGlobalOptions({
     
     // M-Pesa C2B
     mpesaC2bConfirmUrl, mpesaC2bValidateUrl,
+
+    
+    // ✅ ADD THIS
+    mpesaAccountBalanceResultUrl,
 
   ],
 });
@@ -129,7 +139,12 @@ mpesaEnv: (mpesaEnv.value() || "sandbox").trim().toLowerCase(),
     mpesaC2bConfirmUrl: mpesaC2bConfirmUrl.value(),
     mpesaC2bValidateUrl: mpesaC2bValidateUrl.value(),
 
-
+    
+    
+   // ✅ ADD THIS
+    mpesaAccountBalanceResultUrl:
+      mpesaAccountBalanceResultUrl.value(),
+    
     
   };
 

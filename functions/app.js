@@ -23,7 +23,6 @@ const otpServiceFactory = require("./utils/africatalking");
 if (!process.env.FUNCTIONS_EMULATOR && !process.env.K_SERVICE) {
   require("./utils/localInit")();
 }
-
 const cron = require("node-cron");
 const { sendDueDateReminders } = require("./controllers/loanController");
 
@@ -168,7 +167,7 @@ cron.schedule("0 9 * * *", async () => {
   app.use("/api/kyc/company",jsonParser, require("./routes/companyKycRoutes"));
 
 
-
+app.use("/api", jsonParser, require("./routes/sms.routes"));
   /*************************************************
    * ERROR HANDLING
    *************************************************/
