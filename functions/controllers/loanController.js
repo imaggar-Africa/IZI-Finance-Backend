@@ -13,7 +13,7 @@ const AgentCommission = require("../models/AgentCommission");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
 
-/* =====================================================
+/* ====================================================
    🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
    ❗ DO NOT CHANGE FORMULA
 ===================================================== */
