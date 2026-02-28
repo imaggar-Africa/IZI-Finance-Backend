@@ -12,7 +12,8 @@ const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
-
+const { getB2CCharge } = require("../utils/mpesaCharges");
+const puppeteer = require("puppeteer");
 /* ====================================================
    🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
    ❗ DO NOT CHANGE FORMULA
@@ -495,7 +496,219 @@ exports.issueLoan = async (req, res) => {
   }
 };
 
+exports.generateFullyPaidLoansPDF = async (req, res) => {
+  let browser;
 
+  try {
+    const { borrowerId } = req.params;
+
+    const loans = await Loan.find({
+      borrowerId,
+      status: "fully paid",
+    }).populate("repayments");
+
+    if (!loans || loans.length === 0) {
+      return res.status(404).json({ message: "No fully paid loans found" });
+    }
+
+    const formattedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      let totalPaid = 0;
+      let lastPaymentDate = null;
+
+      if (loanObj.repayments?.length) {
+        loanObj.repayments.forEach((payment) => {
+          totalPaid += payment.amount || 0;
+
+          if (
+            !lastPaymentDate ||
+            new Date(payment.date) > new Date(lastPaymentDate)
+          ) {
+            lastPaymentDate = payment.date;
+          }
+        });
+      }
+
+      loanObj.totalPaid = totalPaid;
+      loanObj.lastPaymentDate = lastPaymentDate;
+
+      return loanObj;
+    });
+
+    const html = `
+    <html>
+    <head>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          padding: 30px;
+        }
+
+        .page {
+          page-break-after: always;
+        }
+
+        h1 {
+          text-align: center;
+          margin-bottom: 5px;
+        }
+
+        .status-box {
+          text-align: center;
+          margin: 10px 0 20px 0;
+        }
+
+        .badge {
+          display: inline-block;
+          background: #28a745;
+          color: #fff;
+          padding: 10px 20px;
+          border-radius: 20px;
+          font-weight: bold;
+          font-size: 16px;
+        }
+
+        .section-title {
+          font-weight: bold;
+          margin-top: 20px;
+          margin-bottom: 10px;
+          font-size: 16px;
+        }
+
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 20px;
+        }
+
+        th, td {
+          border: 1px solid #ccc;
+          padding: 8px;
+          font-size: 12px;
+          text-align: left;
+        }
+
+        th {
+          background-color: #f2f2f2;
+        }
+
+        .footer {
+          font-size: 11px;
+          color: #555;
+          margin-top: 20px;
+          text-align: right;
+        }
+      </style>
+    </head>
+    <body>
+
+    ${formattedLoans
+      .map(
+        (loan) => `
+      <div class="page">
+        <h1>Loan Statement</h1>
+
+        <div class="status-box">
+          <div class="badge">✔ Fully Paid</div>
+          <div>This loan has been successfully cleared.</div>
+        </div>
+
+        <div class="section-title">
+          Borrower: ${loan.fullName}
+        </div>
+
+        <table>
+          <tr>
+            <th>Loan Amount</th>
+            <th>Interest</th>
+            <th>Total Paid</th>
+            <th>Issued</th>
+            <th>Due</th>
+            <th>Status</th>
+          </tr>
+          <tr>
+            <td>Ksh ${loan.amount}</td>
+            <td>Ksh ${loan.interest}</td>
+            <td>Ksh ${loan.totalPaid}</td>
+            <td>${new Date(loan.issueDate).toLocaleDateString()}</td>
+            <td>${new Date(loan.dueDate).toLocaleDateString()}</td>
+            <td style="color: green; font-weight: bold;">Fully Paid</td>
+          </tr>
+        </table>
+
+        <div class="section-title">Repayment History</div>
+
+        <table>
+          <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+          ${
+            loan.repayments?.length
+              ? loan.repayments
+                  .map(
+                    (r) => `
+                    <tr>
+                      <td>${new Date(r.date).toLocaleDateString()}</td>
+                      <td>Ksh ${r.amount}</td>
+                      <td>On Time</td>
+                    </tr>
+                  `
+                  )
+                  .join("")
+              : `<tr><td colspan="3">No repayments found</td></tr>`
+          }
+        </table>
+
+        <div class="footer">
+          Generated on ${new Date().toLocaleString()}
+        </div>
+      </div>
+    `
+      )
+      .join("")}
+
+    </body>
+    </html>
+    `;
+
+    // Launch Puppeteer
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+    });
+
+    await browser.close();
+
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Length": pdfBuffer.length,
+      "Content-Disposition": "inline; filename=fully_paid_loans.pdf",
+    });
+
+    return res.end(pdfBuffer);
+
+  } catch (error) {
+    console.error("PDF generation error:", error);
+
+    if (browser) await browser.close();
+
+    return res.status(500).json({
+      message: "Failed to generate PDF",
+      error: error.message,
+    });
+  }
+};
 
 /* =====================================================
    3️⃣ GET ACTIVE LOANS BY PHONE

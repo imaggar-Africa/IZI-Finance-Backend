@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const { app, initializeApp } = require("./functions/app");
 
-const PORT = Number(process.env.PORT) || 8081;
+const PORT = Number(process.env.PORT) || 8080;
 const DB = process.env.MONGO_URI
 
 // ❌ Prevent running inside Firebase / Cloud Functions

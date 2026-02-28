@@ -27,6 +27,13 @@ router.get("/fully-paid", protect, loanController.getFullyPaidLoans);
 //   loanController.getAllCustomersWithLoansFullyPaid
 // );
 
+
+
+router.get(
+  "/borrower/:borrowerId/fully-paid/pdf",
+  loanController.generateFullyPaidLoansPDF
+);
+
 router.get(
   "/borrower/:borrowerId/fully-paid",
   loanController.getFullyPaidLoansByCustomer

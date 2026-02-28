@@ -169,12 +169,31 @@ const longRunningOpts = {
 
 
 // ----- Export HTTPS API -----
-exports.api = onRequest(
+// exports.api = onRequest(
+//   {
+//     maxBodySize: "20mb",
+//     timeoutSeconds: 540,
+//     cors: true,
+//     rawBody: true,
+
+//     // 🔥 ADD THIS
+//     minInstances: 1,
+//     maxInstances: 10,
+//   },
+  
+//   app
+// );
+
+exports.apiV2 = onRequest(
   {
     maxBodySize: "20mb",
     timeoutSeconds: 540,
     cors: true,
-    rawBody: true,      // 🔥 REQUIRED FOR MULTIPART / RAW POST (M-Pesa callback)
+    rawBody: true,
+
+    // you can tune differently if needed
+    minInstances: 0,   // V2 first-la cold start ok
+    maxInstances: 10,
   },
   app
 );
