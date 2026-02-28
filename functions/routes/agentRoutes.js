@@ -38,7 +38,7 @@ router.post("/register", protect,authorizeRoles("lender"), validateAfricaPhone, 
 registerAgent);
 
 // Agent login
-router.post("/login",validateAfricaPhone,agentProtect,loginAgent);
+router.post("/login",validateAfricaPhone,loginAgent);
 
 // Change password (agent only, must be logged in)
 router.put("/change-password", protect, changePassword);
