@@ -253,15 +253,35 @@ const evaluateLoanByCreditScore = ({
   =========================== */
   let approvedAmount = 0;
 
-  if (creditScore < 600) {
+  /* ===========================
+   PROGRESSIVE BEHAVIOR OVERRIDE
+=========================== */
+
+if (creditScore < 600) {
+
+  const behaviorEligible =
+    borrower.completedLoans >= 1 &&
+    repaymentRatio >= 1 &&
+    defaultProbability <= 0.45;
+
+  if (behaviorEligible) {
     return {
-      allowed: false,
-      approvedAmount: 0,
-      riskLevel,
+      allowed: requestedAmount <= 2000,
+      approvedAmount: 2000,
+      riskLevel: "PROGRESSIVE",
       defaultProbability,
-      reason: "Low credit score"
+      reason: "Behavior-based upgrade"
     };
   }
+
+  return {
+    allowed: false,
+    approvedAmount: 0,
+    riskLevel,
+    defaultProbability,
+    reason: "Low credit score"
+  };
+}
 
   if (creditScore < 650)
     approvedAmount = 2000;
