@@ -841,13 +841,16 @@ exports.updateBorrowerProfile = async (req, res) => {
     const borrowerUpdateData = {};
 
     Object.keys(req.body).forEach((key) => {
-      if (
-        !restrictedBorrowerFields.includes(key) &&
-        !key.startsWith("guarantor")
-      ) {
-        borrowerUpdateData[key] = req.body[key];
-      }
-    });
+  if (!restrictedBorrowerFields.includes(key) && !key.startsWith("guarantor")) {
+    
+    const value = req.body[key];
+    if (value === "null" || value === "") {
+      borrowerUpdateData[key] = null;
+    } else {
+      borrowerUpdateData[key] = value;
+    }
+  }
+});
 
     if (borrowerUpdateData.phone) {
       const normalized = normalizePhone(borrowerUpdateData.phone);
