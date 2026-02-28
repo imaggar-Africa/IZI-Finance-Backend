@@ -378,34 +378,42 @@ function calculateStats(loans, start = null, end = null) {
   let overdueLoans = 0;
   let paidLoans = 0;
 
-  loans.forEach((loan) => {
-    const issuedInRange =
-      !start || !end || (loan.createdAt >= start && loan.createdAt <= end);
+  const today = new Date();
 
-    // =========================
-    // 1️⃣ LOANS ISSUED IN RANGE
-    // =========================
+  loans.forEach((loan) => {
+
+    // ✅ Only approved loans
+    if (loan.loanRequestStatus !== "approved") return;
+
+    // ✅ Only these statuses
+    if (!["active", "fully paid", "overdue"].includes(loan.status))
+      return;
+
+    const issuedInRange =
+      !start ||
+      !end ||
+      (loan.issueDate >= start && loan.issueDate <= end);
+
     if (issuedInRange) {
       issuedCount++;
+
       totalLoanAmount += loan.totalRepayment || 0;
       principalAmount += loan.amount || 0;
-
-      // ✅ outstanding = CURRENT balance of loans issued in range
       outstandingLoanAmount += loan.balance || 0;
 
-      if (loan.balance > 0) {
-        activeLoans++;
-        if (loan.dueDate && new Date(loan.dueDate) < new Date()) {
-          overdueLoans++;
-        }
-      } else {
+      // ===== STATUS COUNTS =====
+      if (loan.status === "fully paid" || loan.balance === 0) {
         paidLoans++;
+        interestEarned +=
+          (loan.totalRepayment || 0) - (loan.amount || 0);
+      } else if (loan.status === "overdue") {
+        overdueLoans++;
+      } else if (loan.status === "active") {
+        activeLoans++;
       }
     }
 
-    // =========================
-    // 2️⃣ COLLECTIONS (DATE BASED)
-    // =========================
+    // ===== COLLECTIONS =====
     if (Array.isArray(loan.repayments)) {
       loan.repayments.forEach((r) => {
         const paymentInRange =
@@ -415,9 +423,6 @@ function calculateStats(loans, start = null, end = null) {
 
         if (paymentInRange) {
           collectedAmount += r.amount || 0;
-
-          const principalPart = Math.min(r.amount || 0, loan.amount || 0);
-          interestEarned += Math.max(0, (r.amount || 0) - principalPart);
         }
       });
     }
@@ -485,7 +490,10 @@ exports.getStats = async (req, res) => {
 
 const loans = await Loan.find({
   loanRequestStatus: "approved",
-  lenderId: lenderId
+  lenderId: lenderId,
+  status: { $in: ["active", "fully paid", "overdue"] },
+  isDeleted: { $ne: true },
+  isWrittenOff: { $ne: true }
 }).populate("borrowerId", "fullName phone");
 
 

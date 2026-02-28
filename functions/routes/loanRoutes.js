@@ -51,6 +51,12 @@ router.get(
   loanController.getLoansByBorrower
 );
 
+router.get("/outstanding/all",
+  protect,
+  authorizeRoles("lender"),
+  loanController.getOutstandingLoans
+)
+
 
 
 // Agent → request loan

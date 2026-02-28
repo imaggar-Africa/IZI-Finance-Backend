@@ -935,9 +935,11 @@ exports.getOutstandingLoans = async (req, res) => {
 exports.getBorrowersWithLoans = async (req, res) => {
   try {
     const loans = await Loan.find({
-      status: "active",
-      loanRequestStatus: "approved"
-    }).populate("borrowerId");
+  loanRequestStatus: "approved",
+  status: { $in: ["active", "overdue", "fully paid"] },
+  isDeleted: { $ne: true },
+  isWrittenOff: { $ne: true }
+})
 
     const borrowerMap = {};
 
@@ -947,13 +949,11 @@ exports.getBorrowersWithLoans = async (req, res) => {
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 
-    const today = new Date();
-
-    let totalLoanAmount = 0;        // principal + interest
-    let totalCollectedAmount = 0;   // actual collected
+    let totalLoanAmount = 0;
+    let totalCollectedAmount = 0;
     let totalActiveLoanCount = 0;
     let totalOverdueLoanCount = 0;
-    let totalBalance = 0;           // ✅ ADDED
+    let totalBalance = 0;
 
     const paidToday = [];
     const notPaidToday = [];
@@ -970,7 +970,6 @@ exports.getBorrowersWithLoans = async (req, res) => {
       }
 
       borrowerMap[borrowerId].loanCount++;
-      totalActiveLoanCount++;
 
       /* ================= TOTAL LOAN AMOUNT ================= */
       totalLoanAmount += loan.totalRepayment || 0;
@@ -983,7 +982,16 @@ exports.getBorrowersWithLoans = async (req, res) => {
       totalCollectedAmount += collectedFromRepayments;
 
       /* ================= TOTAL BALANCE ================= */
-      totalBalance += loan.balance || 0;   // ✅ ADDED
+      totalBalance += loan.balance || 0;
+
+      /* ================= STATUS COUNTS ================= */
+      if (loan.status === "active") {
+        totalActiveLoanCount++;
+      }
+
+      if (loan.status === "overdue") {
+        totalOverdueLoanCount++;
+      }
 
       /* ---------------- LAST PAYMENT ---------------- */
       let lastPaymentDate = null;
@@ -1004,21 +1012,15 @@ exports.getBorrowersWithLoans = async (req, res) => {
       /* ---------------- EXPECTED DAILY AMOUNT ---------------- */
       const expectedDailyAmount = loan.dailyRepayment || 0;
 
-      /* ---------------- OVERDUE LOGIC ---------------- */
-      const isOverdue =
-        loan.balance > 0 && new Date(loan.dueDate) < today;
-
-      if (isOverdue) {
-        totalOverdueLoanCount++;
-      }
-
       /* ---------------- STATUS BADGE ---------------- */
       let statusBadge = "On Track";
 
-      if (isOverdue) {
+      if (loan.status === "overdue") {
         statusBadge = "Overdue";
-      } else if (!paidTodayFlag) {
+      } else if (loan.status === "active" && !paidTodayFlag) {
         statusBadge = "At Risk";
+      } else if (loan.status === "fully paid") {
+        statusBadge = "Paid";
       }
 
       /* ---------------- ENRICH LOAN ---------------- */
@@ -1044,7 +1046,7 @@ exports.getBorrowersWithLoans = async (req, res) => {
 
       if (paidTodayFlag) {
         paidToday.push(tabRow);
-      } else {
+      } else if (loan.status !== "fully paid") {
         notPaidToday.push(tabRow);
       }
     });
@@ -1055,7 +1057,7 @@ exports.getBorrowersWithLoans = async (req, res) => {
       summary: {
         totalLoanAmount,
         totalCollectedAmount,
-        totalBalance,          // ✅ ADDED
+        totalBalance,
         totalActiveLoanCount,
         totalOverdueLoanCount
       },
@@ -1065,6 +1067,7 @@ exports.getBorrowersWithLoans = async (req, res) => {
         notPaidToday
       }
     });
+
   } catch (error) {
     console.error("Error fetching borrowers with loans:", error);
     res.status(500).json({ message: "Server error" });
@@ -1206,10 +1209,12 @@ exports.requestLoan = async (req, res) => {
        phoneNumber: borrower.phone, // ✅ fetched directly,
       lenderPhone: lender.phone,
       amount,
+      repaymentPlan: repaymentFrequency,
       interest: totalInterest,
       billRefNumber: borrower.idNumber,
       totalRepayment,
       dailyRepayment,
+
       duration,
       dueDate: new Date(Date.now() + duration * 24 * 60 * 60 * 1000),
       status: "pending",
@@ -1288,6 +1293,234 @@ exports.getAllLoanRequests = async (req, res) => {
 /* =====================================================
    1️⃣1️⃣ REVIEW LOAN REQUEST
 ===================================================== */
+// exports.reviewLoanRequest = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const { loanId, action } = req.body;
+//     const lenderId = req.user._id;
+
+
+//     /* ===============================
+//        1️⃣ BASIC VALIDATION
+//     =============================== */
+//     if (!loanId || !action) {
+//       throw new Error("loanId and action are required");
+//     }
+
+//     if (!["approved", "rejected"].includes(action)) {
+//       throw new Error("action must be 'approved' or 'rejected'");
+//     }
+
+
+
+
+
+//     /* ===============================
+//        2️⃣ FETCH LOAN
+//     =============================== */
+//     const loan = await Loan.findById(loanId)
+//       .populate("borrowerId")
+//       .populate("requestedByAgentId")
+//       .populate("lenderId")
+//       .session(session);
+
+//     if (!loan) {
+//       throw new Error("Loan not found");
+//     }
+
+//     /* ===============================
+//        3️⃣ AUTHORIZATION
+//     =============================== */
+//     if (loan.lenderId._id.toString() !== lenderId.toString()) {
+//       throw new Error("Unauthorized review attempt");
+//     }
+
+//     if (loan.loanRequestStatus !== "pending") {
+//       throw new Error(`Loan already ${loan.loanRequestStatus}`);
+//     }
+
+//     const borrower = loan.borrowerId;
+//     const agent = loan.requestedByAgentId;
+//     const lender = loan.lenderId;
+
+    
+//     /* 🔒 COMPANY KYC RESTRICTION */
+// if (
+//   lender.accountType === "company" &&
+//   lender.kycStatus !== "approved"
+// ) {
+//   throw new Error("Company KYC not approved. Cannot approve loan.");
+// }
+
+//     /* ===============================
+//        4️⃣ REJECTION FLOW
+//     =============================== */
+//     if (action === "rejected") {
+//       loan.loanRequestStatus = "rejected";
+//       await loan.save({ session });
+
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.status(200).json({
+//         message: "Loan rejected successfully",
+//         loanId: loan._id
+//       });
+//     }
+
+//     /* ===============================
+//        5️⃣ CREDIT SCORE RULES
+//     =============================== */
+//   const creditScore = borrower.creditScore || loan.creditScoreAfter || 500;
+
+
+// // first-time borrower check
+// const isFirstLoan =
+//   (borrower.totalLoans || 0) === 0 &&
+//   (borrower.completedLoans || 0) === 0;
+
+// // ❌ Reject ONLY if:
+// //  - creditScore < 600
+// //  - AND NOT first loan
+// if (creditScore < 600 && !isFirstLoan) {
+//   loan.loanRequestStatus = "rejected";
+//   await loan.save({ session });
+
+//   await session.commitTransaction();
+//   session.endSession();
+
+//   return res.status(400).json({
+//     message: "Loan rejected due to low credit score",
+//     creditScore,
+//     isFirstLoan
+//   });
+// }
+
+// // ⭐ Bonus for very high score
+// if (creditScore >= 800) {
+//   loan.amount = Math.round(loan.amount * 1.2);
+//   loan.totalRepayment = loan.amount + loan.interest;
+//   loan.balance = loan.totalRepayment;
+// }
+
+//     /* ===============================
+//        6️⃣ LENDER WALLET CHECK
+//     =============================== */
+// /* ===============================
+//    6️⃣ LENDER WALLET CHECK (AMOUNT + FEE)
+// =============================== */
+// const estimatedFee = getB2CCharge(Number(loan.amount));
+// const totalDebit = Number(loan.amount) + estimatedFee;
+
+// if (lender.walletBalance < totalDebit) {
+//   throw new Error(
+//     `Insufficient wallet balance. Required: ${totalDebit}`
+//   );
+// }
+
+
+//     /* ===============================
+//        7️⃣ APPROVE LOAN (NOT ACTIVE YET)
+//     =============================== */
+//     loan.loanRequestStatus = "approved";
+//     loan.status = "pending"; // will become active after B2C callback
+//     loan.issuedByLenderId = lenderId;
+
+//     await loan.save({ session });
+
+//     /* ===============================
+//        8️⃣ CREATE PENDING TRANSACTION
+//     =============================== */
+//     const [transaction] = await Transaction.create(
+//       [
+//         {
+//           userId: lenderId,
+//           userModel: "User",
+//           loanId: loan._id,
+//           type: "loan issued",
+//           amount: loan.amount,
+//           status: "pending",
+//           phone: borrower.phone,
+//           description: "Loan disbursement",
+//           balanceBefore: lender.walletBalance,
+//           balanceAfter: lender.walletBalance - loan.amount
+//         }
+//       ],
+//       { session }
+//     );
+
+//     /* ===============================
+//        9️⃣ AGENT COMMISSION (PENDING)
+//     =============================== */
+//     if (agent) {
+//       await AgentCommission.create(
+//         [
+//           {
+//             agentId: agent._id,
+//             loanId: loan._id,
+//             commissionType: "approval",
+//             amount: loan.amount * 0.0495,
+//             status: "pending"
+//           }
+//         ],
+//         { session }
+//       );
+//     }
+
+//     /* ===============================
+//        🔟 INITIATE M-PESA B2C
+//     =============================== */
+//     const b2cResponse = await initiateB2C(
+//       borrower.phone,
+//       loan.amount,
+//       transaction._id
+//     );
+
+//     if (!b2cResponse?.OriginatorConversationID) {
+//       throw new Error("Invalid B2C response from M-Pesa");
+//     }
+
+//     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+//     transaction.conversationID = b2cResponse.ConversationID;
+//     await transaction.save({ session });
+
+//     /* ===============================
+//        ✅ COMMIT
+//     =============================== */
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(200).json({
+//       message: "Loan approved — awaiting M-Pesa confirmation",
+//       loan: {
+//         id: loan._id,
+//         amount: loan.amount,
+//         status: loan.status,
+//         loanRequestStatus: loan.loanRequestStatus
+//       },
+//       transaction: {
+//         id: transaction._id,
+//         checkoutRequestID: transaction.checkoutRequestID
+//       },
+//       b2cResponse
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) {
+//       await session.abortTransaction();
+//     }
+//     session.endSession();
+
+//     console.error("❌ reviewLoanRequest error:", error);
+
+//     return res.status(500).json({
+//       message: error.message
+//     });
+//   }
+// };
+
 exports.reviewLoanRequest = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1296,10 +1529,6 @@ exports.reviewLoanRequest = async (req, res) => {
     const { loanId, action } = req.body;
     const lenderId = req.user._id;
 
-
-    /* ===============================
-       1️⃣ BASIC VALIDATION
-    =============================== */
     if (!loanId || !action) {
       throw new Error("loanId and action are required");
     }
@@ -1308,12 +1537,8 @@ exports.reviewLoanRequest = async (req, res) => {
       throw new Error("action must be 'approved' or 'rejected'");
     }
 
-
-
-
-
     /* ===============================
-       2️⃣ FETCH LOAN
+       FETCH LOAN
     =============================== */
     const loan = await Loan.findById(loanId)
       .populate("borrowerId")
@@ -1321,13 +1546,8 @@ exports.reviewLoanRequest = async (req, res) => {
       .populate("lenderId")
       .session(session);
 
-    if (!loan) {
-      throw new Error("Loan not found");
-    }
+    if (!loan) throw new Error("Loan not found");
 
-    /* ===============================
-       3️⃣ AUTHORIZATION
-    =============================== */
     if (loan.lenderId._id.toString() !== lenderId.toString()) {
       throw new Error("Unauthorized review attempt");
     }
@@ -1340,17 +1560,18 @@ exports.reviewLoanRequest = async (req, res) => {
     const agent = loan.requestedByAgentId;
     const lender = loan.lenderId;
 
-    
-    /* 🔒 COMPANY KYC RESTRICTION */
-if (
-  lender.accountType === "company" &&
-  lender.kycStatus !== "approved"
-) {
-  throw new Error("Company KYC not approved. Cannot approve loan.");
-}
+    /* ===============================
+       COMPANY KYC CHECK
+    =============================== */
+    if (
+      lender.accountType === "company" &&
+      lender.kycStatus !== "approved"
+    ) {
+      throw new Error("Company KYC not approved. Cannot approve loan.");
+    }
 
     /* ===============================
-       4️⃣ REJECTION FLOW
+       REJECTION FLOW
     =============================== */
     if (action === "rejected") {
       loan.loanRequestStatus = "rejected";
@@ -1366,66 +1587,84 @@ if (
     }
 
     /* ===============================
-       5️⃣ CREDIT SCORE RULES
+       CREDIT ENGINE EVALUATION
     =============================== */
-  const creditScore = borrower.creditScore || loan.creditScoreAfter || 500;
 
-// first-time borrower check
-const isFirstLoan =
-  (borrower.totalLoans || 0) === 0 &&
-  (borrower.completedLoans || 0) === 0;
+    const creditScore =
+      borrower.creditScore || loan.creditScoreAfter || 500;
 
-// ❌ Reject ONLY if:
-//  - creditScore < 600
-//  - AND NOT first loan
-if (creditScore < 600 && !isFirstLoan) {
-  loan.loanRequestStatus = "rejected";
-  await loan.save({ session });
+    let repaymentRatio = 1;
+    let allPaymentsOnTime = false;
 
-  await session.commitTransaction();
-  session.endSession();
+    // Fetch last fully paid loan for behavior analysis
+    const lastLoan = await Loan.findOne({
+      borrowerId: borrower._id,
+      status: "fully paid"
+    }).sort({ createdAt: -1 });
 
-  return res.status(400).json({
-    message: "Loan rejected due to low credit score",
-    creditScore,
-    isFirstLoan
-  });
-}
+    if (lastLoan) {
+      repaymentRatio =
+        lastLoan.repaidAmount / lastLoan.totalRepayment;
 
-// ⭐ Bonus for very high score
-if (creditScore >= 800) {
-  loan.amount = Math.round(loan.amount * 1.2);
-  loan.totalRepayment = loan.amount + loan.interest;
-  loan.balance = loan.totalRepayment;
-}
+      allPaymentsOnTime =
+        lastLoan.repayments?.every(r => r.daysLate === 0) || false;
+    }
+
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore,
+      requestedAmount: loan.amount,
+      borrower,
+      repaymentRatio,
+      exposureRatio: 0
+    });
+
+    if (!eligibility.allowed) {
+      loan.loanRequestStatus = "rejected";
+      await loan.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(400).json({
+        message: eligibility.reason || "Loan rejected",
+        creditScore,
+        riskLevel: eligibility.riskLevel,
+        defaultProbability: eligibility.defaultProbability
+      });
+    }
 
     /* ===============================
-       6️⃣ LENDER WALLET CHECK
+       HIGH SCORE BONUS
     =============================== */
-/* ===============================
-   6️⃣ LENDER WALLET CHECK (AMOUNT + FEE)
-=============================== */
-const estimatedFee = getB2CCharge(Number(loan.amount));
-const totalDebit = Number(loan.amount) + estimatedFee;
-
-if (lender.walletBalance < totalDebit) {
-  throw new Error(
-    `Insufficient wallet balance. Required: ${totalDebit}`
-  );
-}
-
+    if (creditScore >= 800) {
+      loan.amount = Math.round(loan.amount * 1.2);
+      loan.totalRepayment = loan.amount + loan.interest;
+      loan.balance = loan.totalRepayment;
+    }
 
     /* ===============================
-       7️⃣ APPROVE LOAN (NOT ACTIVE YET)
+       WALLET CHECK (WITH FEE)
+    =============================== */
+    const estimatedFee = getB2CCharge(Number(loan.amount));
+    const totalDebit = Number(loan.amount) + estimatedFee;
+
+    if (lender.walletBalance < totalDebit) {
+      throw new Error(
+        `Insufficient wallet balance. Required: ${totalDebit}`
+      );
+    }
+
+    /* ===============================
+       APPROVE LOAN
     =============================== */
     loan.loanRequestStatus = "approved";
-    loan.status = "pending"; // will become active after B2C callback
+    loan.status = "pending";
     loan.issuedByLenderId = lenderId;
 
     await loan.save({ session });
 
     /* ===============================
-       8️⃣ CREATE PENDING TRANSACTION
+       CREATE TRANSACTION
     =============================== */
     const [transaction] = await Transaction.create(
       [
@@ -1446,7 +1685,7 @@ if (lender.walletBalance < totalDebit) {
     );
 
     /* ===============================
-       9️⃣ AGENT COMMISSION (PENDING)
+       AGENT COMMISSION
     =============================== */
     if (agent) {
       await AgentCommission.create(
@@ -1464,7 +1703,7 @@ if (lender.walletBalance < totalDebit) {
     }
 
     /* ===============================
-       🔟 INITIATE M-PESA B2C
+       INITIATE B2C
     =============================== */
     const b2cResponse = await initiateB2C(
       borrower.phone,
@@ -1476,12 +1715,16 @@ if (lender.walletBalance < totalDebit) {
       throw new Error("Invalid B2C response from M-Pesa");
     }
 
-    transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
-    transaction.conversationID = b2cResponse.ConversationID;
+    transaction.checkoutRequestID =
+      b2cResponse.OriginatorConversationID;
+
+    transaction.conversationID =
+      b2cResponse.ConversationID;
+
     await transaction.save({ session });
 
     /* ===============================
-       ✅ COMMIT
+       COMMIT
     =============================== */
     await session.commitTransaction();
     session.endSession();
@@ -1498,7 +1741,10 @@ if (lender.walletBalance < totalDebit) {
         id: transaction._id,
         checkoutRequestID: transaction.checkoutRequestID
       },
-      b2cResponse
+      risk: {
+        level: eligibility.riskLevel,
+        defaultProbability: eligibility.defaultProbability
+      }
     });
 
   } catch (error) {
@@ -1514,8 +1760,6 @@ if (lender.walletBalance < totalDebit) {
     });
   }
 };
-
-
 
 
 /* =====================================================

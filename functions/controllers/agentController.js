@@ -327,12 +327,10 @@ const registerCustomer = async (req, res) => {
       preferences,
       savingsBalance,
       kraPin,
-
       educationLevel,
       householdSize,
       loanPurpose,
       deviceType,
-
       referralSource,
       referredByBorrowerId
     } = req.body;
@@ -525,12 +523,18 @@ const registerCustomer = async (req, res) => {
       lastScoreUpdate: new Date()
     });
 
-    /* ================= AGENT LINK ================= */
 
-    if (req.user.role === "agent") {
-      const agent = await AgentModel.findById(req.user._id);
-      if (agent) await agent.addCustomer(borrower._id);
+   /* ================= AGENT LINK ================= */
+
+if (req.user.role === "agent") {
+  await AgentModel.updateOne(
+    { _id: req.user._id },
+    {
+      $addToSet: { customers: borrower._id },
+      $inc: { totalCustomers: 1 }
     }
+  );
+}
 
     return res.status(201).json({
       success: true,

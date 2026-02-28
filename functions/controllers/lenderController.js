@@ -53,16 +53,226 @@ exports.sendMoneyToBorrower = async (req, res) => {
 };
 
 
+// exports.getAllCustomersForLender = async (req, res) => {
+//   try {
+//     const lenderId = req.user._id;
+//     const today = new Date();
+
+//     // 1️⃣ Get all agents under this lender
+//     const agents = await AgentModel.find({ lenderId }).select("_id");
+//     const agentIds = agents.map(agent => agent._id);
+
+//     // 2️⃣ Get all customers
+//     const customers = await Customer.find({
+//       isDeleted: false,
+//       $or: [
+//         { registeredBy: lenderId, registeredByModel: "User" },
+//         { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+//       ]
+//     })
+//       .populate("assignedAgent", "name phone status")
+//       .populate("agentId", "name phone status")
+//       .sort({ createdAt: -1 });
+
+//     /* =====================================================
+//        ✅ NEW: FETCH REFERRED BORROWERS (OPTIMIZED)
+//     ===================================================== */
+
+//     const referredIds = customers
+//       .map(c => c.referredByBorrowerId)
+//       .filter(id => id !== null);
+
+//     const referredBorrowers = await Customer.find({
+//       _id: { $in: referredIds }
+//     }).select("fullName phone");
+
+//     const referredMap = {};
+//     referredBorrowers.forEach(rb => {
+//       referredMap[rb._id.toString()] = rb;
+//     });
+
+//     /* =====================================================
+//        ✅ FETCH GUARANTORS (EXISTING OPTIMIZED LOGIC)
+//     ===================================================== */
+
+//     const customerIds = customers.map(c => c._id);
+
+//     const allGuarantors = await Guarantor.find({
+//       borrowerId: { $in: customerIds },
+//       isDeleted: false
+//     });
+
+//     const guarantorMap = {};
+//     allGuarantors.forEach(g => {
+//       const id = g.borrowerId.toString();
+//       if (!guarantorMap[id]) guarantorMap[id] = [];
+//       guarantorMap[id].push(g);
+//     });
+
+//     // 3️⃣ Attach outstanding loan + computed status
+//     const customersWithStatus = await Promise.all(
+//       customers.map(async (customer) => {
+
+//         const loan = await Loan.findOne({
+//           borrowerId: customer._id,
+//           loanRequestStatus: "approved",
+//           status: { $in: ["active", "overdue"] }
+//         }).sort({ createdAt: -1 });
+
+//         const creditScore = customer.creditScore ?? null;
+
+//         // ✅ Risk Level Calculation
+//         let riskLevel = null;
+//         if (creditScore !== null) {
+//           if (creditScore >= 800) riskLevel = "Low";
+//           else if (creditScore >= 600) riskLevel = "Medium";
+//           else riskLevel = "High";
+//         }
+
+//         // ✅ Base customer object (ONLY additions: guarantors + referredByBorrower)
+//         const baseCustomer = {
+//           ...customer.toObject(),
+//           creditScore,
+//           riskLevel,
+//           guarantors: guarantorMap[customer._id.toString()] || [],
+//           referredByBorrower:
+//             customer.referredByBorrowerId
+//               ? referredMap[customer.referredByBorrowerId.toString()] || null
+//               : null
+//         };
+
+//         // 🔹 No active loan
+//         if (!loan) {
+//           return {
+//             ...baseCustomer,
+//             outstandingLoan: null,
+//             loanStatus: customer.isVerified
+//               ? { badge: "ELIGIBLE", color: "blue", label: "✔ Eligible", allowLend: true }
+//               : { badge: "NO_LOAN", color: "gray", label: "No active loan" }
+//           };
+//         }
+
+//         // 🔹 Calculations
+//         const totalDue = loan.totalRepayment;
+//         const amountPaid = loan.repaidAmount || 0;
+//         const totalOutstanding = totalDue - amountPaid;
+
+//         const daysToDue = Math.ceil((loan.dueDate - today) / (1000 * 60 * 60 * 24));
+//         const daysOverdue =
+//           today > loan.dueDate
+//             ? Math.ceil((today - loan.dueDate) / (1000 * 60 * 60 * 24))
+//             : 0;
+
+//         const repaymentRatio = amountPaid / totalDue;
+
+//         const daysElapsed = Math.max(
+//           0,
+//           Math.ceil((today - loan.issueDate) / (1000 * 60 * 60 * 24))
+//         );
+
+//         const expectedRatioByToday = Math.min(1, daysElapsed / loan.duration);
+
+//         // 🔴 OVERDUE
+//         if (today > loan.dueDate && totalOutstanding > 0) {
+//           return {
+//             ...baseCustomer,
+//             outstandingLoan: loan,
+//             loanMetrics: { totalOutstanding, repaymentRatio, daysOverdue },
+//             loanStatus: {
+//               badge: "OVERDUE",
+//               color: "red",
+//               label: "⛔ Overdue",
+//               daysOverdue,
+//               lockNewLoans: true
+//             }
+//           };
+//         }
+
+//         // 🟠 AT-RISK
+//         if (
+//           loan.status === "active" &&
+//           ((daysToDue <= 2 && repaymentRatio < 0.8) ||
+//             repaymentRatio < expectedRatioByToday)
+//         ) {
+//           return {
+//             ...baseCustomer,
+//             outstandingLoan: loan,
+//             loanMetrics: {
+//               totalOutstanding,
+//               repaymentRatio,
+//               expectedRatioByToday,
+//               daysToDue
+//             },
+//             loanStatus: {
+//               badge: "AT_RISK",
+//               color: "amber",
+//               label: "⚠ At-risk",
+//               showReminder: true
+//             }
+//           };
+//         }
+
+//         // 🟢 ON-TRACK
+//         if (repaymentRatio >= expectedRatioByToday) {
+//           return {
+//             ...baseCustomer,
+//             outstandingLoan: loan,
+//             loanMetrics: { totalOutstanding, repaymentRatio, daysToDue },
+//             loanStatus: {
+//               badge: "ON_TRACK",
+//               color: "green",
+//               label: "✔ On-track",
+//               nextDueDate: loan.dueDate
+//             }
+//           };
+//         }
+
+//         // 🟢 CLEARED
+//         if (totalOutstanding === 0) {
+//           return {
+//             ...baseCustomer,
+//             outstandingLoan: null,
+//             loanStatus: { badge: "CLEARED", color: "green", label: "✔ Cleared" }
+//           };
+//         }
+
+//         return {
+//           ...baseCustomer,
+//           outstandingLoan: loan,
+//           loanStatus: { badge: "UNKNOWN", label: "Unknown" }
+//         };
+//       })
+//     );
+
+//     res.status(200).json({
+//       success: true,
+//       count: customersWithStatus.length,
+//       customers: customersWithStatus
+//     });
+
+//   } catch (error) {
+//     console.error("❌ Error fetching customers:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Server error"
+//     });
+//   }
+// };
+
 exports.getAllCustomersForLender = async (req, res) => {
   try {
     const lenderId = req.user._id;
     const today = new Date();
 
-    // 1️⃣ Get all agents under this lender
+    /* =========================================
+       1️⃣ FETCH AGENTS
+    ========================================= */
     const agents = await AgentModel.find({ lenderId }).select("_id");
     const agentIds = agents.map(agent => agent._id);
 
-    // 2️⃣ Get all customers
+    /* =========================================
+       2️⃣ FETCH CUSTOMERS
+    ========================================= */
     const customers = await Customer.find({
       isDeleted: false,
       $or: [
@@ -74,13 +284,12 @@ exports.getAllCustomersForLender = async (req, res) => {
       .populate("agentId", "name phone status")
       .sort({ createdAt: -1 });
 
-    /* =====================================================
-       ✅ NEW: FETCH REFERRED BORROWERS (OPTIMIZED)
-    ===================================================== */
-
+    /* =========================================
+       REFERRED BORROWERS
+    ========================================= */
     const referredIds = customers
       .map(c => c.referredByBorrowerId)
-      .filter(id => id !== null);
+      .filter(Boolean);
 
     const referredBorrowers = await Customer.find({
       _id: { $in: referredIds }
@@ -91,10 +300,9 @@ exports.getAllCustomersForLender = async (req, res) => {
       referredMap[rb._id.toString()] = rb;
     });
 
-    /* =====================================================
-       ✅ FETCH GUARANTORS (EXISTING OPTIMIZED LOGIC)
-    ===================================================== */
-
+    /* =========================================
+       GUARANTORS
+    ========================================= */
     const customerIds = customers.map(c => c._id);
 
     const allGuarantors = await Guarantor.find({
@@ -109,7 +317,9 @@ exports.getAllCustomersForLender = async (req, res) => {
       guarantorMap[id].push(g);
     });
 
-    // 3️⃣ Attach outstanding loan + computed status
+    /* =========================================
+       PROCESS EACH CUSTOMER
+    ========================================= */
     const customersWithStatus = await Promise.all(
       customers.map(async (customer) => {
 
@@ -119,21 +329,70 @@ exports.getAllCustomersForLender = async (req, res) => {
           status: { $in: ["active", "overdue"] }
         }).sort({ createdAt: -1 });
 
-        const creditScore = customer.creditScore ?? null;
+        const creditScore = customer.creditScore ?? 500;
+        const totalLoans = Number(customer.totalLoans || 0);
+        const completedLoans = Number(customer.completedLoans || 0);
+        const overdueLoans = Number(customer.overdueLoans || 0);
 
-        // ✅ Risk Level Calculation
-        let riskLevel = null;
-        if (creditScore !== null) {
-          if (creditScore >= 800) riskLevel = "Low";
-          else if (creditScore >= 600) riskLevel = "Medium";
-          else riskLevel = "High";
+        let riskLevel = "LOW";
+        let maxEligibleAmount = 0;
+        let canTakeNextLoan = false;
+
+        /* =====================================
+           PROGRESSIVE RISK + LIMIT ENGINE
+        ===================================== */
+
+        // 🟢 NEW CUSTOMER
+        if (totalLoans === 0) {
+          riskLevel = "NEW";
+          maxEligibleAmount = 1000;
+          canTakeNextLoan = true;
         }
 
-        // ✅ Base customer object (ONLY additions: guarantors + referredByBorrower)
+        // 🔴 HARD BLOCK (Overdue)
+        else if (overdueLoans > 0 || (loan && loan.status === "overdue")) {
+          riskLevel = "HIGH";
+          maxEligibleAmount = 0;
+          canTakeNextLoan = false;
+        }
+
+        // 🟢 BEHAVIOR-BASED PROGRESSIVE LADDER
+        else if (completedLoans >= 1 && overdueLoans === 0) {
+
+          const progressiveLimit = Math.min(
+            1000 * (completedLoans + 1),
+            10000   // cap at 10k
+          );
+
+          riskLevel = "LOW";
+          maxEligibleAmount = progressiveLimit;
+          canTakeNextLoan = true;
+        }
+
+        // 🟡 CREDIT BAND FALLBACK
+        else {
+          if (creditScore < 550) {
+            riskLevel = "HIGH";
+            maxEligibleAmount = 0;
+          }
+          else if (creditScore < 650) {
+            riskLevel = "MEDIUM";
+            maxEligibleAmount = 3000;
+            canTakeNextLoan = true;
+          }
+          else {
+            riskLevel = "LOW";
+            maxEligibleAmount = 5000;
+            canTakeNextLoan = true;
+          }
+        }
+
         const baseCustomer = {
           ...customer.toObject(),
           creditScore,
           riskLevel,
+          maxEligibleAmount,
+          canTakeNextLoan,
           guarantors: guarantorMap[customer._id.toString()] || [],
           referredByBorrower:
             customer.referredByBorrowerId
@@ -141,43 +400,49 @@ exports.getAllCustomersForLender = async (req, res) => {
               : null
         };
 
-        // 🔹 No active loan
+        /* =====================================
+           NO ACTIVE LOAN
+        ===================================== */
         if (!loan) {
           return {
             ...baseCustomer,
             outstandingLoan: null,
-            loanStatus: customer.isVerified
-              ? { badge: "ELIGIBLE", color: "blue", label: "✔ Eligible", allowLend: true }
-              : { badge: "NO_LOAN", color: "gray", label: "No active loan" }
+            loanStatus: {
+              badge: "ELIGIBLE",
+              color: "blue",
+              label: "✔ Eligible",
+              allowLend: canTakeNextLoan
+            }
           };
         }
 
-        // 🔹 Calculations
+        /* =====================================
+           LOAN CALCULATIONS
+        ===================================== */
         const totalDue = loan.totalRepayment;
         const amountPaid = loan.repaidAmount || 0;
         const totalOutstanding = totalDue - amountPaid;
 
-        const daysToDue = Math.ceil((loan.dueDate - today) / (1000 * 60 * 60 * 24));
         const daysOverdue =
           today > loan.dueDate
             ? Math.ceil((today - loan.dueDate) / (1000 * 60 * 60 * 24))
             : 0;
 
-        const repaymentRatio = amountPaid / totalDue;
-
-        const daysElapsed = Math.max(
-          0,
-          Math.ceil((today - loan.issueDate) / (1000 * 60 * 60 * 24))
-        );
-
-        const expectedRatioByToday = Math.min(1, daysElapsed / loan.duration);
+        let repaymentRatio = 0;
+        if (totalDue > 0) {
+          repaymentRatio = amountPaid / totalDue;
+        }
 
         // 🔴 OVERDUE
-        if (today > loan.dueDate && totalOutstanding > 0) {
+        if (daysOverdue > 0 && totalOutstanding > 0) {
           return {
             ...baseCustomer,
             outstandingLoan: loan,
-            loanMetrics: { totalOutstanding, repaymentRatio, daysOverdue },
+            loanMetrics: {
+              totalOutstanding,
+              repaymentRatio,
+              daysOverdue
+            },
             loanStatus: {
               badge: "OVERDUE",
               color: "red",
@@ -188,59 +453,21 @@ exports.getAllCustomersForLender = async (req, res) => {
           };
         }
 
-        // 🟠 AT-RISK
-        if (
-          loan.status === "active" &&
-          ((daysToDue <= 2 && repaymentRatio < 0.8) ||
-            repaymentRatio < expectedRatioByToday)
-        ) {
-          return {
-            ...baseCustomer,
-            outstandingLoan: loan,
-            loanMetrics: {
-              totalOutstanding,
-              repaymentRatio,
-              expectedRatioByToday,
-              daysToDue
-            },
-            loanStatus: {
-              badge: "AT_RISK",
-              color: "amber",
-              label: "⚠ At-risk",
-              showReminder: true
-            }
-          };
-        }
-
-        // 🟢 ON-TRACK
-        if (repaymentRatio >= expectedRatioByToday) {
-          return {
-            ...baseCustomer,
-            outstandingLoan: loan,
-            loanMetrics: { totalOutstanding, repaymentRatio, daysToDue },
-            loanStatus: {
-              badge: "ON_TRACK",
-              color: "green",
-              label: "✔ On-track",
-              nextDueDate: loan.dueDate
-            }
-          };
-        }
-
-        // 🟢 CLEARED
-        if (totalOutstanding === 0) {
-          return {
-            ...baseCustomer,
-            outstandingLoan: null,
-            loanStatus: { badge: "CLEARED", color: "green", label: "✔ Cleared" }
-          };
-        }
-
+        // 🟢 ACTIVE / ON TRACK
         return {
           ...baseCustomer,
           outstandingLoan: loan,
-          loanStatus: { badge: "UNKNOWN", label: "Unknown" }
+          loanMetrics: {
+            totalOutstanding,
+            repaymentRatio
+          },
+          loanStatus: {
+            badge: "ACTIVE",
+            color: "green",
+            label: "✔ Active Loan"
+          }
         };
+
       })
     );
 
@@ -258,8 +485,6 @@ exports.getAllCustomersForLender = async (req, res) => {
     });
   }
 };
-
-
 
 exports.assignCustomerToAgent = async (req, res) => {
   try {
