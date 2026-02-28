@@ -39,51 +39,64 @@ exports.addMember = async (req, res) => {
   try {
     const { groupId, borrowerId } = req.body;
 
-    if (!groupId || !borrowerId) {
-      return res.status(400).json({ message: "groupId and borrowerId are required" });
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Borrower not found" });
     }
 
-    // Support single ID or array of IDs
-    const ids = Array.isArray(borrowerId) ? borrowerId : [borrowerId];
-
-    // Find all valid customers
-    const customers = await Customer.find({ _id: { $in: ids } });
-    const validIds = customers.map(c => c._id.toString());
-
-    if (validIds.length === 0) {
-      return res.status(404).json({ message: "No valid borrowers found" });
+    // ✅ API-level check
+    const exists = await GroupMember.findOne({ groupId, borrowerId });
+    if (exists) {
+      return res.status(400).json({
+        message: "Customer already exists in this group"
+      });
     }
 
-    // Find existing group members
-    const existingMembers = await GroupMember.find({
-      groupId,
-      borrowerId: { $in: validIds }
-    }).select("borrowerId");
+    const member = await GroupMember.create({ groupId, borrowerId });
 
-    const existingIds = existingMembers.map(m => m.borrowerId.toString());
+    /* ===============================
+       SEND SMS AFTER ADD
+    =============================== */
 
-    // Filter IDs that are not already members
-    const newMemberIds = validIds.filter(id => !existingIds.includes(id));
+    const group = await Group.findById(groupId)
+      .populate("lenderId", "name");
 
-    if (newMemberIds.length === 0) {
-      return res.status(400).json({ message: "All borrowers are already in the group" });
-    }
+    const members = await GroupMember.find({ groupId })
+      .populate("borrowerId", "fullName")
+      .limit(10);
 
-    // Create new group members in bulk
-    const newMembers = newMemberIds.map(id => ({ groupId, borrowerId: id }));
-    const addedMembers = await GroupMember.insertMany(newMembers);
+    const memberNames = members
+      .filter(m => m.borrowerId)
+      .map(m => m.borrowerId.fullName?.split(" ")[0])
+      .join(", ");
+
+    const adminName = group?.lenderId?.name || "Group Admin";
+
+    const message = `You have been added to the ${group.name} Group.
+
+Admin: ${adminName}
+Total Members: ${members.length}
+Members: ${memberNames}`;
+
+    await sendSMS(borrower.phone, message);
 
     res.json({
       success: true,
-      addedMembers,
-      skipped: existingIds
+      member
     });
 
   } catch (error) {
-    console.error(error);
+    // ✅ Mongo duplicate key error
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: "Customer already exists in this group"
+      });
+    }
+
+    console.error("❌ addMember error:", error);
     res.status(500).json({ message: error.message });
   }
-}
+};
 /* =========================
    REMOVE MEMBER
 ========================= */
