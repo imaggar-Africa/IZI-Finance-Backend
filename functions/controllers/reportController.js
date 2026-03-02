@@ -333,7 +333,9 @@ exports.getLoansReport = async (req, res) => {
       lenderId,
       loanRequestStatus: "approved",
       status: { $in: ["active", "overdue", "fully paid"] }
-    }).populate("borrowerId", "fullName creditLevel");
+    })
+      .populate("borrowerId", "fullName creditLevel")
+      .populate("requestedByAgentId", "name");
 
     /* =====================================================
        1️⃣ LOAN VOLUME METRICS
@@ -361,25 +363,26 @@ exports.getLoansReport = async (req, res) => {
     const loansByProduct = Object.keys(productMap).map(key => ({
       product: key,
       count: productMap[key],
-      percentage: totalLoansIssued > 0
-        ? Number(((productMap[key] / totalLoansIssued) * 100).toFixed(2))
-        : 0
+      percentage:
+        totalLoansIssued > 0
+          ? Number(((productMap[key] / totalLoansIssued) * 100).toFixed(2))
+          : 0
     }));
 
     /* Loans by Agent */
     const agentMap = {};
     loans.forEach(l => {
-      const agentId = l.requestedByAgentId?.toString() || "direct";
-      agentMap[agentId] = (agentMap[agentId] || 0) + 1;
+      const agentName = l.requestedByAgentId?.name || "Direct";
+      agentMap[agentName] = (agentMap[agentName] || 0) + 1;
     });
 
-    const loansByAgent = Object.keys(agentMap).map(agentId => ({
-      agentId,
-      loanCount: agentMap[agentId]
+    const loansByAgent = Object.keys(agentMap).map(agentName => ({
+      agentName,
+      loanCount: agentMap[agentName]
     }));
 
     /* =====================================================
-       2️⃣ LOAN STATUS BREAKDOWN
+       2️⃣ LOAN STATUS BREAKDOWN (Graph Ready)
     ===================================================== */
 
     const statusBreakdown = {
@@ -390,41 +393,92 @@ exports.getLoansReport = async (req, res) => {
     };
 
     loans.forEach(l => {
-      if (l.isDefaulted) {
-        statusBreakdown.defaulted++;
-      } else if (l.status === "fully paid") {
-        statusBreakdown.completed++;
-      } else if (l.status === "active") {
-        statusBreakdown.active++;
-      } else if (l.isRestructured) {
-        statusBreakdown.restructured++;
-      }
+      if (l.isDefaulted) statusBreakdown.defaulted++;
+      else if (l.status === "fully paid") statusBreakdown.completed++;
+      else if (l.status === "active") statusBreakdown.active++;
+      else if (l.isRestructured) statusBreakdown.restructured++;
     });
 
+    const loanStatusBreakdown = [
+      { status: "active", count: statusBreakdown.active },
+      { status: "completed", count: statusBreakdown.completed },
+      { status: "defaulted", count: statusBreakdown.defaulted },
+      { status: "restructured", count: statusBreakdown.restructured }
+    ];
+
     /* =====================================================
-       3️⃣ DISBURSEMENT TREND (Monthly)
+       3️⃣ LOAN STATUS TREND (Daily / Weekly / Monthly)
     ===================================================== */
 
-    const disbursementTrend = await Loan.aggregate([
+    const baseMatch = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
+      loanRequestStatus: "approved"
+    };
+
+    // DAILY
+    const dailyRaw = await Loan.aggregate([
+      { $match: baseMatch },
       {
-        $match: {
-          lenderId: new mongoose.Types.ObjectId(lenderId),
-          loanRequestStatus: "approved",
-          status: { $in: ["active", "overdue", "fully paid"] }
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            month: { $month: "$issueDate" },
+            day: { $dayOfMonth: "$issueDate" }
+          },
+          count: { $sum: 1 }
         }
       },
+      { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } }
+    ]);
+
+    const dailyTrend = dailyRaw.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      day: t._id.day,
+      count: t.count
+    }));
+
+    // WEEKLY
+    const weeklyRaw = await Loan.aggregate([
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            week: { $week: "$issueDate" }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.week": 1 } }
+    ]);
+
+    const weeklyTrend = weeklyRaw.map(t => ({
+      year: t._id.year,
+      week: t._id.week,
+      count: t.count
+    }));
+
+    // MONTHLY
+    const monthlyRaw = await Loan.aggregate([
+      { $match: baseMatch },
       {
         $group: {
           _id: {
             year: { $year: "$issueDate" },
             month: { $month: "$issueDate" }
           },
-          totalDisbursed: { $sum: "$amount" },
           count: { $sum: 1 }
         }
       },
       { $sort: { "_id.year": 1, "_id.month": 1 } }
     ]);
+
+    const monthlyTrend = monthlyRaw.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      count: t.count
+    }));
 
     /* =====================================================
        4️⃣ NEW vs REPEAT BORROWERS
@@ -433,7 +487,8 @@ exports.getLoansReport = async (req, res) => {
     const borrowerLoanCount = {};
 
     loans.forEach(l => {
-      const borrowerId = l.borrowerId?._id.toString();
+      const borrowerId = l.borrowerId?._id?.toString();
+      if (!borrowerId) return;
       borrowerLoanCount[borrowerId] =
         (borrowerLoanCount[borrowerId] || 0) + 1;
     });
@@ -480,7 +535,7 @@ exports.getLoansReport = async (req, res) => {
     });
 
     /* =====================================================
-       RESPONSE (FIELD NAMES UNCHANGED)
+       RESPONSE
     ===================================================== */
 
     res.json({
@@ -494,10 +549,16 @@ exports.getLoansReport = async (req, res) => {
         loansByAgent
       },
 
-      loanStatusBreakdown: statusBreakdown,
+      loanStatusBreakdown,
+
+      loanStatusBreakdownTrend: {
+        daily: dailyTrend,
+        weekly: weeklyTrend,
+        monthly: monthlyTrend
+      },
 
       disbursementAnalysis: {
-        monthlyTrend: disbursementTrend,
+        monthlyTrend: monthlyTrend,
         newBorrowers: firstTime,
         repeatBorrowers: repeat,
         firstTimeBorrowerRatio: firstTimeRatio
@@ -764,22 +825,175 @@ const channelAnalysis = Object.keys(channelMap).map(key => ({
    PROFIT & INTEREST REPORT
 =========================== */
 exports.getProfitReport = async (req, res) => {
-  const loans = await Loan.find();
+  try {
+    const lenderId = req.user.id;
 
-  const interestExpected = loans.reduce((s, l) => s + l.interest, 0);
-  const interestCollected = loans.reduce(
-    (s, l) => s + Math.max(0, l.repaidAmount - l.amount),
-    0
-  );
+    /* =====================================================
+       BASE LOAN FILTER
+    ===================================================== */
 
-  res.json({
-    success: true,
-    summary: {
-      interestExpected,
-      interestCollected,
-      netProfit: interestCollected
-    }
-  });
+    const loans = await Loan.find({
+      lenderId,
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "overdue", "fully paid"] }
+    });
+
+    /* =====================================================
+       REVENUE METRICS
+    ===================================================== */
+
+    const totalPrincipal = loans.reduce(
+      (sum, l) => sum + (l.amount || 0),
+      0
+    );
+
+    const totalInterestExpected = loans.reduce(
+      (sum, l) => sum + (l.interest || 0),
+      0
+    );
+
+    const totalInterestCollected = loans.reduce(
+      (sum, l) =>
+        sum + Math.max(0, (l.repaidAmount || 0) - (l.amount || 0)),
+      0
+    );
+
+    /* Fees & Penalties from Transactions */
+    const transactions = await Transaction.find({ lenderId });
+
+    const feesCollected = transactions
+      .filter(t => t.type === "fee" && t.status === "successful")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    const penaltiesCollected = transactions
+      .filter(t => t.type === "penalty" && t.status === "successful")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    /* =====================================================
+       PROFITABILITY
+    ===================================================== */
+
+    const grossRevenue =
+      totalInterestCollected + feesCollected + penaltiesCollected;
+
+    const operationalCostPerLoan = 35; // you can move to config
+    const totalOperationalCost =
+      loans.length * operationalCostPerLoan;
+
+    const netProfit = grossRevenue - totalOperationalCost;
+
+    /* =====================================================
+       EFFICIENCY METRICS
+    ===================================================== */
+
+    const uniqueBorrowers = new Set(
+      loans.map(l => l.borrowerId?.toString())
+    ).size;
+
+    const revenuePerBorrower =
+      uniqueBorrowers > 0
+        ? Number((grossRevenue / uniqueBorrowers).toFixed(2))
+        : 0;
+
+    const uniqueAgents = new Set(
+      loans.map(l => l.requestedByAgentId?.toString())
+    ).size;
+
+    const revenuePerAgent =
+      uniqueAgents > 0
+        ? Number((grossRevenue / uniqueAgents).toFixed(2))
+        : 0;
+
+    /* =====================================================
+       YIELD ON PORTFOLIO
+    ===================================================== */
+
+    const yieldOnPortfolio =
+      totalPrincipal > 0
+        ? Number(
+            ((totalInterestCollected / totalPrincipal) * 100).toFixed(2)
+          )
+        : 0;
+
+    /* =====================================================
+       TREND CHARTS (MONTHLY)
+    ===================================================== */
+
+    const interestTrend = await Loan.aggregate([
+      {
+        $match: {
+          lenderId: new mongoose.Types.ObjectId(lenderId),
+          loanRequestStatus: "approved"
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            month: { $month: "$issueDate" }
+          },
+          interestExpected: { $sum: "$interest" }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ]);
+
+    const profitTrend = await Loan.aggregate([
+      {
+        $match: {
+          lenderId: new mongoose.Types.ObjectId(lenderId),
+          loanRequestStatus: "approved"
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            month: { $month: "$issueDate" }
+          },
+          totalPrincipal: { $sum: "$amount" },
+          totalInterest: { $sum: "$interest" }
+        }
+      }
+    ]);
+
+    /* =====================================================
+       RESPONSE (MATCHING UI IMAGE)
+    ===================================================== */
+
+    res.json({
+      success: true,
+
+      revenueMetrics: {
+        totalInterestEarned: totalInterestCollected,
+        totalInterestExpected,
+        feesCollected,
+        penaltiesCollected,
+        profitabilityAfterExpenses: netProfit
+      },
+
+      efficiencyIndicators: {
+        costPerLoan: operationalCostPerLoan,
+        revenuePerBorrower,
+        revenuePerAgent
+      },
+
+      profitabilityMetrics: {
+        grossProfit: grossRevenue,
+        netProfit,
+        yieldOnPortfolio
+      },
+
+      trendCharts: {
+        interestIncomeTrend: interestTrend,
+        profitTrend
+      }
+    });
+
+  } catch (err) {
+    console.error("Profit report error:", err);
+    res.status(500).json({ message: err.message });
+  }
 };
 
 /* ===========================
@@ -1345,55 +1559,233 @@ exports.getRegionPerformanceReport = async (req, res) => {
 =========================== */
 exports.getDetailedProfitReport = async (req, res) => {
   try {
-    const loans = await Loan.find().populate("borrowerId", "fullName");
+    const lenderId = req.user.id;
 
-    let totalPrincipal = 0;
-    let totalInterestExpected = 0;
-    let totalInterestCollected = 0;
-    let totalProfit = 0;
+    const from = req.query.from ? new Date(req.query.from) : null;
+    const to = req.query.to ? new Date(req.query.to) : null;
 
-    const data = loans.map((loan) => {
-      const principal = loan.amount || 0;
-      const interest = loan.interest || 0;
-      const totalRepayment = loan.totalRepayment || 0;
-      const repaidAmount = loan.repaidAmount || 0;
+    /* =====================================================
+       BASE LOANS (ISSUED ONLY)
+    ===================================================== */
 
-      const interestCollected = Math.max(0, repaidAmount - principal);
+    const loanFilter = {
+      lenderId,
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "overdue", "fully paid"] }
+    };
 
-      totalPrincipal += principal;
-      totalInterestExpected += interest;
-      totalInterestCollected += interestCollected;
-      totalProfit += interestCollected;
+    const loans = await Loan.find(loanFilter);
 
-      return {
-        borrowerId: loan.borrowerId?._id || null,
-        fullName: loan.borrowerId?.fullName || "N/A",
-        loanAmount: principal,
-        interestExpected: interest,
-        totalRepayment,
-        interestCollected,
-        status: loan.status,
-        dueDate: loan.dueDate
-          ? loan.dueDate.toISOString().split("T")[0]
-          : null
-      };
-    });
+    const totalLoans = loans.length;
+
+    /* =====================================================
+       REVENUE CALCULATIONS
+    ===================================================== */
+
+    const totalPrincipal = loans.reduce(
+      (sum, l) => sum + (l.amount || 0),
+      0
+    );
+
+    const totalInterestExpected = loans.reduce(
+      (sum, l) => sum + (l.interest || 0),
+      0
+    );
+
+    const totalInterestCollected = loans.reduce(
+      (sum, l) =>
+        sum + Math.max(0, (l.repaidAmount || 0) - (l.amount || 0)),
+      0
+    );
+
+    /* =====================================================
+       PERIOD INTEREST (Collected)
+    ===================================================== */
+
+    let interestThisPeriod = 0;
+
+    if (from && to) {
+      loans.forEach(l => {
+        if (l.updatedAt >= from && l.updatedAt <= to) {
+          const collected = Math.max(
+            0,
+            (l.repaidAmount || 0) - (l.amount || 0)
+          );
+          interestThisPeriod += collected;
+        }
+      });
+    }
+
+    /* =====================================================
+       FEES & PENALTIES
+    ===================================================== */
+
+    const transactionFilter = { lenderId };
+
+    if (from && to) {
+      transactionFilter.createdAt = { $gte: from, $lte: to };
+    }
+
+    const transactions = await Transaction.find(transactionFilter);
+
+    const feesCollected = transactions
+      .filter(t => t.type === "fee" && t.status === "successful")
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    const penaltiesCollected = transactions
+      .filter(t => t.type === "penalty" && t.status === "successful")
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    /* =====================================================
+       PROFITABILITY
+    ===================================================== */
+
+    const grossProfit =
+      totalInterestCollected + feesCollected + penaltiesCollected;
+
+    const netProfit = grossProfit; // no artificial cost
+
+    const yieldOnPortfolio =
+      totalPrincipal > 0
+        ? Number(
+            ((totalInterestCollected / totalPrincipal) * 100).toFixed(2)
+          )
+        : 0;
+
+    const averageInterestPerLoan =
+      totalLoans > 0
+        ? Number((totalInterestCollected / totalLoans).toFixed(2))
+        : 0;
+
+    /* =====================================================
+       EFFICIENCY
+    ===================================================== */
+
+    const uniqueBorrowers = new Set(
+      loans.map(l => l.borrowerId?.toString())
+    ).size;
+
+    const revenuePerBorrower =
+      uniqueBorrowers > 0
+        ? Number((grossProfit / uniqueBorrowers).toFixed(2))
+        : 0;
+
+    const uniqueAgents = new Set(
+      loans.map(l => l.requestedByAgentId?.toString())
+    ).size;
+
+    const revenuePerAgent =
+      uniqueAgents > 0
+        ? Number((grossProfit / uniqueAgents).toFixed(2))
+        : 0;
+
+    /* =====================================================
+       TREND CHARTS (MONTHLY)
+    ===================================================== */
+
+    const trendMatch = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
+      loanRequestStatus: "approved"
+    };
+
+    const interestTrend = await Loan.aggregate([
+      { $match: trendMatch },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            month: { $month: "$issueDate" }
+          },
+          interestExpected: { $sum: "$interest" },
+          interestCollected: {
+            $sum: {
+              $max: [
+                { $subtract: ["$repaidAmount", "$amount"] },
+                0
+              ]
+            }
+          },
+          principal: { $sum: "$amount" }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ]);
+
+    const profitTrend = interestTrend.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      grossProfit: t.interestCollected
+    }));
+
+    const yieldTrend = interestTrend.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      yield:
+        t.principal > 0
+          ? Number(
+              ((t.interestCollected / t.principal) * 100).toFixed(2)
+            )
+          : 0
+    }));
+
+    /* =====================================================
+       RESPONSE
+    ===================================================== */
 
     res.json({
-      success: true,
-      summary: {
-        totalLoans: loans.length,
-        totalPrincipal,
-        totalInterestExpected,
-        totalInterestCollected,
-        netProfit: totalProfit
-      },
-      data
-    });
+  success: true,
 
-  } catch (error) {
-    console.error("Profit report error:", error);
-    res.status(500).json({ message: error.message });
+  revenueMetrics: {
+    totalInterestEarned: totalInterestCollected,
+    interestEarnedThisPeriod: interestThisPeriod,
+    totalInterestExpected,
+    feesCollected,
+    penaltiesCollected
+  },
+
+  profitabilityMetrics: {
+    grossProfit,
+    netProfit,
+    yieldOnPortfolio,
+    averageInterestPerLoan
+  },
+
+  efficiencyIndicators: {
+    costPerLoan: 0, // set real value if expense module exists
+    revenuePerBorrower,
+    revenuePerAgent
+  },
+
+  trendCharts: {
+    interestIncomeTrend: interestTrend.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      expected: t.interestExpected,
+      collected: t.interestCollected
+    })),
+
+    profitTrend: interestTrend.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      profit: t.interestCollected
+    })),
+
+    yieldTrend: interestTrend.map(t => ({
+      year: t._id.year,
+      month: t._id.month,
+      yield:
+        t.principal > 0
+          ? Number(
+              ((t.interestCollected / t.principal) * 100).toFixed(2)
+            )
+          : 0
+    }))
+  }
+});
+
+  } catch (err) {
+    console.error("Detailed profit report error:", err);
+    res.status(500).json({ message: err.message });
   }
 };                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
 
