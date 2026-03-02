@@ -3,128 +3,141 @@ const Customer = require("../models/customer");
 const Transaction = require("../models/Transaction");
 const Agent = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
-
 const NodeCache = require("node-cache");
 const dashboardCache = new NodeCache({ stdTTL: 60 }); // cache 60 sec
+
+
 
 exports.getDashboardReport = async (req, res) => {
   try {
     const lenderId = req.user._id;
-
     const now = new Date();
+
     const startOfToday = new Date(
       now.getFullYear(),
       now.getMonth(),
       now.getDate()
     );
 
-    const baseMatch = {
+    const baseFilter = {
       lenderId,
       loanRequestStatus: "approved",
       isDeleted: { $ne: true },
       isWrittenOff: { $ne: true }
     };
 
-    /* =====================================================
-       1️⃣ KEY KPIs
-    ===================================================== */
+    /* ===============================
+       TOTAL PORTFOLIO
+    =============================== */
 
-    // Total Portfolio (only active + overdue)
-    const portfolioAgg = await Loan.aggregate([
+    const portfolio = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           status: { $in: ["active", "overdue"] }
         }
       },
       {
         $group: {
           _id: null,
-          totalPortfolio: { $sum: "$balance" }
+          total: { $sum: "$balance" }
         }
       }
     ]);
 
-    const totalPortfolio = portfolioAgg[0]?.totalPortfolio || 0;
+    const totalLoanPortfolio = portfolio[0]?.total || 0;
 
-    // Total Disbursed (only actually issued loans)
-    const disbursedAgg = await Loan.aggregate([
+    /* ===============================
+       TOTAL DISBURSED
+    =============================== */
+
+    const disbursed = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           status: { $in: ["active", "overdue", "fully paid"] }
         }
       },
       {
         $group: {
           _id: null,
-          totalDisbursed: { $sum: "$amount" }
+          total: { $sum: "$amount" }
         }
       }
     ]);
 
-    const totalDisbursed = disbursedAgg[0]?.totalDisbursed || 0;
+    const totalDisbursed = disbursed[0]?.total || 0;
 
-    // Total Collected
-    const collectedAgg = await Loan.aggregate([
+    /* ===============================
+       TOTAL COLLECTED
+    =============================== */
+
+    const collected = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           status: { $in: ["active", "overdue", "fully paid"] }
         }
       },
       {
         $group: {
           _id: null,
-          totalCollected: { $sum: "$repaidAmount" }
+          total: { $sum: "$repaidAmount" }
         }
       }
     ]);
 
-    const totalCollected = collectedAgg[0]?.totalCollected || 0;
+    const totalCollected = collected[0]?.total || 0;
 
-    // Total Interest Earned (only fully paid loans)
-    const interestAgg = await Loan.aggregate([
+    /* ===============================
+       TOTAL PROFIT (INTEREST)
+    =============================== */
+
+    const profit = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           status: "fully paid"
         }
       },
       {
         $group: {
           _id: null,
-          totalInterest: {
-            $sum: {
-              $subtract: ["$totalRepayment", "$amount"]
-            }
-          }
+          total: { $sum: "$interest" }
         }
       }
     ]);
 
-    const totalInterestEarned = interestAgg[0]?.totalInterest || 0;
+    const totalProfit = profit[0]?.total || 0;
 
-    // Active Loans
+    /* ===============================
+       ACTIVE LOANS & BORROWERS
+    =============================== */
+
     const activeLoans = await Loan.countDocuments({
-      ...baseMatch,
+      ...baseFilter,
       status: "active"
     });
 
-    // Active Borrowers
-    const activeBorrowers = await Loan.distinct("borrowerId", {
-      ...baseMatch,
-      status: "active"
-    });
+    const activeBorrowers = await Loan.distinct(
+      "borrowerId",
+      {
+        ...baseFilter,
+        status: "active"
+      }
+    );
 
-    // Default Rate
+    /* ===============================
+       DEFAULT RATE
+    =============================== */
+
     const totalLoans = await Loan.countDocuments({
-      ...baseMatch,
+      ...baseFilter,
       status: { $in: ["active", "overdue", "fully paid"] }
     });
 
     const defaultedLoans = await Loan.countDocuments({
-      ...baseMatch,
+      ...baseFilter,
       isDefaulted: true
     });
 
@@ -133,155 +146,127 @@ exports.getDashboardReport = async (req, res) => {
         ? Number(((defaultedLoans / totalLoans) * 100).toFixed(2))
         : 0;
 
-    /* =====================================================
-       2️⃣ PAR (1,7,30)
-    ===================================================== */
+    /* ===============================
+       PAR
+    =============================== */
 
     const overdueLoans = await Loan.find({
-      ...baseMatch,
+      ...baseFilter,
       status: "overdue"
     });
 
-    let par1 = 0,
-      par7 = 0,
-      par30 = 0;
+    let par1 = 0, par7 = 0, par30 = 0;
 
     overdueLoans.forEach((loan) => {
-      const daysOverdue =
+      const days =
         (now - new Date(loan.dueDate)) /
         (1000 * 60 * 60 * 24);
 
-      if (daysOverdue >= 1) par1 += loan.balance;
-      if (daysOverdue >= 7) par7 += loan.balance;
-      if (daysOverdue >= 30) par30 += loan.balance;
+      if (days >= 1) par1 += loan.balance;
+      if (days >= 7) par7 += loan.balance;
+      if (days >= 30) par30 += loan.balance;
     });
 
     const par = {
-      PAR1: totalPortfolio
-        ? Number(((par1 / totalPortfolio) * 100).toFixed(2))
+      PAR1: totalLoanPortfolio
+        ? Number(((par1 / totalLoanPortfolio) * 100).toFixed(2))
         : 0,
-      PAR7: totalPortfolio
-        ? Number(((par7 / totalPortfolio) * 100).toFixed(2))
+      PAR7: totalLoanPortfolio
+        ? Number(((par7 / totalLoanPortfolio) * 100).toFixed(2))
         : 0,
-      PAR30: totalPortfolio
-        ? Number(((par30 / totalPortfolio) * 100).toFixed(2))
+      PAR30: totalLoanPortfolio
+        ? Number(((par30 / totalLoanPortfolio) * 100).toFixed(2))
         : 0
     };
 
-    /* =====================================================
-       3️⃣ TRENDS (Monthly with Month Name)
-    ===================================================== */
+    /* ===============================
+       TRENDS
+    =============================== */
 
     const disbursementTrend = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           status: { $in: ["active", "overdue", "fully paid"] }
         }
       },
       {
         $group: {
-          _id: { $month: "$createdAt" },
-          total: { $sum: "$amount" }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          monthNumber: "$_id",
-          month: {
-            $arrayElemAt: [
-              [
-                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-              ],
-              "$_id"
-            ]
+          _id: {
+            $dateToString: { format: "%Y-%m", date: "$createdAt" }
           },
-          total: 1
+          amount: { $sum: "$amount" }
         }
       },
-      { $sort: { monthNumber: 1 } }
+      { $sort: { _id: 1 } }
     ]);
 
     const repaymentTrend = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
-          status: { $in: ["active", "overdue", "fully paid"] }
+          ...baseFilter,
+          repaidAmount: { $gt: 0 }
         }
       },
       {
         $group: {
-          _id: { $month: "$updatedAt" },
-          total: { $sum: "$repaidAmount" }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          monthNumber: "$_id",
-          month: {
-            $arrayElemAt: [
-              [
-                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-              ],
-              "$_id"
-            ]
+          _id: {
+            $dateToString: { format: "%Y-%m", date: "$updatedAt" }
           },
-          total: 1
+          amount: { $sum: "$repaidAmount" }
         }
       },
-      { $sort: { monthNumber: 1 } }
+      { $sort: { _id: 1 } }
     ]);
 
     const loanGrowthTrend = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
-          status: { $in: ["active", "overdue", "fully paid"] }
+          ...baseFilter
         }
       },
       {
         $group: {
-          _id: { $month: "$createdAt" },
+          _id: {
+            $dateToString: { format: "%Y-%m", date: "$createdAt" }
+          },
           count: { $sum: 1 }
         }
       },
-      {
-        $project: {
-          _id: 0,
-          monthNumber: "$_id",
-          month: {
-            $arrayElemAt: [
-              [
-                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-              ],
-              "$_id"
-            ]
-          },
-          count: 1
-        }
-      },
-      { $sort: { monthNumber: 1 } }
+      { $sort: { _id: 1 } }
     ]);
 
-    /* =====================================================
-       4️⃣ OPERATIONAL SNAPSHOT
-    ===================================================== */
+    const defaultTrend = await Loan.aggregate([
+      {
+        $match: {
+          ...baseFilter,
+          isDefaulted: true
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m", date: "$updatedAt" }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    /* ===============================
+       TODAY SNAPSHOT
+    =============================== */
 
     const loansIssuedToday = await Loan.countDocuments({
-      ...baseMatch,
-      status: { $in: ["active", "overdue", "fully paid"] },
+      ...baseFilter,
       createdAt: { $gte: startOfToday }
     });
 
-    const repaymentsTodayAgg = await Loan.aggregate([
+    const repaymentsToday = await Loan.aggregate([
       {
         $match: {
-          ...baseMatch,
+          ...baseFilter,
           updatedAt: { $gte: startOfToday }
         }
       },
@@ -293,38 +278,36 @@ exports.getDashboardReport = async (req, res) => {
       }
     ]);
 
-    const activeAgentsToday = await Agent.countDocuments({
+    const overdueLoansCount = overdueLoans.length;
+
+    const agentsActiveToday = await Agent.countDocuments({
       lenderId,
       lastActiveAt: { $gte: startOfToday }
     });
 
-    /* =====================================================
-       FINAL RESPONSE
-    ===================================================== */
-
-    res.json({
+    return res.json({
       success: true,
-      kpis: {
-        totalPortfolio,
+      dashboardSummary: {
+        totalLoanPortfolio,
         totalDisbursed,
         totalCollected,
-        totalInterestEarned,
-        activeLoans,
+        portfolioAtRisk: par,
         activeBorrowers: activeBorrowers.length,
-        defaultRate,
-        par
+        activeLoans,
+        totalProfitInterestEarned: totalProfit,
+        defaultRate
       },
       trends: {
         disbursementTrend,
         repaymentTrend,
-        loanGrowthTrend
+        loanGrowthTrend,
+        defaultTrend
       },
       operationalSnapshot: {
         loansIssuedToday,
-        repaymentsReceivedToday:
-          repaymentsTodayAgg[0]?.total || 0,
-        overdueLoans: overdueLoans.length,
-        activeAgentsToday
+        repaymentsReceivedToday: repaymentsToday[0]?.total || 0,
+        overdueLoans: overdueLoansCount,
+        agentsActiveToday
       }
     });
 
