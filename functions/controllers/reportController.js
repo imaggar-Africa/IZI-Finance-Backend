@@ -320,85 +320,194 @@ exports.getDashboardReport = async (req, res) => {
 /* ===========================
    LOANS REPORT
 =========================== */
+
 exports.getLoansReport = async (req, res) => {
   try {
-    const loans = await Loan.find()
-      .populate("borrowerId", "fullName creditLevel")
-      .populate("lenderId");
+    const lenderId = req.user.id;
 
-    const formattedLoans = loans.map((loan) => {
-      /* =============================
-         INSTALLMENT CALCULATION
-      ============================= */
+    /* =====================================================
+       BASE FILTER (ONLY ISSUED LOANS)
+    ===================================================== */
 
-      let repaymentAmount = 0;
+    const loans = await Loan.find({
+      lenderId,
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "overdue", "fully paid"] }
+    }).populate("borrowerId", "fullName creditLevel");
 
-      if (loan.repaymentPlan === "daily") {
-        repaymentAmount = loan.dailyRepayment || 0;
-      } else if (loan.repaymentPlan === "weekly") {
-        repaymentAmount = Math.round(
-          (loan.totalRepayment || 0) / Math.ceil(loan.duration / 7)
-        );
-      } else if (loan.repaymentPlan === "monthly") {
-        repaymentAmount = Math.round(
-          (loan.totalRepayment || 0) / Math.ceil(loan.duration / 30)
-        );
-      }
+    /* =====================================================
+       1️⃣ LOAN VOLUME METRICS
+    ===================================================== */
 
-      /* =============================
-         REPAYMENT STATUS
-      ============================= */
+    const totalLoansIssued = loans.length;
 
-      let repaymentStatus = loan.status;
+    const totalAmountDisbursed = loans.reduce(
+      (sum, l) => sum + (l.amount || 0),
+      0
+    );
 
-      if (loan.isDefaulted) {
-        repaymentStatus = "defaulted";
-      }
+    const averageLoanSize =
+      totalLoansIssued > 0
+        ? Number((totalAmountDisbursed / totalLoansIssued).toFixed(2))
+        : 0;
 
-      return {
-        loan_id: loan._id.toString(),
-        borrower_name: loan.borrowerId?.fullName || "N/A",
-        loan_amount: loan.amount || 0,
-        total_repayment: loan.totalRepayment || 0,
-        repayment_plan: loan.repaymentPlan || "daily",
-        repayment_amount: repaymentAmount,
-        outstanding_balance: loan.balance || 0,
-        repayment_status: repaymentStatus,
-        credit_score_band:
-          loan.borrowerId?.creditLevel || "Unknown",
-        issue_date: loan.issueDate
-          ? loan.issueDate.toISOString().split("T")[0]
-          : null,
-        due_date: loan.dueDate
-          ? loan.dueDate.toISOString().split("T")[0]
-          : null,
-      };
+    /* Loans by Product */
+    const productMap = {};
+    loans.forEach(l => {
+      const product = l.productType || "general";
+      productMap[product] = (productMap[product] || 0) + 1;
     });
 
-    /* =============================
-       SUMMARY
-    ============================= */
+    const loansByProduct = Object.keys(productMap).map(key => ({
+      product: key,
+      count: productMap[key],
+      percentage: totalLoansIssued > 0
+        ? Number(((productMap[key] / totalLoansIssued) * 100).toFixed(2))
+        : 0
+    }));
 
-    const summary = {
-      count: loans.length,
-      totalAmount: loans.reduce(
-        (sum, loan) => sum + (loan.amount || 0),
-        0
-      ),
-      totalInterest: loans.reduce(
-        (sum, loan) => sum + (loan.interest || 0),
-        0
-      ),
-      totalOutstanding: loans.reduce(
-        (sum, loan) => sum + (loan.balance || 0),
-        0
-      ),
+    /* Loans by Agent */
+    const agentMap = {};
+    loans.forEach(l => {
+      const agentId = l.requestedByAgentId?.toString() || "direct";
+      agentMap[agentId] = (agentMap[agentId] || 0) + 1;
+    });
+
+    const loansByAgent = Object.keys(agentMap).map(agentId => ({
+      agentId,
+      loanCount: agentMap[agentId]
+    }));
+
+    /* =====================================================
+       2️⃣ LOAN STATUS BREAKDOWN
+    ===================================================== */
+
+    const statusBreakdown = {
+      active: 0,
+      completed: 0,
+      defaulted: 0,
+      restructured: 0
     };
+
+    loans.forEach(l => {
+      if (l.isDefaulted) {
+        statusBreakdown.defaulted++;
+      } else if (l.status === "fully paid") {
+        statusBreakdown.completed++;
+      } else if (l.status === "active") {
+        statusBreakdown.active++;
+      } else if (l.isRestructured) {
+        statusBreakdown.restructured++;
+      }
+    });
+
+    /* =====================================================
+       3️⃣ DISBURSEMENT TREND (Monthly)
+    ===================================================== */
+
+    const disbursementTrend = await Loan.aggregate([
+      {
+        $match: {
+          lenderId: new mongoose.Types.ObjectId(lenderId),
+          loanRequestStatus: "approved",
+          status: { $in: ["active", "overdue", "fully paid"] }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$issueDate" },
+            month: { $month: "$issueDate" }
+          },
+          totalDisbursed: { $sum: "$amount" },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ]);
+
+    /* =====================================================
+       4️⃣ NEW vs REPEAT BORROWERS
+    ===================================================== */
+
+    const borrowerLoanCount = {};
+
+    loans.forEach(l => {
+      const borrowerId = l.borrowerId?._id.toString();
+      borrowerLoanCount[borrowerId] =
+        (borrowerLoanCount[borrowerId] || 0) + 1;
+    });
+
+    let firstTime = 0;
+    let repeat = 0;
+
+    Object.values(borrowerLoanCount).forEach(count => {
+      if (count === 1) firstTime++;
+      else repeat++;
+    });
+
+    const totalBorrowers = firstTime + repeat;
+
+    const firstTimeRatio =
+      totalBorrowers > 0
+        ? Number(((firstTime / totalBorrowers) * 100).toFixed(2))
+        : 0;
+
+    /* =====================================================
+       5️⃣ RISK INDICATORS
+    ===================================================== */
+
+    const today = new Date();
+    let highRiskLoans = 0;
+    let nearingDueDate = 0;
+
+    const overdueAmount = loans
+      .filter(l => l.status === "overdue")
+      .reduce((sum, l) => sum + (l.balance || 0), 0);
+
+    loans.forEach(l => {
+      const daysToDue = Math.floor(
+        (new Date(l.dueDate) - today) / (1000 * 60 * 60 * 24)
+      );
+
+      if (l.isDefaulted || l.balance > l.amount * 0.5) {
+        highRiskLoans++;
+      }
+
+      if (daysToDue >= 0 && daysToDue <= 7) {
+        nearingDueDate++;
+      }
+    });
+
+    /* =====================================================
+       RESPONSE (FIELD NAMES UNCHANGED)
+    ===================================================== */
 
     res.json({
       success: true,
-      summary,
-      data: formattedLoans,
+
+      loanVolumeMetrics: {
+        totalLoansIssued,
+        totalAmountDisbursed,
+        averageLoanSize,
+        loansByProduct,
+        loansByAgent
+      },
+
+      loanStatusBreakdown: statusBreakdown,
+
+      disbursementAnalysis: {
+        monthlyTrend: disbursementTrend,
+        newBorrowers: firstTime,
+        repeatBorrowers: repeat,
+        firstTimeBorrowerRatio: firstTimeRatio
+      },
+
+      riskIndicators: {
+        highRiskLoans,
+        loansNearingDueDate: nearingDueDate,
+        overdueAmount
+      }
     });
 
   } catch (err) {
@@ -406,7 +515,6 @@ exports.getLoansReport = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
 
 
 /* ===========================
