@@ -1001,85 +1001,215 @@ exports.getProfitReport = async (req, res) => {
 =========================== */
 exports.getBorrowersReport = async (req, res) => {
   try {
+    const today = new Date();
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
     const borrowers = await Customer.find().lean();
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true }
+    }).lean();
 
-    const data = await Promise.all(
-      borrowers.map(async (b, index) => {
+    /* =========================================================
+       1️⃣ BORROWER BASE METRICS
+    ========================================================= */
 
-        const loans = await Loan.find({ borrowerId: b._id }).lean();
+    const totalRegisteredBorrowers = borrowers.length;
 
-        const activeLoans = loans.filter(
-          l => l.status === "active"
-        );
-
-        const totalLoanAmount = loans.reduce(
-          (sum, l) => sum + (l.amount || 0),
-          0
-        );
-
-        const totalOutstanding = loans.reduce(
-          (sum, l) => sum + (l.balance || 0),
-          0
-        );
-
-        const latestLoan = loans.sort(
-          (a, b2) => new Date(b2.createdAt) - new Date(a.createdAt)
-        )[0];
-
-        return {
-          full_name: b.fullName || "N/A",
-
-          // ✅ Custom Borrower ID Format
-          borrower_id: `BRW-${1000 + index + 1}`,
-
-          date_of_birth: b.dateOfBirth
-            ? b.dateOfBirth.toISOString().split("T")[0]
-            : null,
-
-          phone: b.phone || null,
-          email: b.email || null,
-          address: b.physicalAddress || null,
-          status: b.status || "Active",
-
-          document_live_photo: b.livePhoto || null,
-          document_front_id_photo: b.frontID || null,
-          document_back_id_photo: b.backID || null,
-
-          marital_status: b.maritalStatus || null,
-          gender: b.gender || null,
-          occupation: b.occupation || null,
-
-          loan_credit_score: b.creditScore || 500,
-
-          number_of_active_loans: activeLoans.length,
-          total_loans: loans.length,
-          total_loan_amount: totalLoanAmount,
-          total_outstanding_amount: totalOutstanding,
-
-          balance: latestLoan ? latestLoan.balance || 0 : 0,
-          interest: latestLoan ? latestLoan.interest || 0 : 0,
-
-          repayment_due_date: latestLoan?.dueDate
-            ? latestLoan.dueDate.toISOString().split("T")[0]
-            : null,
-
-          payment_histories: latestLoan?.repayments?.length
-            ? latestLoan.repayments.map(r => ({
-                payment_date: r.date
-                  ? new Date(r.date).toISOString().split("T")[0]
-                  : null,
-                amount: r.amount || 0,
-                status: r.wasPaymentLate ? "Late" : "Paid"
-              }))
-            : []
-        };
-      })
+    const activeBorrowerIds = new Set(
+      loans.filter(l => l.status === "active")
+           .map(l => l.borrowerId.toString())
     );
+
+    const activeBorrowers = activeBorrowerIds.size;
+
+    const newBorrowers = borrowers.filter(
+      b => new Date(b.createdAt) >= startOfMonth
+    );
+
+    const repeatBorrowerMap = {};
+    loans.forEach(l => {
+      const id = l.borrowerId.toString();
+      repeatBorrowerMap[id] = (repeatBorrowerMap[id] || 0) + 1;
+    });
+
+    const repeatBorrowers = Object.values(repeatBorrowerMap)
+      .filter(c => c > 1).length;
+
+    const currentlyRepaying = loans.filter(
+      l => l.status === "active"
+    ).length;
+
+    /* =========================================================
+       2️⃣ CREDIT BEHAVIOR
+    ========================================================= */
+
+    const averageLoansPerBorrower =
+      totalRegisteredBorrowers > 0
+        ? Number((loans.length / totalRegisteredBorrowers).toFixed(2))
+        : 0;
+
+    const totalExpected = loans.reduce(
+      (sum, l) => sum + (l.totalRepayment || 0),
+      0
+    );
+
+    const totalCollected = loans.reduce(
+      (sum, l) => sum + (l.repaidAmount || 0),
+      0
+    );
+
+    const repaymentPercentage =
+      totalExpected > 0
+        ? Number(((totalCollected / totalExpected) * 100).toFixed(2))
+        : 0;
+
+    const borrowerRepaymentScore =
+      Number((repaymentPercentage / 10).toFixed(1)); // 0–10 scale
+
+    /* ---------------- TOP GOOD PAYERS ---------------- */
+
+    const borrowerCollectedMap = {};
+
+    loans.forEach(l => {
+      const id = l.borrowerId.toString();
+      borrowerCollectedMap[id] =
+        (borrowerCollectedMap[id] || 0) +
+        (l.repaidAmount || 0);
+    });
+
+    const topGoodPayers = Object.entries(borrowerCollectedMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, amount]) => {
+        const borrower = borrowers.find(
+          b => b._id.toString() === id
+        );
+        return {
+          name: borrower?.fullName || "Unknown",
+          totalPaid: amount
+        };
+      });
+
+    /* ---------------- TOP DEFAULTERS ---------------- */
+
+    const defaultedBorrowers = loans
+      .filter(l => l.isDefaulted)
+      .map(l => l.borrowerId.toString());
+
+    const defaulterCounts = {};
+
+    defaultedBorrowers.forEach(id => {
+      defaulterCounts[id] = (defaulterCounts[id] || 0) + 1;
+    });
+
+    const topDefaulters = Object.entries(defaulterCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, count]) => {
+        const borrower = borrowers.find(
+          b => b._id.toString() === id
+        );
+        return {
+          name: borrower?.fullName || "Unknown",
+          defaultCount: count
+        };
+      });
+
+    /* =========================================================
+       3️⃣ SEGMENTATION
+    ========================================================= */
+
+    const segmentation = {
+      borrowersByGender: {},
+      borrowersByBusinessType: {},
+      borrowersByRegion: {},
+      borrowersByRiskLevel: {
+        veryLow: 0,
+        low: 0,
+        moderate: 0,
+        high: 0
+      }
+    };
+
+    borrowers.forEach(b => {
+      segmentation.borrowersByGender[b.gender || "Unknown"] =
+        (segmentation.borrowersByGender[b.gender || "Unknown"] || 0) + 1;
+
+      segmentation.borrowersByBusinessType[b.businessType || "Unknown"] =
+        (segmentation.borrowersByBusinessType[b.businessType || "Unknown"] || 0) + 1;
+
+      segmentation.borrowersByRegion[b.region || "Unknown"] =
+        (segmentation.borrowersByRegion[b.region || "Unknown"] || 0) + 1;
+
+      const score = b.creditScore || 500;
+
+      if (score >= 750) segmentation.borrowersByRiskLevel.veryLow++;
+      else if (score >= 650) segmentation.borrowersByRiskLevel.low++;
+      else if (score >= 550) segmentation.borrowersByRiskLevel.moderate++;
+      else segmentation.borrowersByRiskLevel.high++;
+    });
+
+    /* =========================================================
+       4️⃣ LIFECYCLE INSIGHTS
+    ========================================================= */
+
+    const firstTimeBorrowers =
+      Object.values(repeatBorrowerMap).filter(c => c === 1).length;
+
+    const borrowerRetentionRate =
+      totalRegisteredBorrowers > 0
+        ? Number(
+            ((repeatBorrowers / totalRegisteredBorrowers) * 100).toFixed(2)
+          )
+        : 0;
+
+    const dormantBorrowers = borrowers.filter(b => {
+      const borrowerLoans = loans.filter(
+        l => l.borrowerId.toString() === b._id.toString()
+      );
+      if (!borrowerLoans.length) return true;
+
+      const latestLoan = borrowerLoans.sort(
+        (a, b2) => new Date(b2.createdAt) - new Date(a.createdAt)
+      )[0];
+
+      const daysSinceLastLoan =
+        (today - new Date(latestLoan.createdAt)) /
+        (1000 * 60 * 60 * 24);
+
+      return daysSinceLastLoan > 90;
+    }).length;
+
+    /* =========================================================
+       FINAL RESPONSE (UI MATCH)
+    ========================================================= */
 
     res.json({
       success: true,
-      count: data.length,
-      borrowers: data
+      borrowerBaseMetrics: {
+        totalRegisteredBorrowers,
+        thisPeriodNewBorrowers: newBorrowers.length,
+        activeBorrowers,
+        newBorrowers: newBorrowers.length,
+        repeatBorrowers,
+        currentlyRepaying
+      },
+      creditBehavior: {
+        averageLoansPerBorrower,
+        borrowerRepaymentScore,
+        repaymentPercentage,
+        topGoodPayers,
+        topDefaulters
+      },
+      segmentation,
+      lifecycleInsights: {
+        firstTimeBorrowers,
+        repeatBorrowers,
+        borrowerRetentionRate,
+        dormantBorrowers
+      }
     });
 
   } catch (error) {
