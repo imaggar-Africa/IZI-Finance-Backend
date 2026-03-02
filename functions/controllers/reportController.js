@@ -5,7 +5,7 @@ const Agent = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
 const NodeCache = require("node-cache");
 const dashboardCache = new NodeCache({ stdTTL: 60 }); // cache 60 sec
-
+const mongoose = require("mongoose");
 
 
 exports.getDashboardReport = async (req, res) => {
@@ -413,16 +413,215 @@ exports.getLoansReport = async (req, res) => {
    REPAYMENTS REPORT
 =========================== */
 exports.getRepaymentsReport = async (req, res) => {
-  const repayments = await Transaction.find({ type: "repayment" });
+  try {
+    const lenderId = req.user.id; // multi-tenant safe
 
-  res.json({
-    success: true,
-    summary: {
-      totalRepaid: repayments.reduce((s, r) => s + r.amount, 0),
-      count: repayments.length
-    },
-    data: repayments
-  });
+    /* =====================================================
+       1️⃣ BASIC COLLECTION PERFORMANCE
+    ===================================================== */
+
+    const loans = await Loan.find({ lenderId });
+
+    const totalLoansIssued = loans.reduce((sum, l) => sum + l.totalRepayment, 0);
+    const totalCollected = loans.reduce((sum, l) => sum + l.repaidAmount, 0);
+
+    const collectionRate =
+      totalLoansIssued > 0
+        ? ((totalCollected / totalLoansIssued) * 100).toFixed(2)
+        : 0;
+
+    const missedRepayments = loans.reduce(
+      (sum, l) =>
+        sum +
+        l.repayments.filter(r => r.wasPaymentLate).length,
+      0
+    );
+
+    const overdueAmount = loans
+      .filter(l => l.status === "overdue")
+      .reduce((sum, l) => sum + l.balance, 0);
+
+    /* =====================================================
+       2️⃣ REPAYMENT BEHAVIOR
+    ===================================================== */
+
+    let totalRepaymentsCount = 0;
+    let lateCount = 0;
+    let earlyCount = 0;
+    let totalDaysLate = 0;
+
+    loans.forEach(loan => {
+      loan.repayments.forEach(r => {
+        totalRepaymentsCount++;
+
+        if (r.wasPaymentLate) {
+          lateCount++;
+          totalDaysLate += r.daysLate;
+        }
+
+        if (!r.wasPaymentLate && r.daysLate === 0) {
+          earlyCount++;
+        }
+      });
+    });
+
+    const onTimePercent =
+      totalRepaymentsCount > 0
+        ? (((totalRepaymentsCount - lateCount) / totalRepaymentsCount) * 100).toFixed(2)
+        : 0;
+
+    const latePercent =
+      totalRepaymentsCount > 0
+        ? ((lateCount / totalRepaymentsCount) * 100).toFixed(2)
+        : 0;
+
+    const averageDaysLate =
+      lateCount > 0 ? (totalDaysLate / lateCount).toFixed(1) : 0;
+
+    const earlyRepaymentsPercent =
+      totalRepaymentsCount > 0
+        ? ((earlyCount / totalRepaymentsCount) * 100).toFixed(2)
+        : 0;
+
+    /* =====================================================
+       3️⃣ CHANNEL ANALYSIS (from Transaction model)
+    ===================================================== */
+
+    const transactions = await Transaction.find({
+      lenderId,
+      type: "repayment",
+      status: "success"
+    });
+
+    const totalChannelAmount = transactions.reduce(
+      (sum, t) => sum + t.amount,
+      0
+    );
+
+    const channelMap = {
+      mpesa: 0,
+      cash: 0,
+      bank_transfer: 0,
+      other: 0
+    };
+
+    transactions.forEach(t => {
+      const method = (t.paymentMethod || "other").toLowerCase();
+
+      if (channelMap[method] !== undefined) {
+        channelMap[method] += t.amount;
+      } else {
+        channelMap.other += t.amount;
+      }
+    });
+
+    const channelAnalysis = Object.keys(channelMap).map(key => ({
+      channel: key,
+      amount: channelMap[key],
+      percentage:
+        totalChannelAmount > 0
+          ? ((channelMap[key] / totalChannelAmount) * 100).toFixed(2)
+          : 0
+    }));
+
+    /* =====================================================
+       4️⃣ AGING ANALYSIS
+    ===================================================== */
+
+    const today = new Date();
+
+    let aging = {
+      current: 0,
+      days_1_7: 0,
+      days_8_30: 0,
+      days_31_90: 0,
+      days_90_plus: 0
+    };
+
+    loans.forEach(loan => {
+      if (loan.balance <= 0) return;
+
+      const diffDays = Math.floor(
+        (today - new Date(loan.dueDate)) / (1000 * 60 * 60 * 24)
+      );
+
+      if (diffDays <= 0) {
+        aging.current += loan.balance;
+      } else if (diffDays <= 7) {
+        aging.days_1_7 += loan.balance;
+      } else if (diffDays <= 30) {
+        aging.days_8_30 += loan.balance;
+      } else if (diffDays <= 90) {
+        aging.days_31_90 += loan.balance;
+      } else {
+        aging.days_90_plus += loan.balance;
+      }
+    });
+
+    /* =====================================================
+       5️⃣ REPAYMENTS BY AGENT
+    ===================================================== */
+
+    const repaymentsByAgent = await Loan.aggregate([
+      { $match: { lenderId: new mongoose.Types.ObjectId(lenderId) } },
+      { $unwind: "$repayments" },
+      {
+        $group: {
+          _id: "$requestedByAgentId",
+          totalCollected: { $sum: "$repayments.amount" },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: "agents",
+          localField: "_id",
+          foreignField: "_id",
+          as: "agent"
+        }
+      },
+      { $unwind: "$agent" }
+    ]);
+
+    /* =====================================================
+       FINAL RESPONSE STRUCTURE (MATCH IMAGE)
+    ===================================================== */
+
+    res.json({
+      success: true,
+      collectionPerformance: {
+        totalLoansIssued,
+        totalCollected,
+        collectionRate: Number(collectionRate),
+        missedRepayments,
+        overdueAmount
+      },
+
+      repaymentBehavior: {
+        onTimePercent: Number(onTimePercent),
+        latePercent: Number(latePercent),
+        averageDaysLate: Number(averageDaysLate),
+        earlyRepaymentsPercent: Number(earlyRepaymentsPercent)
+      },
+
+      channelAnalysis,
+
+      agingAnalysis: aging,
+
+      repaymentsByAgent: repaymentsByAgent.map(a => ({
+        agentId: a._id,
+        agentName: a.agent.name,
+        totalCollected: a.totalCollected,
+        repaymentCount: a.count
+      }))
+    });
+  } catch (error) {
+    console.error("Repayment Report Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate repayment report"
+    });
+  }
 };
 
 /* ===========================
