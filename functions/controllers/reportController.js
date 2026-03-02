@@ -420,26 +420,41 @@ exports.getRepaymentsReport = async (req, res) => {
        1️⃣ BASIC COLLECTION PERFORMANCE
     ===================================================== */
 
-    const loans = await Loan.find({ lenderId });
+    /* =====================================================
+   COLLECTION PERFORMANCE (CORRECT VERSION)
+===================================================== */
 
-    const totalLoansIssued = loans.reduce((sum, l) => sum + l.totalRepayment, 0);
-    const totalCollected = loans.reduce((sum, l) => sum + l.repaidAmount, 0);
+const loans = await Loan.find({
+  lenderId,
+  status: { $in: ["active", "overdue", "fully paid"] },
+  loanRequestStatus: "approved"
+});
 
-    const collectionRate =
-      totalLoansIssued > 0
-        ? ((totalCollected / totalLoansIssued) * 100).toFixed(2)
-        : 0;
+const totalLoansIssued = loans.reduce(
+  (sum, l) => sum + l.amount,   // principal only
+  0
+);
 
-    const missedRepayments = loans.reduce(
-      (sum, l) =>
-        sum +
-        l.repayments.filter(r => r.wasPaymentLate).length,
-      0
-    );
+const totalCollected = loans.reduce(
+  (sum, l) => sum + l.repaidAmount,
+  0
+);
 
-    const overdueAmount = loans
-      .filter(l => l.status === "overdue")
-      .reduce((sum, l) => sum + l.balance, 0);
+const collectionRate =
+  totalLoansIssued > 0
+    ? ((totalCollected / totalLoansIssued) * 100).toFixed(2)
+    : 0;
+
+const overdueAmount = loans
+  .filter(l => l.status === "overdue")
+  .reduce((sum, l) => sum + l.balance, 0);
+
+const missedRepayments = loans.reduce((sum, l) => {
+  return (
+    sum +
+    l.repayments.filter(r => r.wasPaymentLate).length
+  );
+}, 0);
 
     /* =====================================================
        2️⃣ REPAYMENT BEHAVIOR
@@ -483,47 +498,60 @@ exports.getRepaymentsReport = async (req, res) => {
         ? ((earlyCount / totalRepaymentsCount) * 100).toFixed(2)
         : 0;
 
-    /* =====================================================
-       3️⃣ CHANNEL ANALYSIS (from Transaction model)
-    ===================================================== */
+  /* =====================================================
+   3️⃣ CHANNEL ANALYSIS (FIXED FOR YOUR SCHEMA)
+===================================================== */
 
-    const transactions = await Transaction.find({
-      lenderId,
-      type: "repayment",
-      status: "success"
-    });
+// Get approved issued loans
+const issuedLoans = await Loan.find({
+  lenderId,
+  status: { $in: ["active", "overdue", "fully paid"] },
+  loanRequestStatus: "approved"
+}).select("_id");
 
-    const totalChannelAmount = transactions.reduce(
-      (sum, t) => sum + t.amount,
-      0
-    );
+const loanIds = issuedLoans.map(l => l._id);
 
-    const channelMap = {
-      mpesa: 0,
-      cash: 0,
-      bank_transfer: 0,
-      other: 0
-    };
+// Now fetch repayment transactions for those loans
+const transactions = await Transaction.find({
+  loanId: { $in: loanIds },
+  type: "repayment",
+  status: "successful"
+});
 
-    transactions.forEach(t => {
-      const method = (t.paymentMethod || "other").toLowerCase();
+const totalChannelAmount = transactions.reduce(
+  (sum, t) => sum + t.amount,
+  0
+);
 
-      if (channelMap[method] !== undefined) {
-        channelMap[method] += t.amount;
-      } else {
-        channelMap.other += t.amount;
-      }
-    });
+const channelMap = {
+  mpesa: 0,
+  cash: 0,
+  bank_transfer: 0,
+  other: 0
+};
 
-    const channelAnalysis = Object.keys(channelMap).map(key => ({
-      channel: key,
-      amount: channelMap[key],
-      percentage:
-        totalChannelAmount > 0
-          ? ((channelMap[key] / totalChannelAmount) * 100).toFixed(2)
-          : 0
-    }));
+transactions.forEach(t => {
+  // infer mpesa from checkoutRequestID presence
+  let method = "other";
 
+  if (t.checkoutRequestID) method = "mpesa";
+  if (t.paymentMethod) method = t.paymentMethod.toLowerCase();
+
+  if (channelMap[method] !== undefined) {
+    channelMap[method] += t.amount;
+  } else {
+    channelMap.other += t.amount;
+  }
+});
+
+const channelAnalysis = Object.keys(channelMap).map(key => ({
+  channel: key,
+  amount: channelMap[key],
+  percentage:
+    totalChannelAmount > 0
+      ? Number(((channelMap[key] / totalChannelAmount) * 100).toFixed(2))
+      : 0
+}));
     /* =====================================================
        4️⃣ AGING ANALYSIS
     ===================================================== */
