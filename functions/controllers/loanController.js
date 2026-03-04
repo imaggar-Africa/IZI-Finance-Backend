@@ -935,11 +935,11 @@ exports.getOutstandingLoans = async (req, res) => {
 exports.getBorrowersWithLoans = async (req, res) => {
   try {
     const loans = await Loan.find({
-  loanRequestStatus: "approved",
-  status: { $in: ["active", "overdue", "fully paid"] },
-  isDeleted: { $ne: true },
-  isWrittenOff: { $ne: true }
-})
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "overdue", "fully paid"] },
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true }
+    }).populate("borrowerId"); // ✅ IMPORTANT
 
     const borrowerMap = {};
 
@@ -948,6 +948,8 @@ exports.getBorrowersWithLoans = async (req, res) => {
 
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
+
+    const today = new Date();
 
     let totalLoanAmount = 0;
     let totalCollectedAmount = 0;
@@ -959,6 +961,8 @@ exports.getBorrowersWithLoans = async (req, res) => {
     const notPaidToday = [];
 
     loans.forEach((loan) => {
+      if (!loan.borrowerId) return; // safety
+
       const borrowerId = loan.borrowerId._id.toString();
 
       if (!borrowerMap[borrowerId]) {
@@ -985,13 +989,8 @@ exports.getBorrowersWithLoans = async (req, res) => {
       totalBalance += loan.balance || 0;
 
       /* ================= STATUS COUNTS ================= */
-      if (loan.status === "active") {
-        totalActiveLoanCount++;
-      }
-
-      if (loan.status === "overdue") {
-        totalOverdueLoanCount++;
-      }
+      if (loan.status === "active") totalActiveLoanCount++;
+      if (loan.status === "overdue") totalOverdueLoanCount++;
 
       /* ---------------- LAST PAYMENT ---------------- */
       let lastPaymentDate = null;
@@ -1002,25 +1001,28 @@ exports.getBorrowersWithLoans = async (req, res) => {
           (a, b) => new Date(b.date) - new Date(a.date)
         )[0];
 
-        lastPaymentDate = lastPayment.date;
+        if (lastPayment?.date) {
+          lastPaymentDate = lastPayment.date;
 
-        paidTodayFlag =
-          new Date(lastPayment.date) >= startOfToday &&
-          new Date(lastPayment.date) <= endOfToday;
+          paidTodayFlag =
+            new Date(lastPayment.date) >= startOfToday &&
+            new Date(lastPayment.date) <= endOfToday;
+        }
       }
 
       /* ---------------- EXPECTED DAILY AMOUNT ---------------- */
       const expectedDailyAmount = loan.dailyRepayment || 0;
 
-      /* ---------------- STATUS BADGE ---------------- */
+      /* ---------------- STATUS BADGE (OLD STYLE) ---------------- */
       let statusBadge = "On Track";
 
-      if (loan.status === "overdue") {
+      const isOverdue =
+        loan.balance > 0 && new Date(loan.dueDate) < today;
+
+      if (isOverdue || loan.status === "overdue") {
         statusBadge = "Overdue";
-      } else if (loan.status === "active" && !paidTodayFlag) {
+      } else if (!paidTodayFlag && loan.status !== "fully paid") {
         statusBadge = "At Risk";
-      } else if (loan.status === "fully paid") {
-        statusBadge = "Paid";
       }
 
       /* ---------------- ENRICH LOAN ---------------- */
@@ -1051,7 +1053,7 @@ exports.getBorrowersWithLoans = async (req, res) => {
       }
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       totalBorrowers: Object.keys(borrowerMap).length,
       summary: {

@@ -1218,73 +1218,218 @@ exports.getBorrowersReport = async (req, res) => {
   }
 };
 
-
-
 /* ===========================
    AGENTS REPORT
 =========================== */
 exports.getAgentsReport = async (req, res) => {
   try {
-    const agents = await Agent.find().lean();
+    const lenderId = req.user._id;
+    const today = new Date();
 
-    const data = await Promise.all(
-      agents.map(async (agent) => {
+    const agents = await Agent.find({ lenderId })
+      .select("-password")
+      .lean();
 
-        // Loans handled by agent
-        const loans = await Loan.find({
-          requestedByAgentId: agent._id,
-          loanRequestStatus: "approved"
-        });
+    let summary = {
+      totalRegisteredBorrowers: 0,
+      newBorrowers: 0,
+      repeatBorrowers: 0,
+      totalDisbursed: 0,
+      totalCollected: 0,
+      currentlyRepaying: 0
+    };
 
-        const totalDisbursed = loans.reduce(
-          (sum, loan) => sum + (loan.amount || 0),
-          0
-        );
+    const portfolioQualityByAgent = [];
+    const operationalBehavior = [];
+    const leaderboardData = [];
 
-        // Total customers handled
-        const totalCustomers = await Customer.countDocuments({
-          registeredBy: agent._id
-        });
+    for (const agent of agents) {
 
-        // Commission earned
-        const commissions = await AgentCommission.find({
-          agentId: agent._id,
-          status: "approved"
-        });
+      /* ===================================================
+         GET LOANS CREATED BY AGENT
+      =================================================== */
 
-        const commissionEarned = commissions.reduce(
-          (sum, c) => sum + (c.amount || 0),
-          0
-        );
+      const loans = await Loan.find({
+        lenderId,
+        requestedByAgentId: agent._id,
+        loanRequestStatus: "approved"
+      }).lean();
 
-        return {
-          _id: agent._id,
-          lenderId: agent.lenderId,
-          name: agent.fullName || agent.name,
-          phone: agent.phone,
-          status: agent.status,
-          password:agent.password,
-          region: agent.region || "N/A",
-          totalEarnings: commissionEarned,
-          walletBalance: agent.walletBalance || 0,
-          commissionEarned,
-          totalCustomers,
-          role: "agent",
-          loansHandled: loans.length,
-          totalDisbursed
-        };
-      })
+      const loansHandled = loans.length;
+
+      const totalDisbursed = loans.reduce(
+        (sum, loan) => sum + (loan.amount || 0),
+        0
+      );
+
+      /* ===================================================
+         COLLECTION (FROM EMBEDDED REPAYMENTS)
+      =================================================== */
+
+      let totalCollected = 0;
+
+      loans.forEach(loan => {
+        if (loan.repayments && loan.repayments.length > 0) {
+          loan.repayments.forEach(r => {
+            if (r.status === "successful") {
+              totalCollected += r.amount || 0;
+            }
+          });
+        }
+      });
+
+      /* ===================================================
+         BORROWER ANALYSIS (FROM LOANS)
+      =================================================== */
+
+      const borrowerIds = loans.map(l => l.borrowerId?.toString());
+
+      const uniqueBorrowers = [...new Set(borrowerIds)];
+
+      const totalBorrowersForAgent = uniqueBorrowers.length;
+
+      const repeatBorrowers = borrowerIds.length - uniqueBorrowers.length;
+
+      /* ===================================================
+         ACTIVE LOANS
+      =================================================== */
+
+      const activeLoans = loans.filter(
+        l => l.loanStatus === "active"
+      );
+
+      const currentlyRepaying = activeLoans.length;
+
+      /* ===================================================
+         PORTFOLIO QUALITY
+      =================================================== */
+
+      const overdueLoans = loans.filter(
+        l =>
+          l.loanStatus === "active" &&
+          l.nextDueDate &&
+          new Date(l.nextDueDate) < today
+      );
+
+      const overdueAmount = overdueLoans.reduce(
+        (sum, l) => sum + (l.outstandingBalance || 0),
+        0
+      );
+
+      const par =
+        totalDisbursed > 0
+          ? (overdueAmount / totalDisbursed) * 100
+          : 0;
+
+      const defaultedLoans = loans.filter(
+        l => l.loanStatus === "defaulted"
+      );
+
+      const defaultRate =
+        loansHandled > 0
+          ? (defaultedLoans.length / loansHandled) * 100
+          : 0;
+
+      const collectionEfficiency =
+        totalDisbursed > 0
+          ? (totalCollected / totalDisbursed) * 100
+          : 0;
+
+      /* ===================================================
+         RISK FLAGS
+      =================================================== */
+
+      const riskFlags = [];
+
+      if (totalDisbursed > 100000 && totalCollected < totalDisbursed * 0.3)
+        riskFlags.push("HIGH_DISBURSE_LOW_COLLECTION");
+
+      if (par > 20)
+        riskFlags.push("HIGH_PAR");
+
+      if (defaultRate > 15)
+        riskFlags.push("HIGH_DEFAULT_RATE");
+
+      if (repeatBorrowers > 5)
+        riskFlags.push("REPEATED_BORROWER_PATTERN");
+
+      /* ===================================================
+         PUSH AGENT DATA
+      =================================================== */
+
+      portfolioQualityByAgent.push({
+        agentId: agent._id,
+        name: agent.fullName,
+        par: Number(par.toFixed(2)),
+        defaultRate: Number(defaultRate.toFixed(2)),
+        overdueAmount,
+        collectionEfficiency: Number(collectionEfficiency.toFixed(2))
+      });
+
+      operationalBehavior.push({
+        agentId: agent._id,
+        name: agent.fullName,
+        lastActivity: agent.lastActiveAt || null,
+        riskFlags
+      });
+
+      leaderboardData.push({
+        agentId: agent._id,
+        name: agent.fullName,
+        score: collectionEfficiency - par - defaultRate,
+        riskFlags
+      });
+
+      /* ===================================================
+         UPDATE SUMMARY
+      =================================================== */
+
+      summary.totalRegisteredBorrowers += totalBorrowersForAgent;
+      summary.repeatBorrowers += repeatBorrowers;
+      summary.totalDisbursed += totalDisbursed;
+      summary.totalCollected += totalCollected;
+      summary.currentlyRepaying += currentlyRepaying;
+    }
+
+    /* ===================================================
+       LEADERBOARDS
+    =================================================== */
+
+    const topPerforming = [...leaderboardData]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    const underPerforming = [...leaderboardData]
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 3);
+
+    const highRiskAgents = leaderboardData.filter(
+      a => a.riskFlags.length > 0
     );
 
-    res.json({
+    /* ===================================================
+       RESPONSE
+    =================================================== */
+
+    return res.json({
       success: true,
-      count: data.length,
-      data
+      summary,
+      portfolioQualityByAgent,
+      operationalBehavior,
+      leaderboards: {
+        topPerforming,
+        underPerforming,
+        highRiskAgents
+      }
     });
 
   } catch (error) {
-    console.error("Agents report error:", error);
-    res.status(500).json({ message: error.message });
+    console.error("Agent Report Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to generate agent report",
+      error: error.message
+    });
   }
 };
 
@@ -1421,55 +1566,250 @@ exports.getMaritalStatusReport = async (req, res) => {
   }
 };
 
-
 /* ===========================
    LOAN AMOUNT BY BUSINESS TYPE
 == ======================== */
 exports.getBusinessTypeLoanReport = async (req, res) => {
   try {
-    const data = await Loan.aggregate([
-      // 🔹 Join customer collection
-      {
-        $lookup: {
-          from: "customers",              // collection name (check exact name in MongoDB)
-          localField: "borrowerId",       // field in Loan
-          foreignField: "_id",            // field in Customer
-          as: "borrower"
-        }
-      },
+    const lenderId = req.user._id;
+    const today = new Date();
 
-      // 🔹 Convert array to object
-      { $unwind: "$borrower" },
+    /* ================= FETCH DATA ================= */
 
-      // 🔹 Group by occupation
-      {
-        $group: {
-          _id: { $ifNull: ["$borrower.occupation", "Unknown"] },
-          value: { $sum: "$amount" }
-        }
-      },
+    const loans = await Loan.find({
+      lenderId,
+      loanRequestStatus: "approved"
+    }).lean();
 
-      // 🔹 Format output
-      {
-        $project: {
-          _id: 0,
-          type: "$_id",
-          value: 1
+    const customers = await Customer.find().lean();
+
+    const businessMap = {};
+
+    /* ================= PROCESS LOANS ================= */
+
+    for (const loan of loans) {
+
+      const borrower = customers.find(
+        c => c._id.toString() === loan.borrowerId.toString()
+      );
+
+      if (!borrower) continue;
+
+      const businessType =
+        borrower.occupation
+          ? borrower.occupation.trim()
+          : "Others";
+
+      if (!businessMap[businessType]) {
+        businessMap[businessType] = {
+          numberOfLoansIssued: 0,
+          totalDisbursedAmount: 0,
+          activeLoans: 0,
+          completedLoans: 0,
+          defaultedLoans: 0,
+          restructuredLoans: 0,
+
+          totalRepaid: 0,
+          totalExpected: 0,
+
+          onTimeRepayments: 0,
+          lateRepayments: 0,
+          totalDaysLate: 0,
+
+          partialRepayments: 0,
+          fullRepayments: 0,
+
+          overdueAmount: 0,
+          loansNearingDueDate: 0,
+
+          maritalStatusDistribution: {},
+          educationLevelDistribution: {},
+          householdSizeDistribution: {
+            small: 0,
+            medium: 0,
+            large: 0
+          },
+          urbanRuralSplit: {
+            urban: 0,
+            rural: 0
+          }
+        };
+      }
+
+      const b = businessMap[businessType];
+
+      /* ===== LOAN METRICS ===== */
+
+      b.numberOfLoansIssued++;
+      b.totalDisbursedAmount += loan.amount || 0;
+      b.totalExpected += loan.totalRepayment || 0;
+
+      if (loan.status === "active") b.activeLoans++;
+      if (loan.status === "fully paid") b.completedLoans++;
+      if (loan.isDefaulted) b.defaultedLoans++;
+
+      /* ===== REPAYMENT LOGIC ===== */
+
+      let actualRepaid = 0;
+
+      if (Array.isArray(loan.repayments) && loan.repayments.length > 0) {
+        for (const r of loan.repayments) {
+          actualRepaid += r.amount || 0;
+
+          if (r.wasPaymentLate) {
+            b.lateRepayments++;
+            b.totalDaysLate += r.daysLate || 0;
+          } else {
+            b.onTimeRepayments++;
+          }
         }
       }
-    ]);
 
-    res.json({
-      success: true,
-      data
+      if (actualRepaid === 0 && loan.repaidAmount > 0) {
+        actualRepaid = loan.repaidAmount;
+      }
+
+      b.totalRepaid += actualRepaid;
+
+      if (actualRepaid > 0 && actualRepaid < loan.totalRepayment)
+        b.partialRepayments++;
+
+      if (actualRepaid >= loan.totalRepayment)
+        b.fullRepayments++;
+
+      /* ===== PAR ===== */
+
+      if (loan.status === "overdue") {
+        b.overdueAmount += loan.balance || 0;
+      }
+
+      /* ===== NEARING DUE ===== */
+
+      const daysToDue =
+        (new Date(loan.dueDate) - today) /
+        (1000 * 60 * 60 * 24);
+
+      if (daysToDue >= 0 && daysToDue <= 7)
+        b.loansNearingDueDate++;
+
+      /* ===== DEMOGRAPHICS ===== */
+
+      const marital = borrower.maritalStatus || "Unknown";
+      b.maritalStatusDistribution[marital] =
+        (b.maritalStatusDistribution[marital] || 0) + 1;
+
+      const edu = borrower.educationLevel || "Unknown";
+      b.educationLevelDistribution[edu] =
+        (b.educationLevelDistribution[edu] || 0) + 1;
+
+      const size = borrower.householdSize || 0;
+      if (size <= 2) b.householdSizeDistribution.small++;
+      else if (size <= 5) b.householdSizeDistribution.medium++;
+      else b.householdSizeDistribution.large++;
+
+      if (borrower.physicalAddress &&
+          borrower.physicalAddress.toLowerCase().includes("nairobi"))
+        b.urbanRuralSplit.urban++;
+      else
+        b.urbanRuralSplit.rural++;
+    }
+
+    /* ================= FORMAT RESPONSE ================= */
+
+    const businessTypeReport = Object.keys(businessMap).map(type => {
+
+      const b = businessMap[type];
+
+      const averageLoanSize =
+        b.numberOfLoansIssued > 0
+          ? Number(
+              (b.totalDisbursedAmount /
+               b.numberOfLoansIssued).toFixed(2)
+            )
+          : 0;
+
+      const repaymentRate =
+        b.totalExpected > 0
+          ? Number(
+              ((b.totalRepaid /
+                b.totalExpected) * 100).toFixed(2)
+            )
+          : 0;
+
+      const averageDaysLate =
+        b.lateRepayments > 0
+          ? Number(
+              (b.totalDaysLate /
+               b.lateRepayments).toFixed(1)
+            )
+          : 0;
+
+      const defaultRate =
+        b.numberOfLoansIssued > 0
+          ? Number(
+              ((b.defaultedLoans /
+                b.numberOfLoansIssued) * 100).toFixed(2)
+            )
+          : 0;
+
+      const parPercentage =
+        b.totalDisbursedAmount > 0
+          ? Number(
+              ((b.overdueAmount /
+                b.totalDisbursedAmount) * 100).toFixed(2)
+            )
+          : 0;
+
+      return {
+        businessType: type,
+
+        loanMetricsByBusinessType: {
+          numberOfLoansIssued: b.numberOfLoansIssued,
+          totalDisbursedAmount: b.totalDisbursedAmount,
+          averageLoanSize,
+          activeLoans: b.activeLoans,
+          completedLoans: b.completedLoans,
+          defaultedLoans: b.defaultedLoans,
+          restructuredLoans: b.restructuredLoans
+        },
+
+        borrowerBehavior: {
+          repaymentRatePerBusinessType: repaymentRate,
+          onTimeRepayments: b.onTimeRepayments,
+          lateRepayments: b.lateRepayments,
+          averageDaysLate,
+          partialRepayments: b.partialRepayments,
+          fullRepayments: b.fullRepayments
+        },
+
+        riskIndicators: {
+          highPARPercentage: parPercentage,
+          defaultRateByBusinessType: defaultRate,
+          loansNearingDueDate: b.loansNearingDueDate
+        },
+
+        demographicOverlays: {
+          maritalStatusDistribution: b.maritalStatusDistribution,
+          educationLevelDistribution: b.educationLevelDistribution,
+          householdSizeDistribution: b.householdSizeDistribution,
+          urbanRuralSplit: b.urbanRuralSplit
+        }
+      };
     });
 
-  } catch (err) {
-    console.error("Business type report error:", err);
-    res.status(500).json({ message: err.message });                                                          
+    return res.json({
+      success: true,
+      businessTypeReport
+    });
+
+  } catch (error) {
+    console.error("Business type report error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to generate business type report"
+    });
   }
 };
-
 
 /* ===========================
    REPAYMENT PERCENTAGE BY REGION
@@ -1553,136 +1893,244 @@ exports.getRegionalRepaymentReport = async (req, res) => {
   }
 };
 
-
 exports.getRegionPerformanceReport = async (req, res) => {
   try {
+    const lenderId = req.user._id;
+    const today = new Date();
 
-    /* ================= PHONE → COUNTRY MAP ================= */
-    function getCountryFromPhone(phone) {
-      if (!phone) return "Unknown";
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
 
-      const clean = phone.replace(/\s/g, "");
+    /* ================= GET AGENTS ================= */
 
-      if (clean.startsWith("+254")) return "KENYA"; // Kenya
-      if (clean.startsWith("+256")) return "UGANDA"; // Uganda
-      if (clean.startsWith("+234")) return "NIGERIA"; // Nigeria
-      if (clean.startsWith("+250")) return "RWANDA"; // Rwanda
-      if (clean.startsWith("+255")) return "TANZANIA"; // Tanzania
-      if (clean.startsWith("+233")) return "GHANA";  // Ghana
+    const agents = await Agent.find({ lenderId }).select("_id").lean();
+    const agentIds = agents.map(a => a._id);
 
+    /* ================= GET CUSTOMERS (LENDER + AGENT CREATED) ================= */
+
+    const customers = await Customer.find({
+      isDeleted: false,
+      $or: [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ]
+    }).lean();
+
+    /* ================= REGION DETECTION ================= */
+
+    function getRegion(customer) {
+      if (customer.town && customer.town.trim() !== "") return customer.town.trim();
+      if (customer.market && customer.market.trim() !== "") return customer.market.trim();
+      if (customer.physicalAddress && customer.physicalAddress.trim() !== "") return customer.physicalAddress.trim();
       return "Unknown";
     }
 
-    /* ================= FETCH DATA ================= */
-    const customers = await Customer.find().lean();
+    /* ================= GET LOANS ================= */
 
-    const regionGroups = {};
+    const loans = await Loan.find({
+      lenderId,
+      loanRequestStatus: "approved"
+    }).lean();
 
-    for (const customer of customers) {
+    /* ================= BUILD REGION MAP ================= */
 
-      const loans = await Loan.find({
-        borrowerId: customer._id,
-        loanRequestStatus: "approved"
-      }).lean();
+    const regionMap = {};
 
-      const totalLoanAmount = loans.reduce(
-        (sum, l) => sum + (l.amount || 0),
-        0
-      );
+    customers.forEach(customer => {
+      const region = getRegion(customer);
 
-      const totalOutstanding = loans.reduce(
-        (sum, l) => sum + (l.balance || 0),
-        0
-      );
-
-      const totalRepaid = loans.reduce(
-        (sum, l) =>
-          sum +
-          (Array.isArray(l.repayments)
-            ? l.repayments.reduce((s, r) => s + (r.amount || 0), 0)
-            : 0),
-        0
-      );
-
-      const region = getCountryFromPhone(customer.phone);
-
-      if (!regionGroups[region]) {
-        regionGroups[region] = {
-          totalLoan: 0,
-          totalRepaid: 0,
-          borrowers: []
+      if (!regionMap[region]) {
+        regionMap[region] = {
+          borrowers: new Set(),
+          agents: new Set(),
+          totalDisbursed: 0,
+          activeLoans: 0,
+          outstandingBalance: 0,
+          collections: 0,
+          overdueAmount: 0,
+          totalLoans: 0,
+          defaultedLoans: 0,
+          currentMonthLoans: 0,
+          previousMonthLoans: 0
         };
       }
 
-      regionGroups[region].totalLoan += totalLoanAmount;
-      regionGroups[region].totalRepaid += totalRepaid;
-
-      regionGroups[region].borrowers.push({
-        full_name: customer.fullName,
-        borrower_id: customer._id,
-        date_of_birth: customer.dateOfBirth,
-        phone: customer.phone,
-        email: customer.email,
-        address: customer.physicalAddress || "",
-        region,
-        status: customer.status,
-        marital_status: customer.maritalStatus,
-        gender: customer.gender,
-        occupation: customer.occupation,
-        loan_credit_score: customer.creditScore || 500,
-        number_of_active_loans: loans.filter(l => l.balance > 0).length,
-        total_loans: loans.length,
-        total_loan_amount: totalLoanAmount,
-        total_outstanding_amount: totalOutstanding,
-        balance: totalOutstanding,
-        interest: loans.reduce((s, l) => s + (l.interest || 0), 0),
-        repayment_due_date:
-          loans.length > 0
-            ? loans.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0].dueDate
-            : null,
-        payment_histories:
-          loans.length > 0 && Array.isArray(loans[0].repayments)
-            ? loans[0].repayments.map(r => ({
-                payment_date: r.date,
-                amount: r.amount,
-                status: r.wasPaymentLate ? "Late" : "Paid"
-              }))
-            : []
-      });
-    }
-
-    /* ================= CALCULATE PERCENT ================= */
-    const result = Object.keys(regionGroups).map(region => {
-      const g = regionGroups[region];
-
-      const percent =
-        g.totalLoan === 0
-          ? 0
-          : Math.round((g.totalRepaid / g.totalLoan) * 100);
-
-      return {
-        region,
-        percent,
-        borrowers: g.borrowers
-      };
+      regionMap[region].borrowers.add(customer._id.toString());
     });
 
-    return res.status(200).json({
+    /* ================= PROCESS LOANS ================= */
+
+    loans.forEach(loan => {
+      const customer = customers.find(
+        c => c._id.toString() === loan.borrowerId.toString()
+      );
+
+      if (!customer) return;
+
+      const region = getRegion(customer);
+      const regionData = regionMap[region];
+
+      regionData.totalDisbursed += loan.amount || 0;
+      regionData.outstandingBalance += loan.balance || 0;
+      regionData.collections += loan.repaidAmount || 0;
+      regionData.totalLoans++;
+
+      if (loan.status === "active") regionData.activeLoans++;
+
+      if (loan.status === "overdue") {
+        regionData.overdueAmount += loan.balance || 0;
+      }
+
+      if (loan.isDefaulted) regionData.defaultedLoans++;
+
+      if (loan.issueDate >= startOfMonth) {
+        regionData.currentMonthLoans++;
+      }
+
+      if (
+        loan.issueDate >= startOfLastMonth &&
+        loan.issueDate <= endOfLastMonth
+      ) {
+        regionData.previousMonthLoans++;
+      }
+
+      if (loan.requestedByAgentId) {
+        regionData.agents.add(loan.requestedByAgentId.toString());
+      }
+    });
+
+    /* ================= BUILD FINAL RESPONSE ARRAYS ================= */
+
+    const regionalPortfolioMetrics = [];
+    const riskHeatmap = [];
+    const operationalEfficiency = [];
+    const mapHeatView = [];
+    const growthArray = [];
+
+    Object.keys(regionMap).forEach(region => {
+      const r = regionMap[region];
+
+      const parByRegion =
+        r.totalDisbursed > 0
+          ? Number(((r.overdueAmount / r.totalDisbursed) * 100).toFixed(2))
+          : 0;
+
+      const defaultRateByRegion =
+        r.totalLoans > 0
+          ? Number(((r.defaultedLoans / r.totalLoans) * 100).toFixed(2))
+          : 0;
+
+      const collectionEfficiencyPerRegion =
+        r.totalDisbursed > 0
+          ? Number(((r.collections / r.totalDisbursed) * 100).toFixed(2))
+          : 0;
+
+      /* ===== FIXED HEAT SCORE ===== */
+
+      let heatScore = 0;
+
+      if (r.totalDisbursed > 0) {
+        heatScore = Number(
+          (
+            parByRegion * 0.5 +
+            defaultRateByRegion * 0.3 +
+            (100 - collectionEfficiencyPerRegion) * 0.2
+          ).toFixed(2)
+        );
+      }
+
+      let riskLevel = "Low";
+      if (heatScore > 30) riskLevel = "Critical";
+      else if (heatScore > 20) riskLevel = "High";
+      else if (heatScore > 10) riskLevel = "Medium";
+
+      /* ===== GROWTH ===== */
+
+      const growthRate =
+        r.previousMonthLoans > 0
+          ? Number(
+              (
+                ((r.currentMonthLoans - r.previousMonthLoans) /
+                  r.previousMonthLoans) *
+                100
+              ).toFixed(2)
+            )
+          : r.currentMonthLoans > 0
+          ? 100
+          : 0;
+
+      regionalPortfolioMetrics.push({
+        region,
+        totalDisbursedPerRegion: r.totalDisbursed,
+        activeLoansPerRegion: r.activeLoans,
+        outstandingBalancePerRegion: r.outstandingBalance,
+        collectionsPerRegion: r.collections
+      });
+
+      riskHeatmap.push({
+        region,
+        parByRegion,
+        defaultRateByRegion,
+        overdueConcentration: r.overdueAmount,
+        heatScore
+      });
+
+      operationalEfficiency.push({
+        region,
+        agentsPerRegion: r.agents.size,
+        revenuePerRegion: r.collections,
+        collectionEfficiencyPerRegion
+      });
+
+      mapHeatView.push({
+        region,
+        heatScore,
+        riskLevel
+      });
+
+      growthArray.push({
+        region,
+        growthRate,
+        currentMonthLoans: r.currentMonthLoans
+      });
+    });
+
+    const fastestGrowingRegions = growthArray
+      .filter(g => g.growthRate > 0)
+      .sort((a, b) => b.growthRate - a.growthRate)
+      .slice(0, 3);
+
+    const decliningRegions = growthArray
+      .filter(g => g.growthRate < 0)
+      .sort((a, b) => a.growthRate - b.growthRate)
+      .slice(0, 3);
+
+    const newMarketPerformance = growthArray.filter(
+      g => g.currentMonthLoans > 0 && g.growthRate === 100
+    );
+
+    return res.json({
       success: true,
-      count: result.length,
-      data: result
+      regionalPortfolioMetrics,
+      riskHeatmap,
+      growthIndicators: {
+        fastestGrowingRegions,
+        decliningRegions,
+        newMarketPerformance
+      },
+      operationalEfficiency,
+      mapHeatView
     });
 
   } catch (error) {
     console.error("Region performance error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error",
-      error: error.message
+      message: "Failed to generate regional performance report"
     });
   }
 };
-
 
 /* ===========================
    PROFIT & INTEREST DETAILED REPORT
@@ -1920,3 +2368,335 @@ exports.getDetailedProfitReport = async (req, res) => {
 };                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
 
 
+exports.getDemographicsAnalysis = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const today = new Date();
+
+    /* =====================================================
+       1️⃣ GET ALL AGENTS UNDER THIS LENDER
+    ===================================================== */
+
+    const agents = await Agent.find({ lenderId }).select("_id");
+    const agentIds = agents.map(a => a._id);
+
+    /* =====================================================
+       2️⃣ GET ALL BORROWERS (LENDER + AGENT CREATED)
+    ===================================================== */
+
+    const borrowers = await Customer.find({
+      $or: [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ],
+      isDeleted: { $ne: true }
+    }).lean();
+
+    /* =====================================================
+       3️⃣ GET LOANS FOR THIS LENDER
+    ===================================================== */
+
+    const loans = await Loan.find({
+      lenderId,
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true }
+    }).lean();
+
+    /* =====================================================
+       4️⃣ BORROWER → LOAN MAP
+    ===================================================== */
+
+    const borrowerLoanMap = {};
+
+    loans.forEach(l => {
+      const id = l.borrowerId.toString();
+
+      if (!borrowerLoanMap[id]) {
+        borrowerLoanMap[id] = {
+          totalLoans: 0,
+          totalAmount: 0,
+          totalRepaid: 0,
+          defaulted: 0
+        };
+      }
+
+      borrowerLoanMap[id].totalLoans++;
+      borrowerLoanMap[id].totalAmount += l.amount || 0;
+      borrowerLoanMap[id].totalRepaid += l.repaidAmount || 0;
+
+      if (l.isDefaulted) borrowerLoanMap[id].defaulted++;
+    });
+
+    /* =====================================================
+       5️⃣ BASE DEMOGRAPHICS
+    ===================================================== */
+
+    const ageDistribution = {
+      under25: 0,
+      age25_34: 0,
+      age35_44: 0,
+      age45_54: 0,
+      above55: 0
+    };
+
+    const genderDistribution = {};
+    const occupationDistribution = {};
+    const incomeBands = {};
+    const regionMap = {};
+
+    borrowers.forEach(b => {
+
+      // AGE
+      if (b.dateOfBirth) {
+        const age =
+          (today - new Date(b.dateOfBirth)) /
+          (1000 * 60 * 60 * 24 * 365);
+
+        if (age < 25) ageDistribution.under25++;
+        else if (age < 35) ageDistribution.age25_34++;
+        else if (age < 45) ageDistribution.age35_44++;
+        else if (age < 55) ageDistribution.age45_54++;
+        else ageDistribution.above55++;
+      }
+
+      // GENDER
+      const gender = b.gender || "Unknown";
+      genderDistribution[gender] =
+        (genderDistribution[gender] || 0) + 1;
+
+      // OCCUPATION
+      const occ = b.occupation || "Unknown";
+      occupationDistribution[occ] =
+        (occupationDistribution[occ] || 0) + 1;
+
+      // INCOME
+      const band = b.monthlyIncomeRange || "Unknown";
+      incomeBands[band] =
+        (incomeBands[band] || 0) + 1;
+
+      // REGION (using market/town fallback)
+      const region = b.market || b.town || "Unknown";
+      regionMap[region] =
+        (regionMap[region] || 0) + 1;
+    });
+
+    const underservedRegions = Object.entries(regionMap)
+      .filter(([_, count]) => count < 5)
+      .map(([region]) => region);
+
+    /* =====================================================
+       6️⃣ BEHAVIOR BY GENDER
+    ===================================================== */
+
+    const genderLoanStats = {};
+
+    loans.forEach(l => {
+      const borrower = borrowers.find(
+        b => b._id.toString() === l.borrowerId.toString()
+      );
+      if (!borrower) return;
+
+      const gender = borrower.gender || "Unknown";
+
+      if (!genderLoanStats[gender]) {
+        genderLoanStats[gender] = {
+          total: 0,
+          defaulted: 0,
+          totalAmount: 0
+        };
+      }
+
+      genderLoanStats[gender].total++;
+      genderLoanStats[gender].totalAmount += l.amount || 0;
+
+      if (l.isDefaulted) genderLoanStats[gender].defaulted++;
+    });
+
+    const behaviorByGender = Object.keys(genderLoanStats).map(g => ({
+      gender: g,
+      defaultRate:
+        genderLoanStats[g].total > 0
+          ? Number(
+              ((genderLoanStats[g].defaulted /
+                genderLoanStats[g].total) * 100).toFixed(2)
+            )
+          : 0,
+      averageLoanSize:
+        genderLoanStats[g].total > 0
+          ? Number(
+              (genderLoanStats[g].totalAmount /
+                genderLoanStats[g].total).toFixed(2)
+            )
+          : 0
+    }));
+
+    const highRiskDemographics =
+      behaviorByGender.filter(g => g.defaultRate > 20);
+
+    /* =====================================================
+       7️⃣ MARITAL STATUS ANALYSIS
+    ===================================================== */
+
+    const maritalStatusAnalysis = {};
+
+    borrowers.forEach(b => {
+      const key = b.maritalStatus || "Unknown";
+
+      if (!maritalStatusAnalysis[key]) {
+        maritalStatusAnalysis[key] = {
+          borrowers: 0,
+          avgLoanSize: 0,
+          defaultRate: 0,
+          repaymentRate: 0
+        };
+      }
+
+      maritalStatusAnalysis[key].borrowers++;
+
+      const loanData = borrowerLoanMap[b._id];
+      if (loanData && loanData.totalLoans > 0) {
+        maritalStatusAnalysis[key].avgLoanSize +=
+          loanData.totalAmount / loanData.totalLoans;
+
+        maritalStatusAnalysis[key].defaultRate +=
+          loanData.defaulted / loanData.totalLoans;
+
+        maritalStatusAnalysis[key].repaymentRate +=
+          loanData.totalRepaid / loanData.totalAmount;
+      }
+    });
+
+    /* =====================================================
+       8️⃣ EDUCATION ANALYSIS
+    ===================================================== */
+
+    const educationAnalysis = {};
+
+    borrowers.forEach(b => {
+      const key = b.educationLevel || "Unknown";
+
+      if (!educationAnalysis[key]) {
+        educationAnalysis[key] = {
+          borrowers: 0,
+          avgLoanSize: 0,
+          repaymentRate: 0
+        };
+      }
+
+      educationAnalysis[key].borrowers++;
+
+      const loanData = borrowerLoanMap[b._id];
+      if (loanData && loanData.totalLoans > 0) {
+        educationAnalysis[key].avgLoanSize +=
+          loanData.totalAmount / loanData.totalLoans;
+
+        educationAnalysis[key].repaymentRate +=
+          loanData.totalRepaid / loanData.totalAmount;
+      }
+    });
+
+    /* =====================================================
+       9️⃣ HOUSEHOLD RISK
+    ===================================================== */
+
+    const householdAnalysis = {
+      small: { borrowers: 0, defaultRate: 0 },
+      medium: { borrowers: 0, defaultRate: 0 },
+      large: { borrowers: 0, defaultRate: 0 }
+    };
+
+    borrowers.forEach(b => {
+      const size = b.householdSize || 0;
+
+      const category =
+        size <= 2 ? "small" :
+        size <= 5 ? "medium" : "large";
+
+      householdAnalysis[category].borrowers++;
+
+      const loanData = borrowerLoanMap[b._id];
+      if (loanData && loanData.totalLoans > 0) {
+        householdAnalysis[category].defaultRate +=
+          loanData.defaulted / loanData.totalLoans;
+      }
+    });
+
+    /* =====================================================
+       🔟 URBAN vs RURAL
+    ===================================================== */
+
+    const locationSplit = { urban: 0, rural: 0 };
+
+    borrowers.forEach(b => {
+      if (b.market?.toLowerCase().includes("city"))
+        locationSplit.urban++;
+      else locationSplit.rural++;
+    });
+
+    /* =====================================================
+       1️⃣1️⃣ TENURE ANALYSIS
+    ===================================================== */
+
+    const tenureAnalysis = {
+      lessThan1Year: 0,
+      oneToThreeYears: 0,
+      aboveThreeYears: 0
+    };
+
+    borrowers.forEach(b => {
+      if (!b.createdAt) return;
+
+      const years =
+        (today - new Date(b.createdAt)) /
+        (1000 * 60 * 60 * 24 * 365);
+
+      if (years < 1) tenureAnalysis.lessThan1Year++;
+      else if (years < 3) tenureAnalysis.oneToThreeYears++;
+      else tenureAnalysis.aboveThreeYears++;
+    });
+
+    /* =====================================================
+       FINAL RESPONSE
+    ===================================================== */
+
+    res.json({
+      success: true,
+      totalBorrowers: borrowers.length,
+
+      customerDemographics: {
+        ageDistribution,
+        genderDistribution,
+        occupationDistribution,
+        incomeBands
+      },
+
+      geographicInsights: {
+        borrowersByRegion: regionMap,
+        underservedRegions
+      },
+
+      behaviorPatterns: {
+        byGender: behaviorByGender,
+        maritalStatusAnalysis,
+        educationAnalysis,
+        householdRiskAnalysis: householdAnalysis
+      },
+
+      socioeconomicInsights: {
+        urbanRuralSplit: locationSplit,
+        tenureAnalysis
+      },
+
+      marketOpportunitySignals: {
+        highRiskDemographics
+      }
+    });
+
+  } catch (error) {
+    console.error("Demographics analysis error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate demographics analysis"
+    });
+  }
+};

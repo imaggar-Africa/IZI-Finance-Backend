@@ -821,8 +821,6 @@ exports.updateBorrowerProfile = async (req, res) => {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    /* ================= BORROWER UPDATE ================= */
-
     const restrictedBorrowerFields = [
       "_id",
       "creditScore",
@@ -840,17 +838,15 @@ exports.updateBorrowerProfile = async (req, res) => {
 
     const borrowerUpdateData = {};
 
+    /* ========= BODY UPDATE ========= */
+
     Object.keys(req.body).forEach((key) => {
-  if (!restrictedBorrowerFields.includes(key) && !key.startsWith("guarantor")) {
-    
-    const value = req.body[key];
-    if (value === "null" || value === "") {
-      borrowerUpdateData[key] = null;
-    } else {
-      borrowerUpdateData[key] = value;
-    }
-  }
-});
+      if (!restrictedBorrowerFields.includes(key) && !key.startsWith("guarantor")) {
+        const value = req.body[key];
+        borrowerUpdateData[key] =
+          value === "null" || value === "" ? null : value;
+      }
+    });
 
     if (borrowerUpdateData.phone) {
       const normalized = normalizePhone(borrowerUpdateData.phone);
@@ -860,7 +856,33 @@ exports.updateBorrowerProfile = async (req, res) => {
       borrowerUpdateData.phone = normalized;
     }
 
+    /* ========= FILE UPLOAD (IMPORTANT) ========= */
+
+    const livePhoto = await uploadToFirebase(
+      req.files?.livePhoto?.[0],
+      "livePhoto",
+      "borrowers"
+    );
+
+    const frontID = await uploadToFirebase(
+      req.files?.frontID?.[0],
+      "frontID",
+      "borrowers"
+    );
+
+    const backID = await uploadToFirebase(
+      req.files?.backID?.[0],
+      "backID",
+      "borrowers"
+    );
+
+    if (livePhoto) borrowerUpdateData.livePhoto = livePhoto;
+    if (frontID) borrowerUpdateData.frontID = frontID;
+    if (backID) borrowerUpdateData.backID = backID;
+
     borrowerUpdateData.updatedAt = Date.now();
+
+    /* ========= SINGLE DB UPDATE ========= */
 
     if (Object.keys(borrowerUpdateData).length > 0) {
       await Borrower.updateOne(
@@ -869,13 +891,9 @@ exports.updateBorrowerProfile = async (req, res) => {
       );
     }
 
-    /* ================= GUARANTOR UPDATE ================= */
-
+    /* ========= GUARANTOR UPDATE ========= */
     const guarantor = await Guarantor.findOne({
-      $or: [
-        { borrowerId: customerId },
-        { borrowerId: new mongoose.Types.ObjectId(customerId) }
-      ],
+      borrowerId: customerId,
       isDeleted: false
     });
 
@@ -885,13 +903,13 @@ exports.updateBorrowerProfile = async (req, res) => {
       if (req.body.guarantorFullName)
         guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
 
-    const relationshipInput =
-  req.body.guarantorRelationship || req.body.relationship;
+      const relationshipInput =
+        req.body.guarantorRelationship || req.body.relationship;
 
-if (relationshipInput !== undefined) {
-  guarantorUpdateData.relationship =
-    String(relationshipInput).trim();
-}
+      if (relationshipInput !== undefined) {
+        guarantorUpdateData.relationship =
+          String(relationshipInput).trim();
+      }
 
       if (req.body.guarantorIdNumber)
         guarantorUpdateData.idNumber =
@@ -899,7 +917,6 @@ if (relationshipInput !== undefined) {
 
       if (req.body.guarantorPhone) {
         const normalizedPhone = normalizePhone(req.body.guarantorPhone);
-
         if (!normalizedPhone) {
           return res.status(400).json({
             message: "Invalid guarantor phone"
@@ -922,8 +939,6 @@ if (relationshipInput !== undefined) {
       }
     }
 
-    /* ================= FINAL FETCH ================= */
-
     const updatedBorrower = await Borrower.findById(customerId);
     const updatedGuarantor = await Guarantor.findOne({
       borrowerId: customerId,
@@ -939,13 +954,6 @@ if (relationshipInput !== undefined) {
 
   } catch (error) {
     console.error("❌ updateBorrowerProfile error:", error);
-
-    if (error.code === 11000) {
-      return res.status(400).json({
-        message: "Duplicate guarantor phone for this borrower"
-      });
-    }
-
     return res.status(500).json({
       message: "Server error",
       error: error.message
