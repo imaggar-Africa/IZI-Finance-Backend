@@ -2385,10 +2385,10 @@ exports.getDemographicsAnalysis = async (req, res) => {
     ===================================================== */
 
     const borrowers = await Customer.find({
-      $or: [
-        { registeredBy: lenderId, registeredByModel: "User" },
-        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
-      ],
+      // $or: [
+      //   { registeredBy: lenderId, registeredByModel: "User" },
+      //   { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      // ],
       isDeleted: { $ne: true }
     }).lean();
 
