@@ -99,7 +99,7 @@ const Loan = require("../../models/Loan");
 const { sendSMS } = require("../../utils/sms");
 const { normalizePhone } = require("../../utils/normalizePhone");
 
-// ⏰ Runs every 5 minutes
+// ⏰ Runs every 5 minutes (testing)
 cron.schedule(
   "*/5 * * * *",
   async () => {
@@ -117,30 +117,38 @@ cron.schedule(
       for (const loan of activeLoans) {
         const now = new Date();
 
-        // 🔹 Nairobi time for accurate comparison
+        // Nairobi time
         const nairobiTime = new Date(
           now.toLocaleString("en-US", { timeZone: "Africa/Nairobi" })
         );
 
         const dueDate = new Date(loan.dueDate);
 
-        // 🔹 Step 1: Mark overdue
-        if (
-          dueDate < nairobiTime &&
-          loan.status === "active" &&
-          loan.balance > 0
-        ) {
-          loan.status = "overdue";
-          loan.updatedAt = now;
+        /* =====================================================
+           STEP 1 — MARK LOAN AS OVERDUE
+        ===================================================== */
 
-          await loan.save();
+        if (dueDate < nairobiTime && loan.balance > 0) {
+
+          await Loan.updateOne(
+            { _id: loan._id },
+            {
+              $set: {
+                status: "overdue",
+                updatedAt: now
+              }
+            }
+          );
 
           console.log(
             `⚠️ Loan ${loan._id} marked OVERDUE | Due: ${dueDate} | Now: ${nairobiTime}`
           );
         }
 
-        // 🔹 Step 2: Send reminder SMS
+        /* =====================================================
+           STEP 2 — SEND REMINDER SMS
+        ===================================================== */
+
         const rawPhone =
           loan.borrowerId?.phone || loan.borrowerId?.phoneNumber;
 
@@ -159,8 +167,9 @@ cron.schedule(
         const hoursSinceLastReminder =
           (now - lastReminder) / (1000 * 60 * 60);
 
-        // ✅ Only send once every 24 hours
+        // send once every 24 hours
         if (hoursSinceLastReminder >= 24) {
+
           let lastRepaymentDate = "No repayment yet";
 
           if (loan.repayments?.length > 0) {
@@ -180,10 +189,11 @@ cron.schedule(
 
           await sendSMS(borrowerPhone, borrowerMessage);
 
-          // ✅ Update reminder timestamp
           await Loan.updateOne(
             { _id: loan._id },
-            { $set: { lastReminderSent: now } }
+            {
+              $set: { lastReminderSent: now }
+            }
           );
 
           console.log(

@@ -1916,12 +1916,124 @@ exports.getRegionPerformanceReport = async (req, res) => {
 
     /* ================= REGION DETECTION ================= */
 
-    function getRegion(customer) {
-      if (customer.town && customer.town.trim() !== "") return customer.town.trim();
-      if (customer.market && customer.market.trim() !== "") return customer.market.trim();
-      if (customer.physicalAddress && customer.physicalAddress.trim() !== "") return customer.physicalAddress.trim();
-      return "Unknown";
-    }
+ function getRegion(customer) {
+
+  const phone = customer.phone || customer.phoneNumber;
+
+  if (!phone) return "Unknown";
+
+  const p = phone.replace(/\s+/g, "");
+
+  /* ================= KENYA ================= */
+
+  if (p.startsWith("+25470") || p.startsWith("+25471"))
+    return "Kenya - Nairobi";
+
+  if (p.startsWith("+25472") || p.startsWith("+25473"))
+    return "Kenya - Mombasa";
+
+  if (p.startsWith("+25474") || p.startsWith("+25475"))
+    return "Kenya - Kisumu";
+
+  if (p.startsWith("+25476"))
+    return "Kenya - Nakuru";
+
+  if (p.startsWith("+25477") || p.startsWith("+25478"))
+    return "Kenya - Eldoret";
+
+  if (p.startsWith("+25479"))
+    return "Kenya - Thika";
+
+
+  /* ================= UGANDA ================= */
+
+  if (p.startsWith("+25670") || p.startsWith("+25675"))
+    return "Uganda - Kampala";
+
+  if (p.startsWith("+25677"))
+    return "Uganda - Entebbe";
+
+  if (p.startsWith("+25678"))
+    return "Uganda - Jinja";
+
+  if (p.startsWith("+25674"))
+    return "Uganda - Gulu";
+
+  if (p.startsWith("+25676"))
+    return "Uganda - Mbale";
+
+
+  /* ================= TANZANIA ================= */
+
+  if (p.startsWith("+25571") || p.startsWith("+25575"))
+    return "Tanzania - Dar es Salaam";
+
+  if (p.startsWith("+25576"))
+    return "Tanzania - Arusha";
+
+  if (p.startsWith("+25573"))
+    return "Tanzania - Mwanza";
+
+  if (p.startsWith("+25574"))
+    return "Tanzania - Dodoma";
+
+  if (p.startsWith("+25578"))
+    return "Tanzania - Zanzibar";
+
+
+  /* ================= RWANDA ================= */
+
+  if (p.startsWith("+25078"))
+    return "Rwanda - Kigali";
+
+  if (p.startsWith("+25072"))
+    return "Rwanda - Butare";
+
+  if (p.startsWith("+25073"))
+    return "Rwanda - Gisenyi";
+
+  if (p.startsWith("+25079"))
+    return "Rwanda - Ruhengeri";
+
+
+  /* ================= NIGERIA ================= */
+
+  if (p.startsWith("+23470") || p.startsWith("+23480"))
+    return "Nigeria - Lagos";
+
+  if (p.startsWith("+23481"))
+    return "Nigeria - Abuja";
+
+  if (p.startsWith("+23490"))
+    return "Nigeria - Port Harcourt";
+
+  if (p.startsWith("+23491"))
+    return "Nigeria - Kano";
+
+  if (p.startsWith("+23492"))
+    return "Nigeria - Ibadan";
+
+
+  /* ================= GHANA ================= */
+
+  if (p.startsWith("+23324") || p.startsWith("+23354"))
+    return "Ghana - Accra";
+
+  if (p.startsWith("+23320"))
+    return "Ghana - Kumasi";
+
+  if (p.startsWith("+23327"))
+    return "Ghana - Tamale";
+
+  if (p.startsWith("+23326"))
+    return "Ghana - Takoradi";
+
+  if (p.startsWith("+23328"))
+    return "Ghana - Cape Coast";
+
+
+  return "Other";
+}
 
     /* ================= GET LOANS ================= */
 
