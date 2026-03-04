@@ -1358,27 +1358,24 @@ exports.getAgentsReport = async (req, res) => {
       =================================================== */
 
       portfolioQualityByAgent.push({
-        agentId: agent._id,
-        name: agent.fullName,
-        par: Number(par.toFixed(2)),
-        defaultRate: Number(defaultRate.toFixed(2)),
-        overdueAmount,
-        collectionEfficiency: Number(collectionEfficiency.toFixed(2))
-      });
+  agentName: agent.name,
+  par: Number(par.toFixed(2)),
+  defaultRate: Number(defaultRate.toFixed(2)),
+  overdueAmount,
+  collectionEfficiency: Number(collectionEfficiency.toFixed(2))
+});
 
-      operationalBehavior.push({
-        agentId: agent._id,
-        name: agent.fullName,
-        lastActivity: agent.lastActiveAt || null,
-        riskFlags
-      });
+    operationalBehavior.push({
+  agentName: agent.name,
+  lastActivity: agent.lastActiveAt || null,
+  riskFlags
+});
 
       leaderboardData.push({
-        agentId: agent._id,
-        name: agent.fullName,
-        score: collectionEfficiency - par - defaultRate,
-        riskFlags
-      });
+  agentName: agent.name,
+  score: collectionEfficiency - par - defaultRate,
+  riskFlags
+});
 
       /* ===================================================
          UPDATE SUMMARY
