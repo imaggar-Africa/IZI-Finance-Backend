@@ -14,7 +14,7 @@ const firebaseSafeUpload = require("../utils/upload");
 
 
 
-router.get("/eligible-loan",protect,customerController.getCustomersWithoutActiveLoans) 
+router.get("/eligible-loan", protect, customerController.getCustomersWithoutActiveLoans)
 // Register a new borrower with ID photos
 // Upload 3 files with fields
 // Enhanced customer registration with proper error handling
@@ -40,7 +40,7 @@ router.post(
 
 
 
-router.get("/findAll",protect, customerController.getAllCustomers);
+router.get("/findAll", protect, customerController.getAllCustomers);
 // GET customer details by ID
 // router.get("/:id",protect, customerController.getCustomerWithProfile);
 
@@ -49,10 +49,10 @@ router.get("/findAll",protect, customerController.getAllCustomers);
 // Get borrower savings balance
 router.get("/savings/:customerId", customerController.getSavings);
 
-router.get("/summary",protect, customerController.getBorrowerSummary);
+router.get("/summary", protect, customerController.getBorrowerSummary);
 
 
-router.get("/login/profile",borrowerProtect,customerController.getBorrowerProfile)
+router.get("/login/profile", borrowerProtect, customerController.getBorrowerProfile)
 
 router.put(
   "/:customerId",
@@ -68,8 +68,16 @@ router.put(
 
 router.get(
   "/:borrowerId",
-  borrowerProtect,          
-  customerController.getMyLoans       
+  borrowerProtect,
+  customerController.getMyLoans
+);
+
+// Toggle manual block for customer
+router.patch(
+  "/:customerId/toggle-block",
+  protect,
+  authorizeRoles("lender"),
+  customerController.toggleBlockCustomer
 );
 
 module.exports = router;

@@ -375,6 +375,7 @@ exports.issueLoan = async (req, res) => {
     /* ================= BORROWER ================= */
     const borrower = await Customer.findById(borrowerId).session(session);
     if (!borrower) throw new Error("Borrower not found");
+    if (borrower.is_blocked) throw new Error("Borrower is manually blocked");
     if (borrower.isDeleted) throw new Error("Borrower account inactive");
     if (!borrower.isVerified) throw new Error("Borrower not verified");
 
@@ -402,8 +403,8 @@ exports.issueLoan = async (req, res) => {
         (repaymentFrequency === "weekly"
           ? 7
           : repaymentFrequency === "monthly"
-          ? 30
-          : 1));
+            ? 30
+            : 1));
 
     /* ================= CREATE LOAN ================= */
     const [loan] = await Loan.create(
@@ -604,8 +605,8 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
     <body>
 
     ${formattedLoans
-      .map(
-        (loan) => `
+        .map(
+          (loan) => `
       <div class="page">
         <h1>Loan Statement</h1>
 
@@ -645,21 +646,20 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
             <th>Amount</th>
             <th>Status</th>
           </tr>
-          ${
-            loan.repayments?.length
+          ${loan.repayments?.length
               ? loan.repayments
-                  .map(
-                    (r) => `
+                .map(
+                  (r) => `
                     <tr>
                       <td>${new Date(r.date).toLocaleDateString()}</td>
                       <td>Ksh ${r.amount}</td>
                       <td>On Time</td>
                     </tr>
                   `
-                  )
-                  .join("")
+                )
+                .join("")
               : `<tr><td colspan="3">No repayments found</td></tr>`
-          }
+            }
         </table>
 
         <div class="footer">
@@ -667,8 +667,8 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
         </div>
       </div>
     `
-      )
-      .join("")}
+        )
+        .join("")}
 
     </body>
     </html>
@@ -1117,8 +1117,8 @@ exports.getLoansByBorrower = async (req, res) => {
     const repaymentProgress =
       repaymentBehavior.totalPayable > 0
         ? Math.round(
-            (totalPaid / repaymentBehavior.totalPayable) * 100
-          )
+          (totalPaid / repaymentBehavior.totalPayable) * 100
+        )
         : 0;
 
     // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
@@ -1164,16 +1164,20 @@ exports.getLoansByBorrower = async (req, res) => {
 exports.requestLoan = async (req, res) => {
   try {
     const agentId = req.user._id;
-    const { borrowerId, amount, totalInterest, duration, repaymentFrequency} = req.body;
+    const { borrowerId, amount, totalInterest, duration, repaymentFrequency } = req.body;
 
     // ✅ Validation
-    if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency ) {
+    if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
     // ✅ Check borrower existence
     const borrower = await Customer.findById(borrowerId);
     if (!borrower) return res.status(404).json({ message: "Borrower not found" });
+
+    if (borrower.is_blocked) {
+      return res.status(403).json({ message: "Borrower is manually blocked" });
+    }
 
     // ✅ Fetch Agent and its assigned Lender
     const agent = await AgentModel.findById(agentId);
@@ -1185,7 +1189,7 @@ exports.requestLoan = async (req, res) => {
     // ✅ Check if borrower already has active, pending, or overdue loan
     const existingLoan = await Loan.findOne({
       borrowerId,
-      status: { $in: [ "active", "overdue"] }
+      status: { $in: ["active", "overdue"] }
     })
       .populate("requestedByAgentId", "name phone")
       .populate("lenderId", "name phone")
@@ -1208,7 +1212,7 @@ exports.requestLoan = async (req, res) => {
       borrowerId,
       requestedByAgentId: agentId,
       fullName: borrower.fullName,
-       phoneNumber: borrower.phone, // ✅ fetched directly,
+      phoneNumber: borrower.phone, // ✅ fetched directly,
       lenderPhone: lender.phone,
       amount,
       repaymentPlan: repaymentFrequency,
@@ -1270,22 +1274,22 @@ exports.getAllLoanRequests = async (req, res) => {
     loanRequestStatus: "pending"
   }).populate("borrowerId requestedByAgentId lenderId");
 
- loans.forEach((loan) => {
-  const borrower = loan.borrowerId;
+  loans.forEach((loan) => {
+    const borrower = loan.borrowerId;
 
-  if (!borrower) return;
+    if (!borrower) return;
 
-  const isFirstLoan =
-    (borrower.totalLoans || 0) === 0 &&
-    (borrower.completedLoans || 0) === 0;
+    const isFirstLoan =
+      (borrower.totalLoans || 0) === 0 &&
+      (borrower.completedLoans || 0) === 0;
 
-  loan._doc.existingUser = !isFirstLoan;
+    loan._doc.existingUser = !isFirstLoan;
 
-  // 🔥 If first-time borrower → merge borrower details into loan
-  if (isFirstLoan) {
-    Object.assign(loan._doc, borrower.toObject());
-  }
-});
+    // 🔥 If first-time borrower → merge borrower details into loan
+    if (isFirstLoan) {
+      Object.assign(loan._doc, borrower.toObject());
+    }
+  });
 
 
   res.json({ loans });
@@ -1347,7 +1351,7 @@ exports.getAllLoanRequests = async (req, res) => {
 //     const agent = loan.requestedByAgentId;
 //     const lender = loan.lenderId;
 
-    
+
 //     /* 🔒 COMPANY KYC RESTRICTION */
 // if (
 //   lender.accountType === "company" &&
@@ -1952,7 +1956,7 @@ Thank you.
     return res.status(200).json({
       success: true,
       message: "Statement SMS sent successfully",
-      smsContent: message 
+      smsContent: message
     });
 
   } catch (error) {

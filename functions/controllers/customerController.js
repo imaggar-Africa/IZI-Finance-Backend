@@ -10,7 +10,7 @@ const Loan = require("../models/Loan");
 // const CustomerProfile = require("../models/BorrowerProfile");
 const bucket = require("../config/firebase");
 const { getStorage } = require("firebase-admin/storage");
-const mongoose = require("mongoose"); 
+const mongoose = require("mongoose");
 const { generateAccountId } = require("../utils/generateAccountId");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { calculateMembership } = require("../utils/membershipRules");
@@ -45,10 +45,10 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
       if (!file) return resolve(null);
 
       // Bucket safety check
-     if (!bucket || typeof bucket.file !== "function") {
-  console.warn("⚠️ Firebase Storage unavailable.");
-  return resolve(null);
-}
+      if (!bucket || typeof bucket.file !== "function") {
+        console.warn("⚠️ Firebase Storage unavailable.");
+        return resolve(null);
+      }
 
 
       const ext = path.extname(file.originalname) || ".jpg";
@@ -119,7 +119,7 @@ exports.sendOtp = async (req, res) => {
 
 // **Register Customer**
 
-  // change path as needed
+// change path as needed
 
 exports.registerCustomer = async (req, res) => {
   try {
@@ -200,8 +200,8 @@ exports.registerCustomer = async (req, res) => {
       Array.isArray(phone)
         ? phone[0]
         : typeof phone === "object"
-        ? phone.value || phone.phone || ""
-        : phone;
+          ? phone.value || phone.phone || ""
+          : phone;
 
     const normalizedPhone = normalizePhone(String(rawPhone).trim());
 
@@ -251,24 +251,24 @@ exports.registerCustomer = async (req, res) => {
       return res.status(409).json({ message: "ID number already registered" });
     }
 
-   
-const livePhoto = await uploadToFirebase(
-  req.files?.livePhoto?.[0],
-  "livePhoto",
-  "borrowers"
-);
 
-const frontID = await uploadToFirebase(
-  req.files?.frontID?.[0],
-  "frontID",
-  "borrowers"
-);
+    const livePhoto = await uploadToFirebase(
+      req.files?.livePhoto?.[0],
+      "livePhoto",
+      "borrowers"
+    );
 
-const backID = await uploadToFirebase(
-  req.files?.backID?.[0],
-  "backID",
-  "borrowers"
-);
+    const frontID = await uploadToFirebase(
+      req.files?.frontID?.[0],
+      "frontID",
+      "borrowers"
+    );
+
+    const backID = await uploadToFirebase(
+      req.files?.backID?.[0],
+      "backID",
+      "borrowers"
+    );
 
 
     const accountId = await generateAccountId();
@@ -378,10 +378,10 @@ const backID = await uploadToFirebase(
       borrower,
       guarantor: guarantorDoc
         ? {
-            id: guarantorDoc._id,
-            phone: guarantorDoc.phone,
-            consent: guarantorDoc.consent
-          }
+          id: guarantorDoc._id,
+          phone: guarantorDoc.phone,
+          consent: guarantorDoc.consent
+        }
         : null
     });
 
@@ -726,9 +726,9 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
     const activeLoanBorrowerIds = await Loan.find({
       $or: [
         { status: "active" },
-        { 
-          status: "pending", 
-          loanRequestStatus: { $in: ["pending", "approved"] } 
+        {
+          status: "pending",
+          loanRequestStatus: { $in: ["pending", "approved"] }
         }
       ]
     }).distinct("borrowerId");
@@ -970,7 +970,7 @@ exports.getMyLoans = async (req, res) => {
     loanRequestStatus: "approved",
     status: { $in: ["active", "overdue"] }
   });
-
+  const borrower = await Borrower.findById(borrowerId);
   const enrichedLoans = loans.map((loan) => {
     const repayments = Array.isArray(loan.repayments) ? loan.repayments : [];
 
@@ -999,15 +999,15 @@ exports.getMyLoans = async (req, res) => {
     const repaymentProgress =
       repaymentBehavior.totalPayable > 0
         ? Math.round(
-            (totalPaid / repaymentBehavior.totalPayable) * 100
-          )
+          (totalPaid / repaymentBehavior.totalPayable) * 100
+        )
         : 0;
 
     // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
     const eligibility = evaluateLoanByCreditScore({
       creditScore: loan.creditScoreAfter || 500,
       requestedAmount: loan.amount,
-       borrower
+      borrower
     });
 
     return {
@@ -1036,6 +1036,50 @@ exports.getMyLoans = async (req, res) => {
   });
 
   res.json({ loans: enrichedLoans });
+};
+
+/* =====================================================
+   🔒 TOGGLE BLOCK CUSTOMER (LENDER ONLY)
+===================================================== */
+exports.toggleBlockCustomer = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { is_blocked, reason } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+
+    const customer = await Borrower.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Update blocking status
+    customer.is_blocked = is_blocked === undefined ? !customer.is_blocked : is_blocked;
+    customer.block_reason = reason || (customer.is_blocked ? "Blocked by lender" : null);
+
+    await customer.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Customer ${customer.is_blocked ? "blocked" : "unblocked"} successfully`,
+      customer: {
+        id: customer._id,
+        fullName: customer.fullName,
+        is_blocked: customer.is_blocked,
+        block_reason: customer.block_reason
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ toggleBlockCustomer error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
 };
 
 

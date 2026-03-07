@@ -9,7 +9,7 @@ const AgentCommission = require("../models/AgentCommission");
 const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
 const WithdrawRequest = require("../models/WithdrawRequest");
-const { getB2CCharge } = require("../utils/mpesaCharges"); 
+const { getB2CCharge } = require("../utils/mpesaCharges");
 
 
 // B2C Callback Handler
@@ -36,7 +36,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //       ResultDesc = Result.ResultDesc;
 //       OriginatorConversationID = Result.OriginatorConversationID;
 //       ConversationID = Result.ConversationID;
-      
+
 //       // Extract TransactionID from ResultParameters if available
 //       if (Result.ResultParameters && Result.ResultParameters.ResultParameter) {
 //         const resultParams = Result.ResultParameters.ResultParameter;
@@ -49,7 +49,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           }
 //         }
 //       }
-      
+
 //       // Fallback to direct TransactionID
 //       if (!MpesaTransactionID) {
 //         MpesaTransactionID = Result.TransactionID;
@@ -95,7 +95,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     `);
 
 //     // ✅ TRANSACTION MATCHING - Multiple strategies
-  
+
 // let transaction = await Transaction.findOne({
 //   $or: [
 //     { checkoutRequestID: OriginatorConversationID },
@@ -162,7 +162,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //       console.log("   - ConversationID:", ConversationID);
 //       console.log("   - OriginatorConversationID:", OriginatorConversationID);
 //       console.log("   - MpesaTransactionID:", MpesaTransactionID);
-      
+
 //       await session.commitTransaction();
 //       session.endSession();
 //       return res.status(200).json({ message: "No pending transaction found" });
@@ -189,11 +189,11 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ FAILED PAYMENT FLOW
 //     if (ResultCode !== 0) {
 //       console.log("❌ M-Pesa reported FAILURE - Reversing transaction...");
-      
+
 //       transaction.status = "failed";
 //       transaction.mpesaPayload = Result;
 //       transaction.failureReason = ResultDesc;
-      
+
 //       await transaction.save({ session });
 
 //       // Handle reversal based on transaction type
@@ -245,17 +245,17 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     const agent = await AgentModel.findById(transaction.userId).session(session);
 //     if (agent) {
 //       console.log(`⚠️ Agent withdrawal failed for ${agent._id} - balance was never deducted`);
-      
+
 //       // Update withdrawal request status to failed
 //       const withdrawalRequest = await WithdrawRequest.findOne({ 
 //         transactionId: transaction._id 
 //       }).session(session);
-      
+
 //       if (withdrawalRequest) {
 //         withdrawalRequest.status = "failed";
 //         withdrawalRequest.failureReason = ResultDesc;
 //         await withdrawalRequest.save({ session });
-        
+
 //         // Send failure notification to agent
 //         postCommitTasks.push(async () => {
 //           await Notification.create({
@@ -285,12 +285,12 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             const loan = await Loan.findById(transaction.loanId)
 //               .populate('borrowerId')
 //               .populate('lenderId');
-            
+
 //             if (loan && loan.borrowerId) {
 //               // Get borrower name from Customer model
 //               const borrower = await Borrower.findById(loan.borrowerId._id || loan.borrowerId);
 //               const borrowerName = borrower?.fullName || "Customer";
-              
+
 //               await sendSMS(
 //                 loan.borrowerId.phone,
 //                 `Dear ${borrowerName}, your loan disbursement of KES ${transaction.amount} has failed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nFor assistance, contact izifinance Support.`
@@ -303,7 +303,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             if (user) {
 //               const profile = await Profile.findOne({ userId: user._id });
 //               const userName = profile?.fullName || "Customer";
-              
+
 //               await sendSMS(
 //                 user.phone,
 //                 `Dear ${userName}, your withdrawal of KES ${transaction.amount} has failed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nPlease try again.\n- izifinance Support`
@@ -351,7 +351,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ LOAN DISBURSEMENT HANDLING - DEDUCT LENDER BALANCE ONLY ON SUCCESS
 //     if (transaction.type === "loan issued") {
 //       console.log("💰 Processing loan disbursement...");
-      
+
 //       const loan = await Loan.findById(transaction.loanId)
 //         .populate('borrowerId')
 //         .populate('requestedByAgentId')
@@ -360,7 +360,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 
 //       if (loan) {
 //         console.log(`📝 Updating loan ${loan._id} to active status`);
-        
+
 //         // ✅ DEDUCT LENDER BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //         const lender = await User.findById(loan.lenderId).session(session);
 //         if (lender) {
@@ -371,13 +371,13 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           await lender.save({ session });
 //           console.log(`💸 Deducted ${transaction.amount} from lender ${lender._id}. New balance: ${lender.walletBalance}`);
 //         }
-        
+
 //         // Update loan status to active
 //         loan.status = "active";
 //         loan.loanRequestStatus = "approved";
 //         loan.balance = loan.totalRepayment;
 //         loan.disbursedAt = new Date();
-        
+
 //         await loan.save({ session });
 
 //         // Update borrower's loan balance
@@ -393,10 +393,10 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 
 //         // ✅ AGENT COMMISSION FOR LOAN DISBURSEMENT
 //         let commissionAmount = 0;
-        
+
 //         if (loan.requestedByAgentId) {
 //           commissionAmount = loan.amount * 0.0495; // 4.95% commission
-          
+
 //           const commissionUpdate = await AgentCommission.updateOne(
 //             { 
 //               agentId: loan.requestedByAgentId,
@@ -411,10 +411,10 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             },
 //             { session }
 //           );
-          
+
 //           if (commissionUpdate.modifiedCount > 0) {
 //             console.log(`💰 Agent approval commission earned: KES ${commissionAmount} for loan ${loan._id}`);
-            
+
 //             // Update agent's wallet
 //             const agent = await AgentModel.findById(loan.requestedByAgentId).session(session);
 //             if (agent) {
@@ -430,7 +430,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           // Get borrower name from Customer model
 //           const borrower = await Borrower.findById(loan.borrowerId._id || loan.borrowerId);
 //           const borrowerName = borrower?.fullName || "Customer";
-          
+
 //           // Get lender name from Profile
 //           const lenderProfile = await Profile.findOne({ userId: loan.lenderId._id || loan.lenderId });
 //           const lenderName = lenderProfile?.fullName || "Lender";
@@ -467,7 +467,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           if (loan.requestedByAgentId) {
 //             const agent = await AgentModel.findById(loan.requestedByAgentId);
 //             const agentName = agent?.fullName || "Agent";
-            
+
 //             await Notification.create({
 //               userId: loan.requestedByAgentId._id || loan.requestedByAgentId,
 //               userModel: "Agent",
@@ -487,7 +487,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ USER WITHDRAWAL HANDLING - DEDUCT BALANCE ONLY ON SUCCESS
 //     else if (transaction.type === "withdrawal") {
 //       console.log("💰 Processing user withdrawal...");
-      
+
 //       // ✅ DEDUCT BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //       const user = await User.findById(transaction.userId).session(session);
 //       if (user) {
@@ -498,15 +498,15 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //         await user.save({ session });
 //         console.log(`💸 Deducted ${transaction.amount} from user ${user._id}. New balance: ${user.walletBalance}`);
 //       }
-      
+
 //       await transaction.save({ session });
-      
+
 //       postCommitTasks.push(async () => {
 //         if (user) {
 //           // Get user name from Profile
 //           const profile = await Profile.findOne({ userId: user._id });
 //           const userName = profile?.fullName || "Customer";
-          
+
 //           await Notification.create({
 //             userId: user._id,
 //             userModel: "User",
@@ -525,7 +525,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ CUSTOMER SAVINGS WITHDRAWAL HANDLING - DEDUCT BALANCE ONLY ON SUCCESS
 //     else if (transaction.type === "customer withdrawal") {
 //       console.log("💰 Processing customer savings withdrawal...");
-      
+
 //       // For customer withdrawals, deduct from savings balance ONLY ON SUCCESS
 //       const customer = await Borrower.findById(transaction.userId).session(session);
 //       if (customer) {
@@ -536,9 +536,9 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //         await customer.save({ session });
 //         console.log(`👤 Updated customer ${customer._id} savings balance to ${customer.savingsBalance}`);
 //       }
-      
+
 //       await transaction.save({ session });
-      
+
 //       postCommitTasks.push(async () => {
 //         if (customer) {
 //           await Notification.create({
@@ -560,7 +560,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 // else if (transaction.type === "agent withdrawal") {
 //   // PASTE YOUR AGENT WITHDRAWAL CODE HERE
 //   console.log("💰 Processing agent withdrawal...");
-  
+
 //   // ✅ DEDUCT AGENT BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //   const agent = await AgentModel.findById(transaction.userId).session(session);
 //   if (agent) {
@@ -571,28 +571,28 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     await agent.save({ session });
 //     console.log(`💸 Deducted ${transaction.amount} from agent ${agent._id}. New balance: ${agent.walletBalance}`);
 //   }
-  
+
 //   // Update withdrawal request status
 //   const withdrawalRequest = await WithdrawRequest.findOne({ 
 //     transactionId: transaction._id 
 //   }).populate('lenderId').session(session);
-  
+
 //   if (withdrawalRequest) {
 //     withdrawalRequest.status = "completed";
 //     withdrawalRequest.processedAt = new Date();
 //     await withdrawalRequest.save({ session });
 //     console.log(`✅ Updated withdrawal request ${withdrawalRequest._id} to completed`);
 //   }
-  
+
 //   await transaction.save({ session });
-  
+
 //   postCommitTasks.push(async () => {
 //     if (agent) {
 //       // Get lender details for notification
 //       const lender = withdrawalRequest?.lenderId;
 //       const lenderProfile = lender ? await Profile.findOne({ userId: lender._id }) : null;
 //       const lenderName = lenderProfile?.fullName || "Lender";
-      
+
 //       // 🔔 NOTIFY AGENT
 //       await Notification.create({
 //         userId: agent._id,
@@ -695,7 +695,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //       ResultDesc = Result.ResultDesc;
 //       OriginatorConversationID = Result.OriginatorConversationID;
 //       ConversationID = Result.ConversationID;
-      
+
 //       // Extract TransactionID from ResultParameters if available
 //       if (Result.ResultParameters && Result.ResultParameters.ResultParameter) {
 //         const resultParams = Result.ResultParameters.ResultParameter;
@@ -708,7 +708,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           }
 //         }
 //       }
-      
+
 //       // Fallback to direct TransactionID
 //       if (!MpesaTransactionID) {
 //         MpesaTransactionID = Result.TransactionID;
@@ -754,7 +754,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     `);
 
 //     // ✅ TRANSACTION MATCHING - Multiple strategies
-  
+
 // let transaction = await Transaction.findOne({
 //   $or: [
 //     { checkoutRequestID: OriginatorConversationID },
@@ -821,7 +821,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //       console.log("   - ConversationID:", ConversationID);
 //       console.log("   - OriginatorConversationID:", OriginatorConversationID);
 //       console.log("   - MpesaTransactionID:", MpesaTransactionID);
-      
+
 //       await session.commitTransaction();
 //       session.endSession();
 //       return res.status(200).json({ message: "No pending transaction found" });
@@ -848,14 +848,14 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ FAILED PAYMENT FLOW
 //     if (ResultCode !== 0) {
 //       console.log("❌ M-Pesa reported FAILURE - Reversing transaction...");
-      
+
 //       transaction.status = "failed";
 //       transaction.mpesaPayload = Result;
 //       transaction.failureReason = ResultDesc;
 //       transaction.charge = fee;
 //       transaction.totalDebit = totalDebit;
 
-      
+
 //       await transaction.save({ session });
 
 //       // Handle reversal based on transaction type
@@ -907,17 +907,17 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     const agent = await AgentModel.findById(transaction.userId).session(session);
 //     if (agent) {
 //       console.log(`⚠️ Agent withdrawal failed for ${agent._id} - balance was never deducted`);
-      
+
 //       // Update withdrawal request status to failed
 //       const withdrawalRequest = await WithdrawRequest.findOne({ 
 //         transactionId: transaction._id 
 //       }).session(session);
-      
+
 //       if (withdrawalRequest) {
 //         withdrawalRequest.status = "failed";
 //         withdrawalRequest.failureReason = ResultDesc;
 //         await withdrawalRequest.save({ session });
-        
+
 //         // Send failure notification to agent
 //         postCommitTasks.push(async () => {
 //           await Notification.create({
@@ -947,12 +947,12 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             const loan = await Loan.findById(transaction.loanId)
 //               .populate('borrowerId')
 //               .populate('lenderId');
-            
+
 //             if (loan && loan.borrowerId) {
 //               // Get borrower name from Customer model
 //               const borrower = await Borrower.findById(loan.borrowerId._id || loan.borrowerId);
 //               const borrowerName = borrower?.fullName || "Customer";
-              
+
 //               await sendSMS(
 //                 loan.borrowerId.phone,
 //                 `Dear ${borrowerName}, your loan disbursement of KES ${transaction.amount} has failed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nFor assistance, contact izifinance Support.`
@@ -965,7 +965,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             if (user) {
 //               const profile = await Profile.findOne({ userId: user._id });
 //               const userName = profile?.fullName || "Customer";
-              
+
 //               await sendSMS(
 //                 user.phone,
 //                 `Dear ${userName}, your withdrawal of KES ${transaction.amount} has failed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nPlease try again.\n- izifinance Support`
@@ -1013,7 +1013,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ LOAN DISBURSEMENT HANDLING - DEDUCT LENDER BALANCE ONLY ON SUCCESS
 //     if (transaction.type === "loan issued") {
 //       console.log("💰 Processing loan disbursement...");
-      
+
 //       const loan = await Loan.findById(transaction.loanId)
 //         .populate('borrowerId')
 //         .populate('requestedByAgentId')
@@ -1022,7 +1022,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 
 //       if (loan) {
 //         console.log(`📝 Updating loan ${loan._id} to active status`);
-        
+
 //         // ✅ DEDUCT LENDER BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //         const lender = await User.findById(loan.lenderId).session(session);
 //         if (lender) {
@@ -1033,13 +1033,13 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           await lender.save({ session });
 //           console.log(`💸 Deducted ${transaction.amount} from lender ${lender._id}. New balance: ${lender.walletBalance}`);
 //         }
-        
+
 //         // Update loan status to active
 //         loan.status = "active";
 //         loan.loanRequestStatus = "approved";
 //         loan.balance = loan.totalRepayment;
 //         loan.disbursedAt = new Date();
-        
+
 //         await loan.save({ session });
 
 //         // Update borrower's loan balance
@@ -1055,10 +1055,10 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 
 //         // ✅ AGENT COMMISSION FOR LOAN DISBURSEMENT
 //         let commissionAmount = 0;
-        
+
 //         if (loan.requestedByAgentId) {
 //           commissionAmount = loan.amount * 0.0495; // 4.95% commission
-          
+
 //           const commissionUpdate = await AgentCommission.updateOne(
 //             { 
 //               agentId: loan.requestedByAgentId,
@@ -1073,10 +1073,10 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //             },
 //             { session }
 //           );
-          
+
 //           if (commissionUpdate.modifiedCount > 0) {
 //             console.log(`💰 Agent approval commission earned: KES ${commissionAmount} for loan ${loan._id}`);
-            
+
 //             // Update agent's wallet
 //             const agent = await AgentModel.findById(loan.requestedByAgentId).session(session);
 //             if (agent) {
@@ -1092,7 +1092,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           // Get borrower name from Customer model
 //           const borrower = await Borrower.findById(loan.borrowerId._id || loan.borrowerId);
 //           const borrowerName = borrower?.fullName || "Customer";
-          
+
 //           // Get lender name from Profile
 //           const lenderProfile = await Profile.findOne({ userId: loan.lenderId._id || loan.lenderId });
 //           const lenderName = lenderProfile?.fullName || "Lender";
@@ -1129,7 +1129,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //           if (loan.requestedByAgentId) {
 //             const agent = await AgentModel.findById(loan.requestedByAgentId);
 //             const agentName = agent?.fullName || "Agent";
-            
+
 //             await Notification.create({
 //               userId: loan.requestedByAgentId._id || loan.requestedByAgentId,
 //               userModel: "Agent",
@@ -1149,7 +1149,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     // ✅ USER WITHDRAWAL HANDLING - DEDUCT BALANCE ONLY ON SUCCESS
 //     else if (transaction.type === "withdrawal") {
 //       console.log("💰 Processing user withdrawal...");
-      
+
 //       // ✅ DEDUCT BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //       const user = await User.findById(transaction.userId).session(session);
 //       if (user) {
@@ -1160,15 +1160,15 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //         await user.save({ session });
 //         console.log(`💸 Deducted ${transaction.amount} from user ${user._id}. New balance: ${user.walletBalance}`);
 //       }
-      
+
 //       await transaction.save({ session });
-      
+
 //       postCommitTasks.push(async () => {
 //         if (user) {
 //           // Get user name from Profile
 //           const profile = await Profile.findOne({ userId: user._id });
 //           const userName = profile?.fullName || "Customer";
-          
+
 //           await Notification.create({
 //             userId: user._id,
 //             userModel: "User",
@@ -1260,7 +1260,7 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 // else if (transaction.type === "agent withdrawal") {
 //   // PASTE YOUR AGENT WITHDRAWAL CODE HERE
 //   console.log("💰 Processing agent withdrawal...");
-  
+
 //   // ✅ DEDUCT AGENT BALANCE ONLY WHEN M-PESA CONFIRMS SUCCESS
 //   const agent = await AgentModel.findById(transaction.userId).session(session);
 //   if (agent) {
@@ -1271,28 +1271,28 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 //     await agent.save({ session });
 //     console.log(`💸 Deducted ${transaction.amount} from agent ${agent._id}. New balance: ${agent.walletBalance}`);
 //   }
-  
+
 //   // Update withdrawal request status
 //   const withdrawalRequest = await WithdrawRequest.findOne({ 
 //     transactionId: transaction._id 
 //   }).populate('lenderId').session(session);
-  
+
 //   if (withdrawalRequest) {
 //     withdrawalRequest.status = "completed";
 //     withdrawalRequest.processedAt = new Date();
 //     await withdrawalRequest.save({ session });
 //     console.log(`✅ Updated withdrawal request ${withdrawalRequest._id} to completed`);
 //   }
-  
+
 //   await transaction.save({ session });
-  
+
 //   postCommitTasks.push(async () => {
 //     if (agent) {
 //       // Get lender details for notification
 //       const lender = withdrawalRequest?.lenderId;
 //       const lenderProfile = lender ? await Profile.findOne({ userId: lender._id }) : null;
 //       const lenderName = lenderProfile?.fullName || "Lender";
-      
+
 //       // 🔔 NOTIFY AGENT
 //       await Notification.create({
 //         userId: agent._id,
@@ -1408,7 +1408,7 @@ exports.b2cCallback = async (req, res) => {
             (param) =>
               param.Key === "TransactionID" ||
               param.Key === "TransactionReceipt"
-          );  
+          );
           if (transactionParam) {
             MpesaTransactionID = transactionParam.Value;
           }
@@ -1463,31 +1463,31 @@ exports.b2cCallback = async (req, res) => {
        FAILURE FLOW
     =============================== */
 
-if (ResultCode !== 0) {
+    if (ResultCode !== 0) {
 
-  transaction.status = "failed";
-  transaction.mpesaPayload = Result;
-  transaction.failureReason = ResultDesc;
+      transaction.status = "failed";
+      transaction.mpesaPayload = Result;
+      transaction.failureReason = ResultDesc;
 
-  await transaction.save({ session });
+      await transaction.save({ session });
 
-  // 🔥 FIX: update loan properly
-  if (transaction.type === "loan issued") {
-    const loan = await Loan.findById(transaction.loanId).session(session);
-    if (loan) {
-      loan.loanRequestStatus = "failed"; // ✅ IMPORTANT
-      loan.status = "pending";           // non-blocking
-      await loan.save({ session });
+      // 🔥 FIX: update loan properly
+      if (transaction.type === "loan issued") {
+        const loan = await Loan.findById(transaction.loanId).session(session);
+        if (loan) {
+          loan.loanRequestStatus = "failed"; // ✅ IMPORTANT
+          loan.status = "pending";           // non-blocking
+          await loan.save({ session });
+        }
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        message: "Transaction failed"
+      });
     }
-  }
-
-  await session.commitTransaction();
-  session.endSession();
-
-  return res.status(200).json({
-    message: "Transaction failed"
-  });
-}
 
 
     /* ===============================
@@ -1522,40 +1522,70 @@ if (ResultCode !== 0) {
        🔥 NEW: LOAN ISSUED SUCCESS HANDLING (ADDED BLOCK)
     ========================================================= */
 
-if (transaction.type === "loan issued") {
+    if (transaction.type === "loan issued") {
 
-  const loan = await Loan.findById(transaction.loanId).session(session);
-  if (!loan) throw new Error("Loan not found");
+      const loan = await Loan.findById(transaction.loanId).session(session);
+      if (!loan) throw new Error("Loan not found");
 
-  const lender = await User.findById(loan.lenderId).session(session);
-  if (!lender) throw new Error("Lender not found");
+      const lender = await User.findById(loan.lenderId).session(session);
+      if (!lender) throw new Error("Lender not found");
 
-  const amount = Number(transaction.amount);
-  const fee = getB2CCharge(amount);
-  const totalDebit = amount + fee;
+      const amount = Number(transaction.amount);
+      const fee = getB2CCharge(amount);
+      const totalDebit = amount + fee;
 
-  const balanceBefore = lender.walletBalance;
+      const balanceBefore = lender.walletBalance;
 
-  if (balanceBefore < totalDebit) {
-    throw new Error("Insufficient wallet balance for loan + fee");
-  }
+      if (balanceBefore < totalDebit) {
+        throw new Error("Insufficient wallet balance for loan + fee");
+      }
 
-  // 🔥 DEDUCT PRINCIPAL + FEE
-  lender.walletBalance -= totalDebit;
+      // 🔥 DEDUCT PRINCIPAL + FEE
+      lender.walletBalance -= totalDebit;
 
-  // 🔥 TRACK TRANSACTION DETAILS
-  transaction.mpesaCharge = fee;
-  transaction.balanceBefore = balanceBefore;
-  transaction.balanceAfter = lender.walletBalance;
+      // 🔥 TRACK TRANSACTION DETAILS
+      transaction.mpesaCharge = fee;
+      transaction.balanceBefore = balanceBefore;
+      transaction.balanceAfter = lender.walletBalance;
 
-  // ✅ FINAL LOAN STATE
-  loan.status = "active";
-  loan.loanRequestStatus = "approved";
-  loan.disbursedAt = new Date();
+      // ✅ FINAL LOAN STATE
+      loan.status = "active";
+      loan.loanRequestStatus = "approved";
+      loan.disbursedAt = new Date();
 
-  await lender.save({ session });
-  await loan.save({ session });
-}
+      await lender.save({ session });
+      await loan.save({ session });
+
+
+      if (loan.requestedByAgentId) {
+        const commissionAmount = Number(loan.amount) * 0.0495;
+
+        const commissionUpdate = await AgentCommission.updateOne(
+          {
+            agentId: loan.requestedByAgentId,
+            loanId: loan._id,
+            commissionType: "approval"
+          },
+          {
+            status: "earned",
+            amount: commissionAmount,
+            earnedAt: new Date(),
+            transactionId: transaction._id
+          },
+          { session }
+        );
+
+        if (commissionUpdate.modifiedCount > 0) {
+          const agent = await AgentModel.findById(loan.requestedByAgentId).session(session);
+          if (agent) {
+            agent.walletBalance = (agent.walletBalance || 0) + commissionAmount;
+            agent.commissionEarned = (agent.commissionEarned || 0) + commissionAmount;
+            await agent.save({ session });
+            console.log(` Commission added to agent wallet: KES ${commissionAmount}`);
+          }
+        }
+      }
+    }
 
 
 
@@ -1656,7 +1686,7 @@ function extractAmountFromCallback(callback) {
     if (callback?.Result?.ResultParameters?.ResultParameter) {
       const params = callback.Result.ResultParameters.ResultParameter;
       if (Array.isArray(params)) {
-        const amountParam = params.find(param => 
+        const amountParam = params.find(param =>
           param.Key === "TransactionAmount" || param.Key === "Amount"
         );
         if (amountParam) {
@@ -1664,12 +1694,12 @@ function extractAmountFromCallback(callback) {
         }
       }
     }
-    
+
     // Check direct properties
     if (callback?.TransactionAmount) return Number(callback.TransactionAmount);
     if (callback?.amount) return Number(callback.amount);
     if (callback?.Amount) return Number(callback.Amount);
-    
+
     return null;
   } catch (error) {
     console.error("Error extracting amount from callback:", error);

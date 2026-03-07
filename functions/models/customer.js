@@ -353,31 +353,41 @@ const customerSchema = new mongoose.Schema({
   },
   /* ================= SOCIO-ECONOMIC / LOAN INFO ================= */
 
-educationLevel: {
-  type: String,
-  enum: ["None", "Primary", "Secondary", "Diploma", "Graduate", "Postgraduate"],
-  required: true,
-  trim: true
-},
+  educationLevel: {
+    type: String,
+    enum: ["None", "Primary", "Secondary", "Diploma", "Graduate", "Postgraduate"],
+    required: true,
+    trim: true
+  },
 
-householdSize: {
-  type: Number,
-  required: true,
-  min: 1,
-  max: 20
-},
+  householdSize: {
+    type: Number,
+    required: true,
+    min: 1,
+    max: 20
+  },
 
-loanPurpose: {
-  type: String,
-  required: true,
-  trim: true
-},
+  loanPurpose: {
+    type: String,
+    required: true,
+    trim: true
+  },
 
-deviceType: {
-  type: String,
-  enum: ["Android", "iOS", "Web", "USSD", "Other"],
-  required: true
-},
+  deviceType: {
+    type: String,
+    enum: ["Android", "iOS", "Web", "USSD", "Other"],
+    required: true
+  },
+
+  /* ================= MANUAL BLOCKING ================= */
+  is_blocked: {
+    type: Boolean,
+    default: false
+  },
+  block_reason: {
+    type: String,
+    default: null
+  },
 
 
   /* ================= META ================= */

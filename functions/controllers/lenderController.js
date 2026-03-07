@@ -7,6 +7,7 @@ const { normalizePhone } = require("../utils/normalizePhone");
 
 
 const Customer = require("../models/customer.js");
+const Group = require("../models/Group");
 const Guarantor = require("../models/Guarantor.js");
 // Send money to borrower (B2C)
 exports.sendMoneyToBorrower = async (req, res) => {
@@ -383,7 +384,7 @@ exports.getAllCustomersForLender = async (req, res) => {
             riskLevel = "MEDIUM";
             maxEligibleAmount = 5000;
           } else {
-            riskLevel = "LOW";
+            riskLevel = "LOW";//above 800
             maxEligibleAmount = 10000;
           }
 
@@ -397,26 +398,26 @@ exports.getAllCustomersForLender = async (req, res) => {
           canTakeNextLoan = false;
         }
 
-       const baseCustomer = {
-  ...customer.toObject(),
+        const baseCustomer = {
+          ...customer.toObject(),
 
-  // 🔥 OVERRIDE WITH REAL CALCULATED VALUES
-  totalLoans,
-  completedLoans,
-  overdueLoans,
+          // 🔥 OVERRIDE WITH REAL CALCULATED VALUES
+          totalLoans,
+          completedLoans,
+          overdueLoans,
 
-  creditScore,
-  riskLevel,
-  maxEligibleAmount,
-  canTakeNextLoan,
+          creditScore,
+          riskLevel,
+          maxEligibleAmount,
+          canTakeNextLoan,
 
-  guarantors: guarantorMap[customer._id.toString()] || [],
+          guarantors: guarantorMap[customer._id.toString()] || [],
 
-  referredByBorrower:
-    customer.referredByBorrowerId
-      ? referredMap[customer.referredByBorrowerId.toString()] || null
-      : null
-};
+          referredByBorrower:
+            customer.referredByBorrowerId
+              ? referredMap[customer.referredByBorrowerId.toString()] || null
+              : null
+        };
 
         /* ================================
            NO ACTIVE LOAN
@@ -444,9 +445,9 @@ exports.getAllCustomersForLender = async (req, res) => {
         const daysOverdue =
           today > activeLoan.dueDate
             ? Math.ceil(
-                (today - activeLoan.dueDate) /
-                (1000 * 60 * 60 * 24)
-              )
+              (today - activeLoan.dueDate) /
+              (1000 * 60 * 60 * 24)
+            )
             : 0;
 
         let repaymentRatio = 0;
@@ -528,7 +529,7 @@ exports.assignCustomerToAgent = async (req, res) => {
       if (customer.assignedAgent.toString() === agentId) {
         return res.status(400).json({ message: "Customer is already assigned to this agent" });
       } else {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Customer is already assigned to another agent",
           assignedAgent: customer.assignedAgent
         });
@@ -564,17 +565,60 @@ exports.getAgentsByLender = async (req, res) => {
 
     const lenderId = req.user._id;
 
-    // 🔹 Populate full customer data
-    const agents = await AgentModel.find({ lenderId })
+    // 🔹 Populate full customer data and calculate metrics
+    const rawAgents = await AgentModel.find({ lenderId })
       .populate({
         path: "customers",
-        model: "Customer", // ensure correct model name
+        model: "Customer",
       })
       .select("-password -__v");
 
-    if (!agents.length) {
+    if (!rawAgents.length) {
       return res.status(404).json({ message: "No agents found for this lender." });
     }
+
+    const agents = await Promise.all(
+      rawAgents.map(async (agent) => {
+        const agentObj = agent.toObject();
+        const customerIds = agent.customers.map((c) => c._id);
+
+        // 1️⃣ Number of groups under that agent
+        const numGroups = await Group.countDocuments({ agentId: agent._id });
+
+        // 2️⃣ Number of customers under that agent
+        const numCustomers = customerIds.length;
+
+        // 3️⃣ Number of defaulters under that agent (customers with overdue loans)
+        const numDefaulters = (
+          await Loan.distinct("borrowerId", {
+            borrowerId: { $in: customerIds },
+            status: "overdue",
+          })
+        ).length;
+
+        // 4️⃣ Total amount disbursed under that agent
+        const totalDisbursedResult = await Loan.aggregate([
+          {
+            $match: {
+              borrowerId: { $in: customerIds },
+              loanRequestStatus: "approved",
+            },
+          },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+        const totalDisbursed = totalDisbursedResult.length > 0 ? totalDisbursedResult[0].total : 0;
+
+        return {
+          ...agentObj,
+          metrics: {
+            numGroups,
+            numCustomers,
+            numDefaulters,
+            totalDisbursed,
+          },
+        };
+      })
+    );
 
     res.status(200).json({
       message: "Agents fetched successfully",
@@ -669,13 +713,13 @@ exports.updateBorrowerProfile = async (req, res) => {
       if (req.body.guarantorFullName)
         guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
 
-        const relationshipInput =
-  req.body.guarantorRelationship || req.body.relationship;
+      const relationshipInput =
+        req.body.guarantorRelationship || req.body.relationship;
 
-if (relationshipInput !== undefined) {
-  guarantorUpdateData.relationship =
-    String(relationshipInput).trim();
-}
+      if (relationshipInput !== undefined) {
+        guarantorUpdateData.relationship =
+          String(relationshipInput).trim();
+      }
 
       if (req.body.guarantorIdNumber)
         guarantorUpdateData.idNumber =
