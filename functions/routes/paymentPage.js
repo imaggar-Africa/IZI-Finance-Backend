@@ -27,10 +27,25 @@ router.get("/pay/:accountId", async (req, res) => {
             <input type="hidden" name="accountId" value="${accountId}" />
 
             <label>Amount</label><br/>
-            <input type="number" name="amount" required /><br/><br/>
+            <input
+              type="number"
+              name="amount"
+              min="1"
+              required
+            /><br/><br/>
 
-            <label>Phone Number</label><br/>
-            <input type="text" name="phone" placeholder="2547XXXXXXXX" required /><br/><br/>
+            <label>Your Phone Number</label><br/>
+            <input
+              type="tel"
+              name="phone"
+              placeholder="2547XXXXXXXX"
+              autocomplete="tel"
+              required
+            /><br/><br/>
+
+            <small>
+              You will receive an M-Pesa prompt on this number
+            </small><br/><br/>
 
             <button type="submit">Pay Now</button>
           </form>

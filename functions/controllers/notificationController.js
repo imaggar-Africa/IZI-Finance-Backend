@@ -134,3 +134,44 @@ exports.softDeleteNotification = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+exports.markOneAsRead = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+
+    if (!notificationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Notification ID is required"
+      });
+    }
+
+    const notification = await Notification.findByIdAndUpdate(
+      notificationId,
+      { $set: { isRead: true } },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification marked as read",
+      notification
+    });
+
+  } catch (error) {
+    console.error("Mark notification read error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};

@@ -4,13 +4,15 @@ const User = require("../models/User");
 const Profile = require("../models/Profile");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const sendSMS = require("../utils/sms");
 const africasTalkingService = require("../utils/africatalking");
 const { signAccess, issueSession, rotateRefresh,revokeRefresh } = require('../utils/tokens-redis');
 const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const uploadToFirebase = require("../utils/uploadToFirebase");
+const { normalizePhone } = require("../utils/normalizePhone");
+const { sendSMS } = require("../utils/sms");
+
 
 
 
@@ -29,8 +31,15 @@ exports.register = async (req, res) => {
     if (!phone || !password) {
       return res.status(400).json({ message: "Phone number and password are required" });
     }
+    
+    const normalizedPhone = normalizePhone(phone);
+if (!normalizedPhone) {
+  return res.status(400).json({ message: "Invalid phone format" });
+}
 
-    const existingUser = await User.findOne({ phone });
+
+    const existingUser = await User.findOne({ phone: normalizedPhone });
+
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
     }
@@ -39,7 +48,7 @@ exports.register = async (req, res) => {
     const { sendVerificationCode } = req.app.locals.otpService;
 
     // Send OTP
-    const otpResponse = await sendVerificationCode(phone);
+    const otpResponse = await sendVerificationCode(normalizedPhone);
 
 
     if (!otpResponse.success) {
@@ -49,7 +58,7 @@ exports.register = async (req, res) => {
     // Return OTP in sandbox mode for testing
     const responseData = {
       message: "OTP sent successfully. Verify your phone to complete registration.",
-      phone: phone,
+      phone: normalizedPhone,
     };
 
     if (otpResponse.sandbox) {
@@ -68,13 +77,25 @@ exports.register = async (req, res) => {
 // Step 2:// --- VERIFY PHONE & CREATE ACCOUNT (returns BOTH tokens) ---
 exports.verifyPhoneNumber = async (req, res) => {
   try {
-    const { phone, otp, password } = req.body;
+    const { phone, otp, password, accountType  } = req.body;
 console.log("data:",phone,otp,password);
 
+const normalizedPhone = normalizePhone(phone);
+
+if (!normalizedPhone) {
+  return res.status(400).json({ message: "Invalid phone format" });
+}
+
+
     // Validate required fields
-    if (!phone || !otp || !password ) {
+    if (!phone || !otp || !password ||!accountType ) {
       return res.status(400).json({ message: "Phone, OTP, password, name, and role are required" });
     }
+
+    if (!["individual", "company"].includes(accountType)) {
+  return res.status(400).json({ message: "Invalid account type" });
+}
+
 // Get OTP service from app.locals
     const { verifyOTP } = req.app.locals.otpService;
     // Verify OTP
@@ -84,7 +105,7 @@ console.log("data:",phone,otp,password);
     }
 
     // Check if user already exists
-    const exists = await User.findOne({ phone });
+    const exists = await User.findOne({ phone:normalizedPhone });
     if (exists) {
       return res.status(409).json({ message: "User already exists" });
     }
@@ -97,10 +118,11 @@ console.log("data:",phone,otp,password);
     try {
       newUser = await User.create({
         
-        phone,
+        phone:normalizedPhone,
         password: hashedPassword,
         walletBalance: 0,
         role: "lender",
+         accountType,
         isPhoneVerified: true,
       });
     } catch (dbErr) {
@@ -223,8 +245,10 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Phone and password are required' });
     }
 
+    const normalizedPhone = normalizePhone(phone);
+
     // Normalize phone if you store them normalized (e.g., strip spaces, country code handling)
-    const user = await User.findOne({ phone /* or normalizedPhone */ }).select('+password');
+    const user = await User.findOne({ phone : normalizedPhone /* or normalizedPhone */ }).select('+password');
     // Use identical response for not found vs wrong password to avoid user enumeration
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
 
@@ -318,36 +342,46 @@ exports.forgotPassword = async (req, res) => {
   try {
     const { phone } = req.body;
 
-    // Validate phone number
     if (!phone) {
       return res.status(400).json({ message: "Phone number is required" });
     }
 
-    // Check if user exists
-    const user = await User.findOne({ phone });
+    const normalizedPhone = normalizePhone(phone);
+
+    const user = await User.findOne({ phone: normalizedPhone });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Generate a temporary OTP/password (4-6 digit code)
-    const tempPassword = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Send the temporary password via SMS
-    const message = `Your password reset code is: ${tempPassword}`;
-    await sendSMS(phone, message);
+    const message = `Your password reset code is: ${otp}. Valid for 10 minutes.`;
 
-    // Save the temporary password in the database (hashed for security)
-    const salt = await bcrypt.genSalt(10);
-    const hashedTempPassword = await bcrypt.hash(tempPassword, salt);
-    user.tempPassword = hashedTempPassword;
-    await user.save();
+    const smsResponse = await sendSMS(normalizedPhone, message);
 
-    res.json({ message: "Temporary password sent to your phone." });
+    // Optional: check SMS delivery
+    if (!smsResponse) {
+      return res.status(500).json({ message: "Failed to send OTP" });
+    }
+
+    // Hash OTP
+    const hashedOtp = await bcrypt.hash(otp, 10);
+
+    user.tempPassword = hashedOtp;
+
+    await user.save({ validateBeforeSave: false });
+
+    return res.json({
+      message: "Temporary password sent to your phone."
+    });
+
   } catch (error) {
-    console.error("Error handling forgot password:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Forgot password error:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 
 
@@ -355,38 +389,53 @@ exports.resetPassword = async (req, res) => {
   try {
     const { phone, otp, password } = req.body;
 
-    // Validate input fields
     if (!phone || !otp || !password) {
-      return res.status(400).json({ message: "Phone, OTP, and new password are required" });
+      return res.status(400).json({
+        message: "Phone, OTP and new password are required"
+      });
     }
 
-    // Check if user exists
-    const user = await User.findOne({ phone });
+    const normalizedPhone = normalizePhone(phone);
+
+    const user = await User.findOne({ phone: normalizedPhone })
+      .select("+tempPassword +password");
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Verify OTP (Check if it matches stored tempPassword)
-    const isOtpValid = await bcrypt.compare(otp, user.tempPassword);
-    if (!isOtpValid) {
+    if (!user.tempPassword) {
+      return res.status(400).json({
+        message: "OTP expired or already used"
+      });
+    }
+
+    const isValid = await bcrypt.compare(otp, user.tempPassword);
+
+    if (!isValid) {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    // Hash the new password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Update user password and clear tempPassword
     user.password = hashedPassword;
-    user.tempPassword = undefined; // Remove temp password after reset
-    await user.save();
+    user.tempPassword = undefined;
 
-    res.json({ success: true, message: "Password reset successful!" });
+    await user.save({ validateBeforeSave: false });
+
+    return res.json({
+      success: true,
+      message: "Password reset successful"
+    });
+
   } catch (error) {
-    console.error("Error resetting password:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Reset password error:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
+
+
+
 
 
 exports.logout = async (req, res) => {
@@ -427,7 +476,7 @@ exports.deleteUser = async (req, res) => {
     await user.save();
 
     // 4️⃣ Soft delete profile (if exists)
-    const profile = await Profile.findOne({ userId });
+    const profile = await Profile.findOne({ userId:userId });
 
     if (profile) {
       profile.fullName = null;

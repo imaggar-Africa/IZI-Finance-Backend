@@ -10,10 +10,12 @@ const Loan = require("../models/Loan");
 // const CustomerProfile = require("../models/BorrowerProfile");
 const bucket = require("../config/firebase");
 const { getStorage } = require("firebase-admin/storage");
-const mongoose = require("mongoose"); 
+const mongoose = require("mongoose");
 const { generateAccountId } = require("../utils/generateAccountId");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { calculateMembership } = require("../utils/membershipRules");
+const Guarantor = require("../models/Guarantor");
+const { normalizePhone } = require("../utils/normalizePhone");
 
 
 function calculateLoan(principal, repaymentDays, totalPaid) {
@@ -43,10 +45,11 @@ const uploadToFirebase = async (file, baseName, folder = "borrowers") => {
       if (!file) return resolve(null);
 
       // Bucket safety check
-      if (!bucket || bucket.isConfigured === false || typeof bucket.file !== "function") {
-        console.warn("⚠️ Firebase Storage unavailable. Skipping upload:", baseName);
+      if (!bucket || typeof bucket.file !== "function") {
+        console.warn("⚠️ Firebase Storage unavailable.");
         return resolve(null);
       }
+
 
       const ext = path.extname(file.originalname) || ".jpg";
       const safeBase = baseName.replace(/[^a-zA-Z0-9_-]/g, "");
@@ -116,13 +119,15 @@ exports.sendOtp = async (req, res) => {
 
 // **Register Customer**
 
-  // change path as needed
+// change path as needed
 
 exports.registerCustomer = async (req, res) => {
   try {
     console.log("🔥 Reached Customer Register Controller");
+    console.log("BODY:", req.body);
+    console.log("FILES:", req.files);
 
-    const {
+    let {
       fullName,
       phone,
       email,
@@ -145,82 +150,144 @@ exports.registerCustomer = async (req, res) => {
       preferences,
       savingsBalance,
       referralSource,
-      referredByBorrowerId
+      referredByBorrowerId,
+
+      // socio-economic
+      educationLevel,
+      householdSize,
+      loanPurpose,
+      deviceType,
+
+      // optional guarantor
+      guarantor
     } = req.body;
 
-    // -----------------------------
-    // Validate required fields
-    // -----------------------------
-    if (!fullName || !phone || !idNumber ||!email || !req.files?.livePhoto) {
+    /* ================= REQUIRED FIELDS ================= */
+    if (
+      !fullName ||
+      !phone ||
+      !email ||
+      !idNumber ||
+      !educationLevel ||
+      !householdSize ||
+      !loanPurpose ||
+      !deviceType
+    ) {
       return res.status(400).json({
-        message: "Full name, phone,email ID number and Live Photo are required.",
+        message:
+          "fullName, phone, email, idNumber, educationLevel, householdSize, loanPurpose, deviceType are required"
       });
     }
 
-    // -----------------------------
-// Referral validation
-// -----------------------------
-if (!referralSource) {
-  return res.status(400).json({
-    message: "referralSource is required"
-  });
-}
+    /* ================= TYPE + SANITIZATION ================= */
+    const cleanFullName =
+      Array.isArray(fullName)
+        ? fullName.join(" ").trim()
+        : String(fullName).trim();
 
-if (referralSource === "existing_borrower") {
-  if (!referredByBorrowerId) {
-    return res.status(400).json({
-      message: "referredByBorrowerId is required for existing borrower referral"
-    });
-  }
+    const cleanEmail =
+      Array.isArray(email)
+        ? email[0].toLowerCase().trim()
+        : String(email).toLowerCase().trim();
 
-  const referredBorrower = await Borrower.findById(referredByBorrowerId);
-  if (!referredBorrower) {
-    return res.status(404).json({
-      message: "Referred borrower not found"
-    });
-  }
-}
+    const cleanIdNumber =
+      Array.isArray(idNumber)
+        ? idNumber[0].trim()
+        : String(idNumber).trim();
 
-    // -----------------------------
-    // Check duplicates
-    // -----------------------------
-    if (await Borrower.findOne({ phone })) {
-      return res.status(409).json({ message: "Phone number already registered." });
+    /* ================= PHONE (AFRICA ONLY) ================= */
+    const rawPhone =
+      Array.isArray(phone)
+        ? phone[0]
+        : typeof phone === "object"
+          ? phone.value || phone.phone || ""
+          : phone;
+
+    const normalizedPhone = normalizePhone(String(rawPhone).trim());
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        message:
+          "Invalid phone format. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+      });
     }
-    if (await Borrower.findOne({ idNumber })) {
-      return res.status(409).json({ message: "ID number already registered." });
+
+    /* ================= HOUSEHOLD ================= */
+    const householdSizeNum = Number(householdSize);
+    if (isNaN(householdSizeNum) || householdSizeNum < 1) {
+      return res.status(400).json({
+        message: "householdSize must be a number greater than 0"
+      });
     }
 
-    // -----------------------------
-    // Upload files
-    // -----------------------------
-    const livePhotoFile = req.files.livePhoto?.[0];
-    const frontIDFile = req.files.frontID?.[0];
-    const backIDFile = req.files.backID?.[0];
+    /* ================= ENUM VALIDATION ================= */
+    const allowedEducationLevels = [
+      "None",
+      "Primary",
+      "Secondary",
+      "Diploma",
+      "Graduate",
+      "Postgraduate"
+    ];
+    if (!allowedEducationLevels.includes(educationLevel)) {
+      return res.status(400).json({ message: "Invalid educationLevel" });
+    }
 
-    const livePhotoUrl = await uploadToFirebase(livePhotoFile, "livePhoto");
-    const frontIDUrl = await uploadToFirebase(frontIDFile, "frontID");
-    const backIDUrl = await uploadToFirebase(backIDFile, "backID");
+    const allowedDeviceTypes = ["Android", "iOS", "Web", "USSD", "Other"];
+    if (!allowedDeviceTypes.includes(deviceType)) {
+      return res.status(400).json({ message: "Invalid deviceType" });
+    }
+
+    /* ================= DUPLICATE CHECK ================= */
+    if (await Borrower.findOne({ phone: normalizedPhone })) {
+      return res.status(409).json({ message: "Phone already registered" });
+    }
+
+    if (await Borrower.findOne({ email: cleanEmail })) {
+      return res.status(409).json({ message: "Email already registered" });
+    }
+
+    if (await Borrower.findOne({ idNumber: cleanIdNumber })) {
+      return res.status(409).json({ message: "ID number already registered" });
+    }
+
+
+    const livePhoto = await uploadToFirebase(
+      req.files?.livePhoto?.[0],
+      "livePhoto",
+      "borrowers"
+    );
+
+    const frontID = await uploadToFirebase(
+      req.files?.frontID?.[0],
+      "frontID",
+      "borrowers"
+    );
+
+    const backID = await uploadToFirebase(
+      req.files?.backID?.[0],
+      "backID",
+      "borrowers"
+    );
+
 
     const accountId = await generateAccountId();
-    // -----------------------------
-    // Create borrower record
-    // -----------------------------
-    const borrower = new Borrower({
+
+    /* ================= CREATE BORROWER ================= */
+    const borrower = await Borrower.create({
       registeredBy: req.user._id,
       registeredByModel: req.user.role === "agent" ? "Agent" : "User",
-      agentId: req.user.role === "agent" ? req.user._id : null,
+
       accountId,
-      fullName,
-      phone,
-      email,
-      idNumber,
+      fullName: cleanFullName,
+      phone: normalizedPhone,
+      email: cleanEmail,
+      idNumber: cleanIdNumber,
 
-      livePhoto: livePhotoUrl,
-      frontID: frontIDUrl,
-      backID: backIDUrl,
+      livePhoto,
+      frontID,
+      backID,
 
-      isVerified: true,
       dateOfBirth,
       gender,
       maritalStatus,
@@ -236,29 +303,99 @@ if (referralSource === "existing_borrower") {
       loanConsent,
       kraPin,
       agreementAcceptance,
+
       preferences: preferences || {},
       savingsBalance: savingsBalance || 0,
+
       referralSource,
-      referredByBorrowerId: referralSource === "existing_borrower"
-    ? referredByBorrowerId
-    : null,
+      referredByBorrowerId:
+        referralSource === "existing_borrower"
+          ? referredByBorrowerId
+          : null,
+
+      educationLevel,
+      householdSize: householdSizeNum,
+      loanPurpose,
+      deviceType,
+
+      isVerified: true,
+      status: "Active",
+
+      creditScore: 500,
+      creditLevel: "High Risk"
     });
 
-    await borrower.save();
+    /* ================= OPTIONAL GUARANTOR ================= */
+    let guarantorDoc = null;
 
+    if (guarantor) {
+      let g;
+      try {
+        g = typeof guarantor === "string" ? JSON.parse(guarantor) : guarantor;
+      } catch {
+        return res.status(400).json({
+          message: "Invalid guarantor format (must be JSON)"
+        });
+      }
+
+      if (!g.fullName || !g.phone || !g.relationship || !g.idNumber) {
+        return res.status(400).json({
+          message: "All guarantor fields are required"
+        });
+      }
+
+      const rawGuarantorPhone = String(
+        Array.isArray(g.phone) ? g.phone[0] : g.phone
+      ).trim();
+
+      const gPhone = normalizePhone(rawGuarantorPhone);
+
+      if (!gPhone) {
+        return res.status(400).json({
+          message:
+            "Invalid guarantor phone. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+        });
+      }
+
+      guarantorDoc = await Guarantor.create({
+        borrowerId: borrower._id,
+        fullName: String(g.fullName).trim(),
+        phone: gPhone,
+        relationship: String(g.relationship).trim(),
+        idNumber: String(g.idNumber).trim(),
+        consent: false,
+        isVerified: false
+      });
+
+      const { sendVerificationCode } = req.app.locals.otpService;
+      await sendVerificationCode(gPhone);
+    }
+
+    /* ================= RESPONSE ================= */
     return res.status(201).json({
-      message: "Customer registered successfully.",
+      success: true,
+      message: "Customer registered successfully",
       borrower,
+      guarantor: guarantorDoc
+        ? {
+          id: guarantorDoc._id,
+          phone: guarantorDoc.phone,
+          consent: guarantorDoc.consent
+        }
+        : null
     });
 
   } catch (error) {
-    console.error("❌ Error registering customer:", error);
+    console.error("❌ registerCustomer error:", error);
     return res.status(500).json({
-      message: "Server error while registering customer.",
-      error: error.message,
+      success: false,
+      message: "Server error while registering customer",
+      error: error.message
     });
   }
 };
+
+
 
 
 // exports.UpdateBorrowerProfile = async (req, res) => {
@@ -522,7 +659,8 @@ exports.getBorrowerProfile = async (req, res) => {
 
     const eligibility = evaluateLoanByCreditScore({
       creditScore,
-      requestedAmount: borrower.creditLimit || 50000
+      requestedAmount: borrower.creditLimit || 50000,
+      borrower
     });
 
     /* ================= MEMBERSHIP AUTO RULE ================= */
@@ -588,9 +726,9 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
     const activeLoanBorrowerIds = await Loan.find({
       $or: [
         { status: "active" },
-        { 
-          status: "pending", 
-          loanRequestStatus: { $in: ["pending", "approved"] } 
+        {
+          status: "pending",
+          loanRequestStatus: { $in: ["pending", "approved"] }
         }
       ]
     }).distinct("borrowerId");
@@ -669,84 +807,149 @@ exports.getBorrowerSummary = async (req, res) => {
 /* =====================================================
    🆕 EDIT BORROWER PROFILE (SAFE UPDATE)
 ===================================================== */
+
 exports.updateBorrowerProfile = async (req, res) => {
   try {
     const { customerId } = req.params;
 
-    // 1️⃣ Ensure customer exists
-    const customer = await Borrower.findById(customerId);
-    if (!customer) {
-      return res.status(404).json({
-        message: "Customer not found"
-      });
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
     }
 
-    // 2️⃣ Fields lender is ALLOWED to update
-    const allowedFields = [
-      "fullName",
-      "altPhoneNumber",
-      "physicalAddress",
-      "gpsLocation",
-      "occupation",
-      "monthlyIncomeRange",
-      "market",
-      "town",
-      "nextOfKinName",
-      "nextOfKinPhone",
-      "status"
+    const borrower = await Borrower.findById(customerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const restrictedBorrowerFields = [
+      "_id",
+      "creditScore",
+      "creditLevel",
+      "maxLoanLimit",
+      "totalLoans",
+      "completedLoans",
+      "overdueLoans",
+      "lastScoreUpdate",
+      "createdAt",
+      "updatedAt",
+      "__v",
+      "isDeleted"
     ];
 
-    // 3️⃣ Build safe update object (TEXT FIELDS)
-    const updateData = {};
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        updateData[field] = req.body[field];
+    const borrowerUpdateData = {};
+
+    /* ========= BODY UPDATE ========= */
+
+    Object.keys(req.body).forEach((key) => {
+      if (!restrictedBorrowerFields.includes(key) && !key.startsWith("guarantor")) {
+        const value = req.body[key];
+        borrowerUpdateData[key] =
+          value === "null" || value === "" ? null : value;
       }
     });
 
-    /* =====================================================
-       🆕 PHOTO UPDATE (ADDITIVE ONLY)
-    ===================================================== */
-
-    if (req.files?.livePhoto?.[0]) {
-      updateData.livePhoto = await uploadToFirebase(
-        req.files.livePhoto[0],
-        "livePhoto"
-      );
+    if (borrowerUpdateData.phone) {
+      const normalized = normalizePhone(borrowerUpdateData.phone);
+      if (!normalized) {
+        return res.status(400).json({ message: "Invalid borrower phone" });
+      }
+      borrowerUpdateData.phone = normalized;
     }
 
-    if (req.files?.frontID?.[0]) {
-      updateData.frontID = await uploadToFirebase(
-        req.files.frontID[0],
-        "frontID"
-      );
-    }
+    /* ========= FILE UPLOAD (IMPORTANT) ========= */
 
-    if (req.files?.backID?.[0]) {
-      updateData.backID = await uploadToFirebase(
-        req.files.backID[0],
-        "backID"
-      );
-    }
-
-    // ❌ Nothing to update
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({
-        message: "No valid fields provided for update"
-      });
-    }
-
-    // 4️⃣ Partial update (NO validation error)
-    const updatedCustomer = await Borrower.findByIdAndUpdate(
-      customerId,
-      { $set: updateData },
-      { new: true }
+    const livePhoto = await uploadToFirebase(
+      req.files?.livePhoto?.[0],
+      "livePhoto",
+      "borrowers"
     );
+
+    const frontID = await uploadToFirebase(
+      req.files?.frontID?.[0],
+      "frontID",
+      "borrowers"
+    );
+
+    const backID = await uploadToFirebase(
+      req.files?.backID?.[0],
+      "backID",
+      "borrowers"
+    );
+
+    if (livePhoto) borrowerUpdateData.livePhoto = livePhoto;
+    if (frontID) borrowerUpdateData.frontID = frontID;
+    if (backID) borrowerUpdateData.backID = backID;
+
+    borrowerUpdateData.updatedAt = Date.now();
+
+    /* ========= SINGLE DB UPDATE ========= */
+
+    if (Object.keys(borrowerUpdateData).length > 0) {
+      await Borrower.updateOne(
+        { _id: customerId },
+        { $set: borrowerUpdateData }
+      );
+    }
+
+    /* ========= GUARANTOR UPDATE ========= */
+    const guarantor = await Guarantor.findOne({
+      borrowerId: customerId,
+      isDeleted: false
+    });
+
+    if (guarantor) {
+      const guarantorUpdateData = {};
+
+      if (req.body.guarantorFullName)
+        guarantorUpdateData.fullName = req.body.guarantorFullName.trim();
+
+      const relationshipInput =
+        req.body.guarantorRelationship || req.body.relationship;
+
+      if (relationshipInput !== undefined) {
+        guarantorUpdateData.relationship =
+          String(relationshipInput).trim();
+      }
+
+      if (req.body.guarantorIdNumber)
+        guarantorUpdateData.idNumber =
+          req.body.guarantorIdNumber.trim();
+
+      if (req.body.guarantorPhone) {
+        const normalizedPhone = normalizePhone(req.body.guarantorPhone);
+        if (!normalizedPhone) {
+          return res.status(400).json({
+            message: "Invalid guarantor phone"
+          });
+        }
+
+        if (normalizedPhone !== guarantor.phone) {
+          guarantorUpdateData.phone = normalizedPhone;
+          guarantorUpdateData.consent = false;
+          guarantorUpdateData.isVerified = false;
+          guarantorUpdateData.consent_timestamp = null;
+        }
+      }
+
+      if (Object.keys(guarantorUpdateData).length > 0) {
+        await Guarantor.updateOne(
+          { _id: guarantor._id },
+          { $set: guarantorUpdateData }
+        );
+      }
+    }
+
+    const updatedBorrower = await Borrower.findById(customerId);
+    const updatedGuarantor = await Guarantor.findOne({
+      borrowerId: customerId,
+      isDeleted: false
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Customer updated successfully",
-      customer: updatedCustomer
+      message: "Customer and guarantor updated successfully",
+      borrower: updatedBorrower,
+      guarantor: updatedGuarantor
     });
 
   } catch (error) {
@@ -767,7 +970,7 @@ exports.getMyLoans = async (req, res) => {
     loanRequestStatus: "approved",
     status: { $in: ["active", "overdue"] }
   });
-
+  const borrower = await Borrower.findById(borrowerId);
   const enrichedLoans = loans.map((loan) => {
     const repayments = Array.isArray(loan.repayments) ? loan.repayments : [];
 
@@ -796,14 +999,15 @@ exports.getMyLoans = async (req, res) => {
     const repaymentProgress =
       repaymentBehavior.totalPayable > 0
         ? Math.round(
-            (totalPaid / repaymentBehavior.totalPayable) * 100
-          )
+          (totalPaid / repaymentBehavior.totalPayable) * 100
+        )
         : 0;
 
     // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
     const eligibility = evaluateLoanByCreditScore({
       creditScore: loan.creditScoreAfter || 500,
-      requestedAmount: loan.amount
+      requestedAmount: loan.amount,
+      borrower
     });
 
     return {
@@ -832,6 +1036,50 @@ exports.getMyLoans = async (req, res) => {
   });
 
   res.json({ loans: enrichedLoans });
+};
+
+/* =====================================================
+   🔒 TOGGLE BLOCK CUSTOMER (LENDER ONLY)
+===================================================== */
+exports.toggleBlockCustomer = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { is_blocked, reason } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+
+    const customer = await Borrower.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Update blocking status
+    customer.is_blocked = is_blocked === undefined ? !customer.is_blocked : is_blocked;
+    customer.block_reason = reason || (customer.is_blocked ? "Blocked by lender" : null);
+
+    await customer.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Customer ${customer.is_blocked ? "blocked" : "unblocked"} successfully`,
+      customer: {
+        id: customer._id,
+        fullName: customer.fullName,
+        is_blocked: customer.is_blocked,
+        block_reason: customer.block_reason
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ toggleBlockCustomer error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
 };
 
 

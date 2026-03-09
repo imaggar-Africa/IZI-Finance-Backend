@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const transactionSchema = new mongoose.Schema({
   type: { 
     type: String, 
-    enum: ["repayment", "savings", "loan issued", "withdrawal",  "customer deposit","agent withdrawal",// new
+    enum: ["repayment", "savings", "loan issued", "withdrawal",  "customer deposit", "customer payment", "agent withdrawal",// new
       "customer withdrawal" // new
 
     ],
@@ -27,8 +27,8 @@ checkoutRequestID: { type: String, default: null }, // optional
     },
   loanId: { type: mongoose.Schema.Types.ObjectId, ref: "Loan" }, // only for loan/repayment
   clientId: { type: String }, // National ID reference
-  phone: { type: String },    // Mpesa phone used
-
+  phone: { type: String , required: true},    // Mpesa phone used
+merchantRequestID: { type: String, default: null },
 
   // ⭐ ADD ACCOUNT REFERENCE HERE (IMPORTANT)
   accountReference: { type: String },   // <-- Save dynamic AccountReference
@@ -47,6 +47,7 @@ originatorConversationID: {
 
 
   amount: { type: Number, required: true },
+  mpesaCharge: { type: Number, default: 0 },
   balanceBefore: { type: Number, default: 0 },
   balanceAfter: { type: Number, default: 0 },
 
@@ -56,7 +57,7 @@ originatorConversationID: {
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model("Transaction", transactionSchema);
+// module.exports = mongoose.model("Transaction", transactionSchema);
 
 
 const Transaction = mongoose.model("Transaction", transactionSchema);

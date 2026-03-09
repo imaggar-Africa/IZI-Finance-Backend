@@ -6,6 +6,8 @@ const { issueSession, signAccess } = require("../utils/tokens-redis");
 const OTP = require("../models/OTP");
 const uploadToFirebase = require("../utils/uploadToFirebase");
 const Loan = require("../models/Loan");
+const { normalizePhone } = require("../utils/normalizePhone");
+const { generateAccountId } = require("../utils/generateAccountId");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents
@@ -18,62 +20,105 @@ const Loan = require("../models/Loan");
 
 const registerAgent = async (req, res) => {
   try {
-    const lenderId = req.user._id; // from protect middleware
-    const { name, phone, password } = req.body;
-    console.log("ph:",phone);
-    
+    const lenderId = req.user._id;
+
+    const {
+      name,
+      phone,
+      password,
+      registrationCommissionPercent,
+      repaymentCommissionType,
+      repaymentCommissionPercent,
+      repaymentCommissionFixed
+    } = req.body;
+
     if (!name || !phone || !password) {
-      return res.status(400).json({ message: "Please provide name, phone, and password" });
+      return res.status(400).json({
+        message: "Name, phone and password are required"
+      });
     }
 
-        // ✅ Password must be exactly 6 digits (numbers only)
+    // Password must be 6 digits
     const passwordRegex = /^\d{6}$/;
     if (!passwordRegex.test(password)) {
       return res.status(400).json({
-        message: "Password must be exactly 6 digits and contain only numbers (e.g., 123456)"
+        message: "Password must be exactly 6 digits"
       });
     }
-    // Only lenders can register agents
+
     if (req.user.role !== "lender") {
-      console.log();
-      
-      return res.status(403).json({ message: "Only lenders can register agents" });
+      return res.status(403).json({
+        message: "Only lenders can register agents"
+      });
     }
 
-    // Check if phone already exists
     const existingAgent = await AgentModel.findOne({ phone });
     if (existingAgent) {
-      return res.status(400).json({ message: "Agent with this phone number already exists" });
+      return res.status(400).json({
+        message: "Agent with this phone already exists"
+      });
     }
-const plainPassword = password; // keep a copy
-    // Create agent
+
+    // Validate commission logic
+    if (repaymentCommissionType === "percentage" && !repaymentCommissionPercent) {
+      return res.status(400).json({
+        message: "Repayment commission percentage required"
+      });
+    }
+
+    if (repaymentCommissionType === "fixed" && !repaymentCommissionFixed) {
+      return res.status(400).json({
+        message: "Repayment commission fixed amount required"
+      });
+    }
+
     const agent = await AgentModel.create({
       lenderId,
       name,
-      role:"agent",
       phone,
-      password
+      password,
+      registrationCommissionPercent: registrationCommissionPercent || 0,
+      repaymentCommissionType,
+      repaymentCommissionPercent:
+        repaymentCommissionType === "percentage"
+          ? repaymentCommissionPercent
+          : 0,
+      repaymentCommissionFixed:
+        repaymentCommissionType === "fixed"
+          ? repaymentCommissionFixed
+          : 0
     });
 
-    if (agent) {
-      return res.status(201).json({
-        _id: agent._id,
-        name: agent.name,
-        phone: agent.phone,
-        password: plainPassword ,// return it safely
-        status: agent.status,
-        totalCustomers: agent.totalCustomers,
-        totalEarnings: agent.totalEarnings,
-        role: agent.role
-      });
-    } else {
-      return res.status(400).json({ message: "Invalid agent data" });
-    }
+   return res.status(201).json({
+  success: true,
+  agent: {
+    id: agent._id,
+    name: agent.name,
+    phone: agent.phone,
+
+    registrationCommissionPercent:
+      agent.registrationCommissionPercent,
+
+    repaymentCommissionType:
+      agent.repaymentCommissionType,
+
+    repaymentCommissionPercent:
+      agent.repaymentCommissionPercent,
+
+    repaymentCommissionFixed:
+      agent.repaymentCommissionFixed
+  }
+});
+
+
   } catch (error) {
-    console.error("Error registering agent:", error);
-    return res.status(500).json({ message: "Server error while registering agent" });
+    console.error("Register agent error:", error);
+    return res.status(500).json({
+      message: "Server error"
+    });
   }
 };
+
 
 
 
@@ -245,23 +290,30 @@ const registerCustomer = async (req, res) => {
     console.log("✅ Incoming files:", req.files);
     console.log("✅ Incoming body:", req.body);
 
-    // Parse nested / typed fields
- const gpsLocation =
+    /* ================= PARSE & NORMALIZE ================= */
+
+    const gpsLocation =
       req.body.gpsLocation_lat && req.body.gpsLocation_lng
         ? {
             lat: Number(req.body.gpsLocation_lat),
             lng: Number(req.body.gpsLocation_lng),
           }
-        : undefined; // ← SAFE: No NaN stored
+        : undefined;
 
-    const savingsGoal = req.body.savingsGoal ? parseFloat(req.body.savingsGoal) : 0;
+    const savingsGoal = req.body.savingsGoal
+      ? Number(req.body.savingsGoal)
+      : 0;
+
     const loanConsent = req.body.loanConsent === "true";
     const agreementAcceptance = req.body.agreementAcceptance === "true";
 
-    const {
+    /* ================= EXTRACT BODY ================= */
+
+    let {
       idNumber,
       fullName,
       phone,
+      email,
       dateOfBirth,
       gender,
       maritalStatus,
@@ -273,49 +325,165 @@ const registerCustomer = async (req, res) => {
       nextOfKinPhone,
       preferredMobileMoney,
       preferences,
-      savingsBalance
+      savingsBalance,
+      kraPin,
+      educationLevel,
+      householdSize,
+      loanPurpose,
+      deviceType,
+      referralSource,
+      referredByBorrowerId
     } = req.body;
 
-    const registeredBy = req.user._id;
-    const registeredByModel = req.user.role === "agent" ? "Agent" : "User";
+    /* ================= ROLE CHECK ================= */
 
-    // ✅ Role check
     if (!["agent", "lender", "admin"].includes(req.user.role)) {
-      return res.status(403).json({ message: "Access denied: cannot register customer" });
+      return res.status(403).json({
+        message: "Access denied: cannot register customer"
+      });
     }
 
-    // ✅ Validate required fields
-    if (!idNumber || !fullName || !phone) {
-      return res.status(400).json({ error: "FullName, ID number, phone are required" });
+    /* ================= TYPE SAFETY ================= */
+
+    fullName = String(fullName || "").trim();
+    email = String(email || "").toLowerCase().trim();
+    idNumber = String(idNumber || "").trim();
+
+    const rawPhone =
+      Array.isArray(phone)
+        ? phone[0]
+        : typeof phone === "object"
+        ? phone.value || phone.phone || ""
+        : phone;
+
+    const normalizedPhone = normalizePhone(String(rawPhone).trim());
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        message:
+          "Invalid phone format. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+      });
     }
 
-    // ✅ Validate files
-    const files = req.files;
-    if (!files?.frontID?.[0] || !files?.backID?.[0] || !files?.livePhoto?.[0]) {
-      return res.status(400).json({ error: "Front ID, Back ID, and Live Photo are required" });
+    /* ================= REQUIRED VALIDATION ================= */
+
+    if (
+      !fullName ||
+      !normalizedPhone ||
+      !email ||
+      !idNumber ||
+      !educationLevel ||
+      !householdSize ||
+      !loanPurpose ||
+      !deviceType
+    ) {
+      return res.status(400).json({
+        message:
+          "Full name, phone, email, ID number, education level, household size, loan purpose, device type are required"
+      });
     }
 
-    // ✅ Upload files to Firebase
-    const frontIDUrl = await uploadToFirebase(files.frontID[0], "frontID");
-    const backIDUrl = await uploadToFirebase(files.backID[0], "backID");
-    const livePhotoUrl = await uploadToFirebase(files.livePhoto[0], "livePhoto");
+    /* ================= FILE VALIDATION ================= */
 
-    // ✅ Check duplicates
-    if (await Borrower.findOne({ phone })) return res.status(409).json({ error: "Phone number already registered" });
-    if (await Borrower.findOne({ idNumber })) return res.status(409).json({ error: "ID number already registered" });
+    if (
+      !req.files?.frontID?.[0] ||
+      !req.files?.backID?.[0] ||
+      !req.files?.livePhoto?.[0]
+    ) {
+      return res.status(400).json({
+        message: "Front ID, Back ID and Live Photo are required"
+      });
+    }
 
-    // ✅ Create customer
-    const customer = new Borrower({
-      registeredBy,
-      registeredByModel,
-      agentId: req.user.role === "agent" ? registeredBy : null,
+    /* ================= DATA VALIDATION ================= */
+
+    const householdSizeNum = Number(householdSize);
+    if (isNaN(householdSizeNum) || householdSizeNum < 1) {
+      return res.status(400).json({
+        message: "householdSize must be a valid number greater than 0"
+      });
+    }
+
+    const allowedEducationLevels = [
+      "None",
+      "Primary",
+      "Secondary",
+      "Diploma",
+      "Graduate",
+      "Postgraduate"
+    ];
+    if (!allowedEducationLevels.includes(educationLevel)) {
+      return res.status(400).json({ message: "Invalid education level" });
+    }
+
+    const allowedDeviceTypes = ["Android", "iOS", "Web", "USSD", "Other"];
+    if (!allowedDeviceTypes.includes(deviceType)) {
+      return res.status(400).json({ message: "Invalid device type" });
+    }
+
+    /* ================= REFERRAL VALIDATION ================= */
+
+    if (!referralSource) {
+      return res.status(400).json({ message: "referralSource is required" });
+    }
+
+    if (referralSource === "existing_borrower") {
+      if (!referredByBorrowerId) {
+        return res.status(400).json({
+          message: "referredByBorrowerId is required"
+        });
+      }
+
+      const referredBorrower = await Borrower.findById(referredByBorrowerId);
+      if (!referredBorrower) {
+        return res.status(404).json({
+          message: "Referred borrower not found"
+        });
+      }
+    }
+
+    /* ================= DUPLICATE CHECK ================= */
+
+    if (await Borrower.findOne({ phone: normalizedPhone }))
+      return res.status(409).json({ message: "Phone already registered" });
+
+    if (await Borrower.findOne({ email }))
+      return res.status(409).json({ message: "Email already registered" });
+
+    if (await Borrower.findOne({ idNumber }))
+      return res.status(409).json({ message: "ID number already registered" });
+
+    /* ================= FILE UPLOAD ================= */
+
+    const frontIDUrl = await uploadToFirebase(req.files.frontID[0], "frontID");
+    const backIDUrl = await uploadToFirebase(req.files.backID[0], "backID");
+    const livePhotoUrl = await uploadToFirebase(
+      req.files.livePhoto[0],
+      "livePhoto"
+    );
+
+    const accountId = await generateAccountId();
+
+    /* ================= CREATE BORROWER ================= */
+
+    const borrower = await Borrower.create({
+      registeredBy: req.user._id,
+      registeredByModel: req.user.role === "agent" ? "Agent" : "User",
+      agentId: req.user.role === "agent" ? req.user._id : null,
+      accountId,
+
       fullName,
-      phone,
+      phone: normalizedPhone,
+      email,
       idNumber,
+
+      livePhoto: livePhotoUrl,
       frontID: frontIDUrl,
       backID: backIDUrl,
-      livePhoto: livePhotoUrl,
+
       isVerified: true,
+      status: "Active",
+
       dateOfBirth,
       gender,
       maritalStatus,
@@ -329,31 +497,60 @@ const registerCustomer = async (req, res) => {
       preferredMobileMoney,
       savingsGoal,
       loanConsent,
-      kraPin: req.body.kraPin,
+      kraPin,
       agreementAcceptance,
+
       preferences: preferences || {},
-      savingsBalance: savingsBalance || 0
+      savingsBalance: savingsBalance || 0,
+
+      referralSource,
+      referredByBorrowerId:
+        referralSource === "existing_borrower"
+          ? referredByBorrowerId
+          : null,
+
+      educationLevel,
+      householdSize: householdSizeNum,
+      loanPurpose,
+      deviceType,
+
+      creditScore: 500,
+      creditLevel: "High Risk",
+      maxLoanLimit: 1000,
+      totalLoans: 0,
+      completedLoans: 0,
+      overdueLoans: 0,
+      lastScoreUpdate: new Date()
     });
 
-    await customer.save();
 
-    // ✅ Update agent's customers
-    if (req.user.role === "agent") {
-      const agent = await AgentModel.findById(registeredBy);
-      if (agent) await agent.addCustomer(customer._id);
+   /* ================= AGENT LINK ================= */
+
+if (req.user.role === "agent") {
+  await AgentModel.updateOne(
+    { _id: req.user._id },
+    {
+      $addToSet: { customers: borrower._id },
+      $inc: { totalCustomers: 1 }
     }
+  );
+}
 
-    res.status(201).json({
-      message: "Customer registered and verified successfully",
-      customer
+    return res.status(201).json({
+      success: true,
+      message: "Customer registered successfully",
+      borrower
     });
 
   } catch (error) {
-    console.error("Error registering customer:", error);
-    res.status(500).json({ error: "Error registering customer" });
+    console.error("❌ Error registering customer:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error registering customer",
+      error: error.message
+    });
   }
 };
-
 
 
 

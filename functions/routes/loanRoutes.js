@@ -4,10 +4,11 @@ const router = express.Router();
 const loanController = require("../controllers/loanController");
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
+const loanRestriction = require("../middleware/loanRestriction");
 
 2
 // Issue loan
-router.post("/issue", protect, loanController.issueLoan);
+router.post("/issue", protect,loanRestriction, loanController.issueLoan);
 
 // Outstanding loans (borrower)
 router.post(
@@ -26,6 +27,13 @@ router.get("/fully-paid", protect, loanController.getFullyPaidLoans);
 //   loanController.getAllCustomersWithLoansFullyPaid
 // );
 
+
+
+router.get(
+  "/borrower/:borrowerId/fully-paid/pdf",
+  loanController.generateFullyPaidLoansPDF
+);
+
 router.get(
   "/borrower/:borrowerId/fully-paid",
   loanController.getFullyPaidLoansByCustomer
@@ -42,6 +50,12 @@ router.get(
   authorizeRoles("lender","agent"),
   loanController.getLoansByBorrower
 );
+
+router.get("/outstanding/all",
+  protect,
+  authorizeRoles("lender"),
+  loanController.getOutstandingLoans
+)
 
 
 
@@ -64,6 +78,7 @@ router.get(
 router.post(
   "/review-loan",
   protect,
+  loanRestriction,
   authorizeRoles("lender"),
   loanController.reviewLoanRequest
 );
@@ -81,6 +96,21 @@ router.get(
   "/pay/:loanId",
   protect,
   loanController.getPaymentInstructions
+);
+
+// routes/reportRoutes.js
+router.get(
+  "/customer-statement/:borrowerId",
+  protect,
+  authorizeRoles("lender"),
+loanController.getCustomerStatement
+);
+
+router.post(
+  "/send-statement-sms",
+  protect,
+  authorizeRoles("lender"),
+  loanController.sendStatementSMS
 );
 
 

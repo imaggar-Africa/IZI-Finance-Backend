@@ -4,6 +4,7 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const { onInit } = require("firebase-functions/v2/core");
 const { defineSecret } = require("firebase-functions/params");
 const axios = require("axios");
+require("dotenv").config();
 
 const { app, initializeApp } = require("./app");
 
@@ -50,6 +51,12 @@ const mpesaReversalTimeout = defineSecret("MPESA_REVERSAL_TIMEOUT_URL");
 const mpesaC2bConfirmUrl = defineSecret("MPESA_CONFIRM_URL");
 const mpesaC2bValidateUrl = defineSecret("MPESA_VALIDATE_URL");
 
+
+// ----- M-Pesa Account Balance Secrets -----
+const mpesaAccountBalanceResultUrl = defineSecret(
+  "MPESA_ACCOUNT_BALANCE_RESULT_URL"
+);
+
 // ----- Set global options -----
 setGlobalOptions({
   region: "us-central1",
@@ -76,6 +83,10 @@ setGlobalOptions({
     
     // M-Pesa C2B
     mpesaC2bConfirmUrl, mpesaC2bValidateUrl,
+
+    
+    // ✅ ADD THIS
+    mpesaAccountBalanceResultUrl,
 
   ],
 });
@@ -128,7 +139,12 @@ mpesaEnv: (mpesaEnv.value() || "sandbox").trim().toLowerCase(),
     mpesaC2bConfirmUrl: mpesaC2bConfirmUrl.value(),
     mpesaC2bValidateUrl: mpesaC2bValidateUrl.value(),
 
-
+    
+    
+   // ✅ ADD THIS
+    mpesaAccountBalanceResultUrl:
+      mpesaAccountBalanceResultUrl.value(),
+    
     
   };
 
@@ -153,12 +169,31 @@ const longRunningOpts = {
 
 
 // ----- Export HTTPS API -----
-exports.api = onRequest(
+// exports.api = onRequest(
+//   {
+//     maxBodySize: "20mb",
+//     timeoutSeconds: 540,
+//     cors: true,
+//     rawBody: true,
+
+//     // 🔥 ADD THIS
+//     minInstances: 1,
+//     maxInstances: 10,
+//   },
+  
+//   app
+// );
+
+exports.apiV2 = onRequest(
   {
     maxBodySize: "20mb",
     timeoutSeconds: 540,
     cors: true,
-    rawBody: true,      // 🔥 REQUIRED FOR MULTIPART / RAW POST (M-Pesa callback)
+    rawBody: true,
+
+    // you can tune differently if needed
+    minInstances: 0,   // V2 first-la cold start ok
+    maxInstances: 10,
   },
   app
 );

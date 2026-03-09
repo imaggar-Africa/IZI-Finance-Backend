@@ -11,8 +11,10 @@ const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
-
-/* =====================================================
+const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
+const { getB2CCharge } = require("../utils/mpesaCharges");
+const puppeteer = require("puppeteer");
+/* ====================================================
    🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
    ❗ DO NOT CHANGE FORMULA
 ===================================================== */
@@ -136,6 +138,190 @@ exports.trackRepayment = async (req, res) => {
 /* =====================================================
    2️⃣ ISSUE LOAN (DIRECT LENDER)
 ===================================================== */
+// exports.issueLoan = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const lenderId = req.user._id;
+//     const {
+//       borrowerId,
+//       amount,
+//       totalInterest,
+//       duration,
+//       repaymentFrequency,
+//       phoneNumber
+//     } = req.body;
+
+//     /* ---------------- VALIDATION ---------------- */
+//     if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency || !phoneNumber) {
+//       throw new Error("All fields are required");
+//     }
+
+//     /* ---------------- LENDER ---------------- */
+//     const lender = await User.findById(lenderId).session(session);
+//     if (!lender) throw new Error("Lender not found");
+//     if (lender.walletBalance < amount) {
+//       throw new Error("Insufficient wallet balance");
+//     }
+
+//     /* ---------------- BORROWER ---------------- */
+//     const borrower = await Customer.findById(borrowerId).session(session);
+//     if (!borrower) throw new Error("Borrower not found");
+
+//     if (borrower.isDeleted) throw new Error("Borrower account is inactive");
+//     if (!borrower.isVerified) throw new Error("Borrower is not verified");
+
+//     /* ---------------- CREDIT CHECK ---------------- */
+//     const eligibility = evaluateLoanByCreditScore({
+//       creditScore: borrower.creditScore || 500,
+//       requestedAmount: amount,
+//       borrower
+//     });
+
+//     if (!eligibility.allowed || amount > eligibility.approvedAmount) {
+//       throw new Error(
+//         `Loan not allowed. Max eligible amount: ${eligibility.approvedAmount}`
+//       );
+//     }
+
+//     /* ---------------- EXISTING LOAN CHECK ---------------- */
+//     const existingLoan = await Loan.findOne({
+//       borrowerId,
+//       status: { $in: ["pending", "active", "overdue"] },
+//       loanRequestStatus: { $ne: "rejected" }
+//     }).session(session);
+
+//     if (existingLoan) {
+//       throw new Error("Borrower already has an existing loan");
+//     }
+
+//     /* ---------------- CALCULATIONS ---------------- */
+//     const totalRepayment = Number(amount) + Number(totalInterest);
+//     const dailyRepayment =
+//       totalRepayment /
+//       (duration *
+//         (repaymentFrequency === "weekly"
+//           ? 7
+//           : repaymentFrequency === "monthly"
+//           ? 30
+//           : 1));
+
+//     /* ---------------- CREATE LOAN ---------------- */
+//    const [loan] = await Loan.create(
+//   [
+//     {
+//       lenderId,
+//       borrowerId,
+
+//       billRefNumber: borrower.idNumber, // ✅ REQUIRED
+//       requestedByAgentId: null,         // ✅ because lender direct
+
+//       clientId: borrower.idNumber,
+//       fullName: borrower.fullName,
+//       phoneNumber,
+//       lenderPhone: lender.phone,
+
+//       amount,
+//       interest: totalInterest,
+//       totalRepayment,
+//       balance: totalRepayment,
+//       dailyRepayment,
+//       duration,
+
+//       issueDate: new Date(),
+//       dueDate: new Date(Date.now() + duration * 86400000),
+
+//       status: "pending",
+//       loanRequestStatus: "approved",
+
+//       repaidAmount: 0,
+//       repayments: []
+//     }
+//   ],
+//   { session }
+// );
+
+
+//     /* ---------------- CREATE PENDING TRANSACTION ---------------- */
+//     const [transaction] = await Transaction.create(
+//       [
+//         {
+//           userId: lenderId,
+//           userModel: "User",
+//           loanId: loan._id,
+//           type: "loan issued",
+//           amount,
+//           status: "pending",
+//           phone: phoneNumber,
+//           description: "Loan disbursement",
+
+//           // ✅ wallet not touched yet
+//           balanceBefore: lender.walletBalance,
+//           balanceAfter: lender.walletBalance
+//         }
+//       ],
+//       { session }
+//     );
+
+//     /* =====================================================
+//        🧪 SANDBOX MODE (NO CALLBACK COMES)
+//     ===================================================== */
+//     if (global.config.mpesaEnv === "sandbox") {
+//       transaction.status = "successful";
+//       loan.status = "active";
+
+//       lender.walletBalance -= amount;
+
+//       await lender.save({ session });
+//       await loan.save({ session });
+//       await transaction.save({ session });
+
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.status(201).json({
+//         success: true,
+//         message: "Loan issued successfully (sandbox mode)",
+//         loan,
+//         transaction
+//       });
+//     }
+
+//     /* =====================================================
+//        🚀 LIVE MODE (WAIT FOR STK CALLBACK)
+//     ===================================================== */
+//     const b2cResponse = await initiateB2C(
+//       phoneNumber,
+//       amount,
+//       transaction._id
+//     );
+
+//     if (b2cResponse?.OriginatorConversationID) {
+//       transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+//       await transaction.save({ session });
+//     }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(201).json({
+//       success: true,
+//       message: "Loan initiated. Awaiting M-Pesa confirmation",
+//       loan,
+//       transaction
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) await session.abortTransaction();
+//     session.endSession();
+
+//     console.error("❌ issueLoan error:", error);
+//     return res.status(500).json({ message: error.message });
+//   }
+// };
+
+
 exports.issueLoan = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -148,110 +334,88 @@ exports.issueLoan = async (req, res) => {
       totalInterest,
       duration,
       repaymentFrequency,
-      phoneNumber
+      phoneNumber,
+      agentId
     } = req.body;
 
-    /* ---------------- VALIDATION ---------------- */
-    if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency || !phoneNumber) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "All fields are required" });
+    /* ================= VALIDATION ================= */
+    if (
+      !borrowerId ||
+      !amount ||
+      !totalInterest ||
+      !duration ||
+      !repaymentFrequency ||
+      !phoneNumber
+    ) {
+      throw new Error("All fields are required");
     }
 
-    /* ---------------- LENDER ---------------- */
+    /* ================= LENDER ================= */
     const lender = await User.findById(lenderId).session(session);
     if (!lender) throw new Error("Lender not found");
-    if (lender.walletBalance < amount) throw new Error("Insufficient wallet balance");
 
-    /* ---------------- BORROWER ---------------- */
+    /* 🔒 COMPANY KYC RESTRICTION */
+    if (
+      lender.accountType === "company" &&
+      lender.kycStatus !== "approved"
+    ) {
+      throw new Error("Company KYC not approved. Cannot issue loan.");
+    }
+
+    /* ✅ WALLET BALANCE CHECK (WITH FEE) */
+    const estimatedFee = getB2CCharge(Number(amount));
+    const totalDebit = Number(amount) + estimatedFee;
+
+    if (lender.walletBalance < totalDebit) {
+      throw new Error(
+        `Insufficient wallet balance. Required: ${totalDebit}`
+      );
+    }
+
+    /* ================= BORROWER ================= */
     const borrower = await Customer.findById(borrowerId).session(session);
     if (!borrower) throw new Error("Borrower not found");
+    if (borrower.is_blocked) throw new Error("Borrower is manually blocked");
+    if (borrower.isDeleted) throw new Error("Borrower account inactive");
+    if (!borrower.isVerified) throw new Error("Borrower not verified");
 
-    /* =====================================================
-       ✅ ADDED VALIDATIONS (SAFE – NO FLOW CHANGE)
-    ===================================================== */
-
-    if (borrower.isDeleted) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Borrower account is inactive" });
-    }
-
-    if (!borrower.isVerified) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Borrower is not verified" });
-    }
-
-    const creditScore = borrower.creditScore || 500;
-
-    const eligibility = evaluateLoanByCreditScore({
-      creditScore,
-      requestedAmount: amount
-    });
-
-    if (!eligibility.allowed) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        message: "Loan not allowed based on credit score",
-        creditScore,
-        maxEligibleAmount: eligibility.approvedAmount || 0
-      });
-    }
-
-    if (amount > eligibility.approvedAmount) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        message: "Requested amount exceeds eligible limit",
-        maxEligibleAmount: eligibility.approvedAmount
-      });
-    }
-
-    if (amount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        message: "Loan amount must be greater than zero"
-      });
-    }
-
-    /* ---------------- CHECK EXISTING LOAN ---------------- */
-    const existingLoan = await Loan.findOne({
+    /* ================= DUPLICATE CHECK (ONLY ACTIVE) ================= */
+    const activeLoan = await Loan.findOne({
       borrowerId,
-      status: { $in: ["pending", "active", "overdue"] }
+      status: "active"
     }).session(session);
 
-    if (existingLoan) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        message: `Borrower already has an existing loan (${existingLoan.status})`
-      });
+    if (activeLoan) {
+      throw new Error("Borrower already has an active loan");
     }
 
-    /* ---------------- CALCULATIONS ---------------- */
+    /* ================= PAYBILL FLOAT CHECK ================= */
+    const paybillBalance = await getMpesaPaybillBalance();
+    if (paybillBalance < amount) {
+      throw new Error("Insufficient float. Please top up.");
+    }
+
+    /* ================= CALCULATIONS ================= */
     const totalRepayment = Number(amount) + Number(totalInterest);
+    const dailyRepayment =
+      totalRepayment /
+      (duration *
+        (repaymentFrequency === "weekly"
+          ? 7
+          : repaymentFrequency === "monthly"
+            ? 30
+            : 1));
 
-    const numInstallments =
-      duration *
-      (repaymentFrequency === "weekly"
-        ? 7
-        : repaymentFrequency === "monthly"
-        ? 30
-        : 1);
-
-    const dailyRepayment = totalRepayment / numInstallments;
-
-    /* =====================================================
-       ✅ CREATE LOAN (UNCHANGED)
-    ===================================================== */
+    /* ================= CREATE LOAN ================= */
     const [loan] = await Loan.create(
       [
         {
           lenderId,
+          issuedByLenderId: lenderId,
+          requestedByAgentId: agentId || null,
+
           borrowerId,
+          billRefNumber: borrower.idNumber,
           clientId: borrower.idNumber,
           fullName: borrower.fullName,
           phoneNumber,
@@ -259,28 +423,26 @@ exports.issueLoan = async (req, res) => {
 
           amount,
           interest: totalInterest,
+          repaymentPlan: repaymentFrequency,
           totalRepayment,
           balance: totalRepayment,
           dailyRepayment,
           duration,
 
           issueDate: new Date(),
-          repaidAmount: 0,
-          repayments: [],
-
           dueDate: new Date(Date.now() + duration * 86400000),
-          status: global.config.mpesaEnv === "sandbox" ? "active" : "pending",
-          loanRequestStatus: "approved"
+
+          status: "pending",
+          loanRequestStatus: "initiated",
+
+          repaidAmount: 0,
+          repayments: []
         }
       ],
       { session }
     );
 
-    /* ---------------- WALLET DEDUCTION ---------------- */
-    lender.walletBalance -= amount;
-    await lender.save({ session });
-
-    /* ---------------- CREATE TRANSACTION ---------------- */
+    /* ================= CREATE TRANSACTION ================= */
     const [transaction] = await Transaction.create(
       [
         {
@@ -290,95 +452,263 @@ exports.issueLoan = async (req, res) => {
           type: "loan issued",
           amount,
           status: "pending",
-          phone: phoneNumber,
-          description: "Loan disbursement",
-          balanceBefore: lender.walletBalance + amount,
-          balanceAfter: lender.walletBalance
+          phone: phoneNumber
         }
       ],
       { session }
     );
 
-    /* =====================================================
-       🧪 SANDBOX MODE (UNCHANGED)
-    ===================================================== */
-    if (global.config.mpesaEnv === "sandbox") {
-      transaction.status = "successful";
-      await transaction.save({ session });
+    /* ================= INITIATE B2C ================= */
+    const b2cResponse = await initiateB2C(
+      phoneNumber,
+      amount,
+      transaction._id
+    );
 
-      const normalizedPhone = normalizeToE164(phoneNumber, "KE");
-      if (!normalizedPhone) throw new Error("Invalid borrower phone number");
-
-      await sendSMS(
-        normalizedPhone,
-        `✅ Hello ${borrower.fullName},
-Your loan of KES ${amount} has been issued.
-Total repayment: KES ${totalRepayment}
-Daily: KES ${dailyRepayment.toFixed(2)}
-Due date: ${loan.dueDate.toDateString()}`
-      );
-
-      await Notification.insertMany(
-        [
-          {
-            userId: borrower._id,
-            userModel: "Customer",
-            title: "Loan Issued",
-            message: `Your loan of KES ${amount} has been issued successfully.`,
-            type: "loan"
-          },
-          {
-            userId: lender._id,
-            userModel: "User",
-            title: "Loan Issued Successfully",
-            message: `You issued a loan of KES ${amount} to ${borrower.fullName}.`,
-            type: "loan_approved"
-          }
-        ],
-        { session }
-      );
-
-      await session.commitTransaction();
-      session.endSession();
-
-      return res.status(201).json({
-        success: true,
-        message: "Loan issued successfully (sandbox mode)",
-        loan,
-        transaction
-      });
+    if (!b2cResponse?.OriginatorConversationID) {
+      throw new Error("B2C initiation failed");
     }
 
-    /* =====================================================
-       🚀 LIVE MODE (UNCHANGED)
-    ===================================================== */
-    const b2cResponse = await initiateB2C(phoneNumber, amount, transaction._id);
+    transaction.checkoutRequestID =
+      b2cResponse.OriginatorConversationID;
 
-    if (b2cResponse?.OriginatorConversationID) {
-      transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
-      await transaction.save({ session });
-    }
+    loan.loanRequestStatus = "processing";
+
+    await transaction.save({ session });
+    await loan.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
     return res.status(201).json({
       success: true,
-      message: "Loan initiated successfully. Awaiting M-Pesa confirmation.",
+      message: "Loan initiated. Awaiting M-Pesa confirmation",
       loan,
-      transaction,
-      b2cResponse
+      transaction
     });
 
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     session.endSession();
 
-    console.error("❌ issueLoan error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(400).json({ message: error.message });
   }
 };
 
+exports.generateFullyPaidLoansPDF = async (req, res) => {
+  let browser;
+
+  try {
+    const { borrowerId } = req.params;
+
+    const loans = await Loan.find({
+      borrowerId,
+      status: "fully paid",
+    }).populate("repayments");
+
+    if (!loans || loans.length === 0) {
+      return res.status(404).json({ message: "No fully paid loans found" });
+    }
+
+    const formattedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      let totalPaid = 0;
+      let lastPaymentDate = null;
+
+      if (loanObj.repayments?.length) {
+        loanObj.repayments.forEach((payment) => {
+          totalPaid += payment.amount || 0;
+
+          if (
+            !lastPaymentDate ||
+            new Date(payment.date) > new Date(lastPaymentDate)
+          ) {
+            lastPaymentDate = payment.date;
+          }
+        });
+      }
+
+      loanObj.totalPaid = totalPaid;
+      loanObj.lastPaymentDate = lastPaymentDate;
+
+      return loanObj;
+    });
+
+    const html = `
+    <html>
+    <head>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          padding: 30px;
+        }
+
+        .page {
+          page-break-after: always;
+        }
+
+        h1 {
+          text-align: center;
+          margin-bottom: 5px;
+        }
+
+        .status-box {
+          text-align: center;
+          margin: 10px 0 20px 0;
+        }
+
+        .badge {
+          display: inline-block;
+          background: #28a745;
+          color: #fff;
+          padding: 10px 20px;
+          border-radius: 20px;
+          font-weight: bold;
+          font-size: 16px;
+        }
+
+        .section-title {
+          font-weight: bold;
+          margin-top: 20px;
+          margin-bottom: 10px;
+          font-size: 16px;
+        }
+
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 20px;
+        }
+
+        th, td {
+          border: 1px solid #ccc;
+          padding: 8px;
+          font-size: 12px;
+          text-align: left;
+        }
+
+        th {
+          background-color: #f2f2f2;
+        }
+
+        .footer {
+          font-size: 11px;
+          color: #555;
+          margin-top: 20px;
+          text-align: right;
+        }
+      </style>
+    </head>
+    <body>
+
+    ${formattedLoans
+        .map(
+          (loan) => `
+      <div class="page">
+        <h1>Loan Statement</h1>
+
+        <div class="status-box">
+          <div class="badge">✔ Fully Paid</div>
+          <div>This loan has been successfully cleared.</div>
+        </div>
+
+        <div class="section-title">
+          Borrower: ${loan.fullName}
+        </div>
+
+        <table>
+          <tr>
+            <th>Loan Amount</th>
+            <th>Interest</th>
+            <th>Total Paid</th>
+            <th>Issued</th>
+            <th>Due</th>
+            <th>Status</th>
+          </tr>
+          <tr>
+            <td>Ksh ${loan.amount}</td>
+            <td>Ksh ${loan.interest}</td>
+            <td>Ksh ${loan.totalPaid}</td>
+            <td>${new Date(loan.issueDate).toLocaleDateString()}</td>
+            <td>${new Date(loan.dueDate).toLocaleDateString()}</td>
+            <td style="color: green; font-weight: bold;">Fully Paid</td>
+          </tr>
+        </table>
+
+        <div class="section-title">Repayment History</div>
+
+        <table>
+          <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+          ${loan.repayments?.length
+              ? loan.repayments
+                .map(
+                  (r) => `
+                    <tr>
+                      <td>${new Date(r.date).toLocaleDateString()}</td>
+                      <td>Ksh ${r.amount}</td>
+                      <td>On Time</td>
+                    </tr>
+                  `
+                )
+                .join("")
+              : `<tr><td colspan="3">No repayments found</td></tr>`
+            }
+        </table>
+
+        <div class="footer">
+          Generated on ${new Date().toLocaleString()}
+        </div>
+      </div>
+    `
+        )
+        .join("")}
+
+    </body>
+    </html>
+    `;
+
+    // Launch Puppeteer
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+    });
+
+    await browser.close();
+
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Length": pdfBuffer.length,
+      "Content-Disposition": "inline; filename=fully_paid_loans.pdf",
+    });
+
+    return res.end(pdfBuffer);
+
+  } catch (error) {
+    console.error("PDF generation error:", error);
+
+    if (browser) await browser.close();
+
+    return res.status(500).json({
+      message: "Failed to generate PDF",
+      error: error.message,
+    });
+  }
+};
 
 /* =====================================================
    3️⃣ GET ACTIVE LOANS BY PHONE
@@ -406,26 +736,115 @@ exports.getActiveLoansByPhone = async (req, res) => {
    4️⃣ GET FULLY PAID LOANS
 ===================================================== */
 exports.getFullyPaidLoans = async (req, res) => {
-  const loans = await Loan.find({
-    loanRequestStatus: "approved",
-    status: "fully paid"
-  }).populate("borrowerId");
+  try {
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      status: "fully paid"
+    }).populate("borrowerId");
 
-  res.status(200).json({ loans });
+    // ✅ Calculate total fully paid amount
+    let totalFullyPaidAmount = 0;
+
+    // Count fully paid loans per borrower
+    const loanCountMap = {};
+
+    loans.forEach((loan) => {
+      const borrowerId = loan.borrowerId?._id?.toString();
+      if (!borrowerId) return;
+
+      // Count loans per borrower
+      loanCountMap[borrowerId] =
+        (loanCountMap[borrowerId] || 0) + 1;
+
+      // Sum total repayment amount
+      totalFullyPaidAmount += loan.totalRepayment || 0;
+    });
+
+    // Add fullyPaidLoanCount inside borrower data
+    const updatedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      if (loanObj.borrowerId && loanObj.borrowerId._id) {
+        const borrowerId = loanObj.borrowerId._id.toString();
+        loanObj.borrowerId.fullyPaidLoanCount =
+          loanCountMap[borrowerId] || 0;
+      }
+
+      return loanObj;
+    });
+
+    // Unique customers
+    const totalCustomers = Object.keys(loanCountMap).length;
+
+    res.status(200).json({
+      totalCustomers,
+      totalFullyPaidAmount, // ✅ replaced totalLoansPaid
+      loans: updatedLoans
+    });
+
+  } catch (error) {
+    console.error("Error fetching fully paid loans:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 /* =====================================================
    5️⃣ GET FULLY PAID LOANS BY CUSTOMER
 ===================================================== */
 exports.getFullyPaidLoansByCustomer = async (req, res) => {
-  const { borrowerId } = req.params;
+  try {
+    const { borrowerId } = req.params;
 
-  const loans = await Loan.find({
-    borrowerId,
-    status: "fully paid"
-  });
+    const loans = await Loan.find({
+      borrowerId,
+      status: "fully paid"
+    }).populate("repayments"); // assuming you store payments separately
 
-  res.status(200).json({ loans });
+    let totalPaidAmount = 0;
+    let latestPaidDate = null;
+
+    const updatedLoans = loans.map((loan) => {
+      const loanObj = loan.toObject();
+
+      // Total paid calculation (assuming loan has totalPaid field OR repayments array)
+      let loanTotalPaid = 0;
+      let lastPaymentDate = null;
+
+      if (loanObj.repayments && loanObj.repayments.length > 0) {
+        loanObj.repayments.forEach((payment) => {
+          loanTotalPaid += payment.amount || 0;
+
+          if (!lastPaymentDate || new Date(payment.date) > new Date(lastPaymentDate)) {
+            lastPaymentDate = payment.date;
+          }
+        });
+      }
+
+      totalPaidAmount += loanTotalPaid;
+
+      if (!latestPaidDate || new Date(lastPaymentDate) > new Date(latestPaidDate)) {
+        latestPaidDate = lastPaymentDate;
+      }
+
+      // Add required new fields (without removing old ones)
+      loanObj.loanDisbursedDate = loanObj.disbursedAt || loanObj.createdAt || null;
+      loanObj.allPaymentsDoneDate = lastPaymentDate || null;
+      loanObj.loanClosedDate = loanObj.closedAt || lastPaymentDate || null;
+
+      return loanObj;
+    });
+
+    res.status(200).json({
+      totalLoansCount: loans.length,
+      totalPaidAmount,
+      paidOnDate: latestPaidDate,
+      loans: updatedLoans
+    });
+
+  } catch (error) {
+    console.error("Error fetching fully paid loans by customer:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 /* =====================================================
@@ -516,9 +935,11 @@ exports.getOutstandingLoans = async (req, res) => {
 exports.getBorrowersWithLoans = async (req, res) => {
   try {
     const loans = await Loan.find({
-      status: "active",
-      loanRequestStatus: "approved"
-    }).populate("borrowerId");
+      loanRequestStatus: "approved",
+      status: { $in: ["active", "overdue", "fully paid"] },
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true }
+    }).populate("borrowerId"); // ✅ IMPORTANT
 
     const borrowerMap = {};
 
@@ -530,16 +951,18 @@ exports.getBorrowersWithLoans = async (req, res) => {
 
     const today = new Date();
 
-    let totalLoanAmount = 0;        // principal + interest
-    let totalCollectedAmount = 0;   // actual collected
+    let totalLoanAmount = 0;
+    let totalCollectedAmount = 0;
     let totalActiveLoanCount = 0;
     let totalOverdueLoanCount = 0;
-    let totalBalance = 0;           // ✅ ADDED
+    let totalBalance = 0;
 
     const paidToday = [];
     const notPaidToday = [];
 
     loans.forEach((loan) => {
+      if (!loan.borrowerId) return; // safety
+
       const borrowerId = loan.borrowerId._id.toString();
 
       if (!borrowerMap[borrowerId]) {
@@ -551,7 +974,6 @@ exports.getBorrowersWithLoans = async (req, res) => {
       }
 
       borrowerMap[borrowerId].loanCount++;
-      totalActiveLoanCount++;
 
       /* ================= TOTAL LOAN AMOUNT ================= */
       totalLoanAmount += loan.totalRepayment || 0;
@@ -564,7 +986,11 @@ exports.getBorrowersWithLoans = async (req, res) => {
       totalCollectedAmount += collectedFromRepayments;
 
       /* ================= TOTAL BALANCE ================= */
-      totalBalance += loan.balance || 0;   // ✅ ADDED
+      totalBalance += loan.balance || 0;
+
+      /* ================= STATUS COUNTS ================= */
+      if (loan.status === "active") totalActiveLoanCount++;
+      if (loan.status === "overdue") totalOverdueLoanCount++;
 
       /* ---------------- LAST PAYMENT ---------------- */
       let lastPaymentDate = null;
@@ -575,30 +1001,27 @@ exports.getBorrowersWithLoans = async (req, res) => {
           (a, b) => new Date(b.date) - new Date(a.date)
         )[0];
 
-        lastPaymentDate = lastPayment.date;
+        if (lastPayment?.date) {
+          lastPaymentDate = lastPayment.date;
 
-        paidTodayFlag =
-          new Date(lastPayment.date) >= startOfToday &&
-          new Date(lastPayment.date) <= endOfToday;
+          paidTodayFlag =
+            new Date(lastPayment.date) >= startOfToday &&
+            new Date(lastPayment.date) <= endOfToday;
+        }
       }
 
       /* ---------------- EXPECTED DAILY AMOUNT ---------------- */
       const expectedDailyAmount = loan.dailyRepayment || 0;
 
-      /* ---------------- OVERDUE LOGIC ---------------- */
+      /* ---------------- STATUS BADGE (OLD STYLE) ---------------- */
+      let statusBadge = "On Track";
+
       const isOverdue =
         loan.balance > 0 && new Date(loan.dueDate) < today;
 
-      if (isOverdue) {
-        totalOverdueLoanCount++;
-      }
-
-      /* ---------------- STATUS BADGE ---------------- */
-      let statusBadge = "On Track";
-
-      if (isOverdue) {
+      if (isOverdue || loan.status === "overdue") {
         statusBadge = "Overdue";
-      } else if (!paidTodayFlag) {
+      } else if (!paidTodayFlag && loan.status !== "fully paid") {
         statusBadge = "At Risk";
       }
 
@@ -625,18 +1048,18 @@ exports.getBorrowersWithLoans = async (req, res) => {
 
       if (paidTodayFlag) {
         paidToday.push(tabRow);
-      } else {
+      } else if (loan.status !== "fully paid") {
         notPaidToday.push(tabRow);
       }
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       totalBorrowers: Object.keys(borrowerMap).length,
       summary: {
         totalLoanAmount,
         totalCollectedAmount,
-        totalBalance,          // ✅ ADDED
+        totalBalance,
         totalActiveLoanCount,
         totalOverdueLoanCount
       },
@@ -646,6 +1069,7 @@ exports.getBorrowersWithLoans = async (req, res) => {
         notPaidToday
       }
     });
+
   } catch (error) {
     console.error("Error fetching borrowers with loans:", error);
     res.status(500).json({ message: "Server error" });
@@ -653,11 +1077,6 @@ exports.getBorrowersWithLoans = async (req, res) => {
 };
 
 
-
-
-/* =====================================================
-   8️⃣ GET LOANS BY BORROWER
-===================================================== */
 /* =====================================================
    8️⃣ GET LOANS BY BORROWER
 ===================================================== */
@@ -698,14 +1117,15 @@ exports.getLoansByBorrower = async (req, res) => {
     const repaymentProgress =
       repaymentBehavior.totalPayable > 0
         ? Math.round(
-            (totalPaid / repaymentBehavior.totalPayable) * 100
-          )
+          (totalPaid / repaymentBehavior.totalPayable) * 100
+        )
         : 0;
 
     // ✅ ADDED: loan eligibility (NO EXISTING CODE CHANGED)
     const eligibility = evaluateLoanByCreditScore({
       creditScore: loan.creditScoreAfter || 500,
-      requestedAmount: loan.amount
+      requestedAmount: loan.amount,
+      borrower: loan.borrowerId
     });
 
     return {
@@ -746,44 +1166,100 @@ exports.requestLoan = async (req, res) => {
     const agentId = req.user._id;
     const { borrowerId, amount, totalInterest, duration, repaymentFrequency } = req.body;
 
+    // ✅ Validation
+    if (!borrowerId || !amount || !totalInterest || !duration || !repaymentFrequency) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // ✅ Check borrower existence
     const borrower = await Customer.findById(borrowerId);
     if (!borrower) return res.status(404).json({ message: "Borrower not found" });
 
-    const creditScore = borrower.creditScore || 500;
-    const decision = evaluateLoanByCreditScore({
-      creditScore,
-      requestedAmount: amount
-    });
+    if (borrower.is_blocked) {
+      return res.status(403).json({ message: "Borrower is manually blocked" });
+    }
 
-    if (!decision.allowed) {
+    // ✅ Fetch Agent and its assigned Lender
+    const agent = await AgentModel.findById(agentId);
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
+
+    const lender = await User.findById(agent.lenderId);
+    if (!lender) return res.status(404).json({ message: "Assigned lender not found" });
+
+    // ✅ Check if borrower already has active, pending, or overdue loan
+    const existingLoan = await Loan.findOne({
+      borrowerId,
+      status: { $in: ["active", "overdue"] }
+    })
+      .populate("requestedByAgentId", "name phone")
+      .populate("lenderId", "name phone")
+      .populate("borrowerId", "fullName phone email");
+
+    if (existingLoan) {
       return res.status(400).json({
-        message: "Loan blocked due to low credit score",
-        creditScore
+        message: `This borrower already has an existing ${existingLoan.status} loan.`,
+        existingLoan
       });
     }
 
-    const agent = await AgentModel.findById(agentId);
-    const lender = await User.findById(agent.lenderId);
+    // ✅ Calculate repayment details
+    const totalRepayment = parseFloat(amount) + parseFloat(totalInterest);
+    const dailyRepayment = totalRepayment / duration;
 
+    // ✅ Create new loan request
     const loan = await Loan.create({
       lenderId: lender._id,
       borrowerId,
       requestedByAgentId: agentId,
       fullName: borrower.fullName,
-      phoneNumber: borrower.phone,
+      phoneNumber: borrower.phone, // ✅ fetched directly,
       lenderPhone: lender.phone,
-      amount: decision.approvedAmount,
+      amount,
+      repaymentPlan: repaymentFrequency,
       interest: totalInterest,
-      totalRepayment: decision.approvedAmount + totalInterest,
+      billRefNumber: borrower.idNumber,
+      totalRepayment,
+      dailyRepayment,
+
       duration,
+      dueDate: new Date(Date.now() + duration * 24 * 60 * 60 * 1000),
       status: "pending",
       loanRequestStatus: "pending"
     });
 
-    res.status(201).json({ loan });
+    // ✅ Create notifications with phone numbers included
+    const notifications = [
+      {
+        userId: agent._id,
+        userModel: "Agent",
+        title: "Loan Request Created",
+        message: `Loan request for ${borrower.fullName} (${borrower.phone}) of KES ${amount} submitted successfully.`,
+        phone: agent.phone || "N/A",
+        type: "loan",
+      },
+      {
+        userId: lender._id,
+        userModel: "User",
+        title: "New Loan Request",
+        message: `Agent ${agent.name} (${agent.phone}) submitted a loan request for ${borrower.fullName} (${borrower.phone}) of KES ${amount}.`,
+        phone: lender.phone || "N/A",
+        type: "loan",
+      },
+    ];
+
+
+
+    await Notification.insertMany(notifications);
+
+    return res.status(201).json({
+      message: "Loan request submitted successfully",
+      status: loan.status,
+      loan
+    });
 
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("Error requesting loan:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -798,12 +1274,259 @@ exports.getAllLoanRequests = async (req, res) => {
     loanRequestStatus: "pending"
   }).populate("borrowerId requestedByAgentId lenderId");
 
+  loans.forEach((loan) => {
+    const borrower = loan.borrowerId;
+
+    if (!borrower) return;
+
+    const isFirstLoan =
+      (borrower.totalLoans || 0) === 0 &&
+      (borrower.completedLoans || 0) === 0;
+
+    loan._doc.existingUser = !isFirstLoan;
+
+    // 🔥 If first-time borrower → merge borrower details into loan
+    if (isFirstLoan) {
+      Object.assign(loan._doc, borrower.toObject());
+    }
+  });
+
+
   res.json({ loans });
 };
+
 
 /* =====================================================
    1️⃣1️⃣ REVIEW LOAN REQUEST
 ===================================================== */
+// exports.reviewLoanRequest = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const { loanId, action } = req.body;
+//     const lenderId = req.user._id;
+
+
+//     /* ===============================
+//        1️⃣ BASIC VALIDATION
+//     =============================== */
+//     if (!loanId || !action) {
+//       throw new Error("loanId and action are required");
+//     }
+
+//     if (!["approved", "rejected"].includes(action)) {
+//       throw new Error("action must be 'approved' or 'rejected'");
+//     }
+
+
+
+
+
+//     /* ===============================
+//        2️⃣ FETCH LOAN
+//     =============================== */
+//     const loan = await Loan.findById(loanId)
+//       .populate("borrowerId")
+//       .populate("requestedByAgentId")
+//       .populate("lenderId")
+//       .session(session);
+
+//     if (!loan) {
+//       throw new Error("Loan not found");
+//     }
+
+//     /* ===============================
+//        3️⃣ AUTHORIZATION
+//     =============================== */
+//     if (loan.lenderId._id.toString() !== lenderId.toString()) {
+//       throw new Error("Unauthorized review attempt");
+//     }
+
+//     if (loan.loanRequestStatus !== "pending") {
+//       throw new Error(`Loan already ${loan.loanRequestStatus}`);
+//     }
+
+//     const borrower = loan.borrowerId;
+//     const agent = loan.requestedByAgentId;
+//     const lender = loan.lenderId;
+
+
+//     /* 🔒 COMPANY KYC RESTRICTION */
+// if (
+//   lender.accountType === "company" &&
+//   lender.kycStatus !== "approved"
+// ) {
+//   throw new Error("Company KYC not approved. Cannot approve loan.");
+// }
+
+//     /* ===============================
+//        4️⃣ REJECTION FLOW
+//     =============================== */
+//     if (action === "rejected") {
+//       loan.loanRequestStatus = "rejected";
+//       await loan.save({ session });
+
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.status(200).json({
+//         message: "Loan rejected successfully",
+//         loanId: loan._id
+//       });
+//     }
+
+//     /* ===============================
+//        5️⃣ CREDIT SCORE RULES
+//     =============================== */
+//   const creditScore = borrower.creditScore || loan.creditScoreAfter || 500;
+
+
+// // first-time borrower check
+// const isFirstLoan =
+//   (borrower.totalLoans || 0) === 0 &&
+//   (borrower.completedLoans || 0) === 0;
+
+// // ❌ Reject ONLY if:
+// //  - creditScore < 600
+// //  - AND NOT first loan
+// if (creditScore < 600 && !isFirstLoan) {
+//   loan.loanRequestStatus = "rejected";
+//   await loan.save({ session });
+
+//   await session.commitTransaction();
+//   session.endSession();
+
+//   return res.status(400).json({
+//     message: "Loan rejected due to low credit score",
+//     creditScore,
+//     isFirstLoan
+//   });
+// }
+
+// // ⭐ Bonus for very high score
+// if (creditScore >= 800) {
+//   loan.amount = Math.round(loan.amount * 1.2);
+//   loan.totalRepayment = loan.amount + loan.interest;
+//   loan.balance = loan.totalRepayment;
+// }
+
+//     /* ===============================
+//        6️⃣ LENDER WALLET CHECK
+//     =============================== */
+// /* ===============================
+//    6️⃣ LENDER WALLET CHECK (AMOUNT + FEE)
+// =============================== */
+// const estimatedFee = getB2CCharge(Number(loan.amount));
+// const totalDebit = Number(loan.amount) + estimatedFee;
+
+// if (lender.walletBalance < totalDebit) {
+//   throw new Error(
+//     `Insufficient wallet balance. Required: ${totalDebit}`
+//   );
+// }
+
+
+//     /* ===============================
+//        7️⃣ APPROVE LOAN (NOT ACTIVE YET)
+//     =============================== */
+//     loan.loanRequestStatus = "approved";
+//     loan.status = "pending"; // will become active after B2C callback
+//     loan.issuedByLenderId = lenderId;
+
+//     await loan.save({ session });
+
+//     /* ===============================
+//        8️⃣ CREATE PENDING TRANSACTION
+//     =============================== */
+//     const [transaction] = await Transaction.create(
+//       [
+//         {
+//           userId: lenderId,
+//           userModel: "User",
+//           loanId: loan._id,
+//           type: "loan issued",
+//           amount: loan.amount,
+//           status: "pending",
+//           phone: borrower.phone,
+//           description: "Loan disbursement",
+//           balanceBefore: lender.walletBalance,
+//           balanceAfter: lender.walletBalance - loan.amount
+//         }
+//       ],
+//       { session }
+//     );
+
+//     /* ===============================
+//        9️⃣ AGENT COMMISSION (PENDING)
+//     =============================== */
+//     if (agent) {
+//       await AgentCommission.create(
+//         [
+//           {
+//             agentId: agent._id,
+//             loanId: loan._id,
+//             commissionType: "approval",
+//             amount: loan.amount * 0.0495,
+//             status: "pending"
+//           }
+//         ],
+//         { session }
+//       );
+//     }
+
+//     /* ===============================
+//        🔟 INITIATE M-PESA B2C
+//     =============================== */
+//     const b2cResponse = await initiateB2C(
+//       borrower.phone,
+//       loan.amount,
+//       transaction._id
+//     );
+
+//     if (!b2cResponse?.OriginatorConversationID) {
+//       throw new Error("Invalid B2C response from M-Pesa");
+//     }
+
+//     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
+//     transaction.conversationID = b2cResponse.ConversationID;
+//     await transaction.save({ session });
+
+//     /* ===============================
+//        ✅ COMMIT
+//     =============================== */
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(200).json({
+//       message: "Loan approved — awaiting M-Pesa confirmation",
+//       loan: {
+//         id: loan._id,
+//         amount: loan.amount,
+//         status: loan.status,
+//         loanRequestStatus: loan.loanRequestStatus
+//       },
+//       transaction: {
+//         id: transaction._id,
+//         checkoutRequestID: transaction.checkoutRequestID
+//       },
+//       b2cResponse
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) {
+//       await session.abortTransaction();
+//     }
+//     session.endSession();
+
+//     console.error("❌ reviewLoanRequest error:", error);
+
+//     return res.status(500).json({
+//       message: error.message
+//     });
+//   }
+// };
+
 exports.reviewLoanRequest = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -812,9 +1535,6 @@ exports.reviewLoanRequest = async (req, res) => {
     const { loanId, action } = req.body;
     const lenderId = req.user._id;
 
-    /* ===============================
-       1️⃣ BASIC VALIDATION
-    =============================== */
     if (!loanId || !action) {
       throw new Error("loanId and action are required");
     }
@@ -824,7 +1544,7 @@ exports.reviewLoanRequest = async (req, res) => {
     }
 
     /* ===============================
-       2️⃣ FETCH LOAN
+       FETCH LOAN
     =============================== */
     const loan = await Loan.findById(loanId)
       .populate("borrowerId")
@@ -832,13 +1552,8 @@ exports.reviewLoanRequest = async (req, res) => {
       .populate("lenderId")
       .session(session);
 
-    if (!loan) {
-      throw new Error("Loan not found");
-    }
+    if (!loan) throw new Error("Loan not found");
 
-    /* ===============================
-       3️⃣ AUTHORIZATION
-    =============================== */
     if (loan.lenderId._id.toString() !== lenderId.toString()) {
       throw new Error("Unauthorized review attempt");
     }
@@ -852,7 +1567,17 @@ exports.reviewLoanRequest = async (req, res) => {
     const lender = loan.lenderId;
 
     /* ===============================
-       4️⃣ REJECTION FLOW
+       COMPANY KYC CHECK
+    =============================== */
+    if (
+      lender.accountType === "company" &&
+      lender.kycStatus !== "approved"
+    ) {
+      throw new Error("Company KYC not approved. Cannot approve loan.");
+    }
+
+    /* ===============================
+       REJECTION FLOW
     =============================== */
     if (action === "rejected") {
       loan.loanRequestStatus = "rejected";
@@ -868,11 +1593,38 @@ exports.reviewLoanRequest = async (req, res) => {
     }
 
     /* ===============================
-       5️⃣ CREDIT SCORE RULES
+       CREDIT ENGINE EVALUATION
     =============================== */
-    const creditScore = borrower.creditScore || loan.creditScoreAfter || 500;
 
-    if (creditScore < 600) {
+    const creditScore =
+      borrower.creditScore || loan.creditScoreAfter || 500;
+
+    let repaymentRatio = 1;
+    let allPaymentsOnTime = false;
+
+    // Fetch last fully paid loan for behavior analysis
+    const lastLoan = await Loan.findOne({
+      borrowerId: borrower._id,
+      status: "fully paid"
+    }).sort({ createdAt: -1 });
+
+    if (lastLoan) {
+      repaymentRatio =
+        lastLoan.repaidAmount / lastLoan.totalRepayment;
+
+      allPaymentsOnTime =
+        lastLoan.repayments?.every(r => r.daysLate === 0) || false;
+    }
+
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore,
+      requestedAmount: loan.amount,
+      borrower,
+      repaymentRatio,
+      exposureRatio: 0
+    });
+
+    if (!eligibility.allowed) {
       loan.loanRequestStatus = "rejected";
       await loan.save({ session });
 
@@ -880,11 +1632,16 @@ exports.reviewLoanRequest = async (req, res) => {
       session.endSession();
 
       return res.status(400).json({
-        message: "Loan rejected due to low credit score",
-        creditScore
+        message: eligibility.reason || "Loan rejected",
+        creditScore,
+        riskLevel: eligibility.riskLevel,
+        defaultProbability: eligibility.defaultProbability
       });
     }
 
+    /* ===============================
+       HIGH SCORE BONUS
+    =============================== */
     if (creditScore >= 800) {
       loan.amount = Math.round(loan.amount * 1.2);
       loan.totalRepayment = loan.amount + loan.interest;
@@ -892,23 +1649,28 @@ exports.reviewLoanRequest = async (req, res) => {
     }
 
     /* ===============================
-       6️⃣ LENDER WALLET CHECK
+       WALLET CHECK (WITH FEE)
     =============================== */
-    if (lender.walletBalance < loan.amount) {
-      throw new Error("Insufficient wallet balance");
+    const estimatedFee = getB2CCharge(Number(loan.amount));
+    const totalDebit = Number(loan.amount) + estimatedFee;
+
+    if (lender.walletBalance < totalDebit) {
+      throw new Error(
+        `Insufficient wallet balance. Required: ${totalDebit}`
+      );
     }
 
     /* ===============================
-       7️⃣ APPROVE LOAN (NOT ACTIVE YET)
+       APPROVE LOAN
     =============================== */
     loan.loanRequestStatus = "approved";
-    loan.status = "pending"; // will become active after B2C callback
+    loan.status = "pending";
     loan.issuedByLenderId = lenderId;
 
     await loan.save({ session });
 
     /* ===============================
-       8️⃣ CREATE PENDING TRANSACTION
+       CREATE TRANSACTION
     =============================== */
     const [transaction] = await Transaction.create(
       [
@@ -929,7 +1691,7 @@ exports.reviewLoanRequest = async (req, res) => {
     );
 
     /* ===============================
-       9️⃣ AGENT COMMISSION (PENDING)
+       AGENT COMMISSION
     =============================== */
     if (agent) {
       await AgentCommission.create(
@@ -947,7 +1709,7 @@ exports.reviewLoanRequest = async (req, res) => {
     }
 
     /* ===============================
-       🔟 INITIATE M-PESA B2C
+       INITIATE B2C
     =============================== */
     const b2cResponse = await initiateB2C(
       borrower.phone,
@@ -959,12 +1721,16 @@ exports.reviewLoanRequest = async (req, res) => {
       throw new Error("Invalid B2C response from M-Pesa");
     }
 
-    transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
-    transaction.conversationID = b2cResponse.ConversationID;
+    transaction.checkoutRequestID =
+      b2cResponse.OriginatorConversationID;
+
+    transaction.conversationID =
+      b2cResponse.ConversationID;
+
     await transaction.save({ session });
 
     /* ===============================
-       ✅ COMMIT
+       COMMIT
     =============================== */
     await session.commitTransaction();
     session.endSession();
@@ -981,7 +1747,10 @@ exports.reviewLoanRequest = async (req, res) => {
         id: transaction._id,
         checkoutRequestID: transaction.checkoutRequestID
       },
-      b2cResponse
+      risk: {
+        level: eligibility.riskLevel,
+        defaultProbability: eligibility.defaultProbability
+      }
     });
 
   } catch (error) {
@@ -997,8 +1766,6 @@ exports.reviewLoanRequest = async (req, res) => {
     });
   }
 };
-
-
 
 
 /* =====================================================
@@ -1044,10 +1811,6 @@ exports.getActiveLoansByAgent = async (req, res) => {
 };
 
 
-
-
-
-// controllers/loanController.js
 exports.getPaymentInstructions = async (req, res) => {
   try {
     const { loanId } = req.params;
@@ -1077,3 +1840,129 @@ exports.getPaymentInstructions = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+
+
+exports.getCustomerStatement = async (req, res) => {
+  try {
+    const { borrowerId } = req.params;
+    const { from, to } = req.query;
+
+    if (!from || !to) {
+      return res.status(400).json({ message: "from and to dates are required" });
+    }
+
+    const startDate = new Date(from);
+    const endDate = new Date(to);
+    endDate.setHours(23, 59, 59, 999);
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const transactions = await Transaction.find({
+      userId: borrowerId,
+      userModel: "Customer",
+      status: "successful",
+      createdAt: { $gte: startDate, $lte: endDate }
+    }).sort({ createdAt: 1 });
+
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+
+    transactions.forEach(tx => {
+      if (tx.type.includes("deposit")) {
+        totalDeposits += tx.amount;
+      }
+      if (tx.type.includes("withdraw")) {
+        totalWithdrawals += tx.amount;
+      }
+    });
+
+    const openingBalance =
+      borrower.savingsBalance - totalDeposits + totalWithdrawals;
+
+    return res.status(200).json({
+      customer: borrower.fullName,
+      phone: borrower.phone,
+      period: `${from} to ${to}`,
+      openingBalance,
+      totalDeposits,
+      totalWithdrawals,
+      closingBalance: borrower.savingsBalance,
+      transactions
+    });
+
+  } catch (error) {
+    console.error("Statement error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+
+exports.sendStatementSMS = async (req, res) => {
+  try {
+    const { borrowerId, from, to } = req.body;
+
+    if (!borrowerId || !from || !to) {
+      return res.status(400).json({
+        message: "borrowerId, from, to are required"
+      });
+    }
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const transactions = await Transaction.find({
+      userId: borrowerId,
+      userModel: "Customer",
+      status: "successful",
+      createdAt: {
+        $gte: new Date(from),
+        $lte: new Date(to)
+      }
+    });
+
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+
+    transactions.forEach(tx => {
+      if (tx.type.includes("deposit")) {
+        totalDeposits += tx.amount;
+      }
+      if (tx.type.includes("withdraw")) {
+        totalWithdrawals += tx.amount;
+      }
+    });
+
+    const message = `
+IZI FINANCE STATEMENT
+
+Customer: ${borrower.fullName}
+Period: ${from} - ${to}
+
+Deposits: KES ${totalDeposits}
+Withdrawals: KES ${totalWithdrawals}
+Current Balance: KES ${borrower.savingsBalance}
+
+Thank you.
+`;
+
+    await sendSMS(borrower.phone, message);
+
+    return res.status(200).json({
+      success: true,
+      message: "Statement SMS sent successfully",
+      smsContent: message
+    });
+
+  } catch (error) {
+    console.error("SMS statement error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+

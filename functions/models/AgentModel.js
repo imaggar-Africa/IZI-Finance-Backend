@@ -6,7 +6,7 @@ const agentSchema = new mongoose.Schema(
   {
     lenderId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Lender",
+      ref: "User",
       required: true
     },
 
@@ -20,8 +20,6 @@ const agentSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true
-      // ❌ removed Kenya-only regex
-      // Validation is handled by middleware + normalization
     },
 
     password: {
@@ -29,9 +27,57 @@ const agentSchema = new mongoose.Schema(
       required: true
     },
 
+    enforcementLevel: {
+  type: Number,
+  enum: [0, 1, 2, 3], // 0 = normal
+  default: 0
+},
+
+warningReason: {
+  type: String,
+  default: null
+},
+
+suspensionUntil: {
+  type: Date,
+  default: null
+},
+
+blockReason: {
+  type: String,
+  default: null
+},
+
+    /* ===============================
+       REGISTRATION COMMISSION
+    =============================== */
+    registrationCommissionPercent: {
+      type: Number,
+      default: 0
+    },
+
+    /* ===============================
+       REPAYMENT COMMISSION
+    =============================== */
+    repaymentCommissionType: {
+      type: String,
+      enum: ["percentage", "fixed"],
+      default: "percentage"
+    },
+
+    repaymentCommissionPercent: {
+      type: Number,
+      default: 0
+    },
+
+    repaymentCommissionFixed: {
+      type: Number,
+      default: 0
+    },
+
     status: {
       type: String,
-      enum: ["Active", "Inactive"],
+      enum: ["Active", "Inactive","Suspended","blocked"],
       default: "Active"
     },
 
@@ -41,11 +87,6 @@ const agentSchema = new mongoose.Schema(
     },
 
     walletBalance: {
-      type: Number,
-      default: 0
-    },
-
-    commissionEarned: {
       type: Number,
       default: 0
     },
@@ -60,6 +101,9 @@ const agentSchema = new mongoose.Schema(
       default: "agent"
     },
 
+    /* ===============================
+       🔥 ADD THIS BACK
+    =============================== */
     customers: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -70,44 +114,20 @@ const agentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/**
- * PRE-SAVE HOOK
- * - Normalize phone
- * - Hash password if changed
- */
+/* ===============================
+   PRE SAVE
+=============================== */
 agentSchema.pre("save", async function (next) {
-  // Normalize phone
   if (this.phone) {
     const normalized = normalizePhone(this.phone);
-    if (normalized) {
-      this.phone = normalized;
-    }
+    if (normalized) this.phone = normalized;
   }
 
-  // Hash password if modified
   if (!this.isModified("password")) return next();
 
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
-
-/**
- * PASSWORD VERIFICATION
- */
-agentSchema.methods.matchPassword = async function (enteredPassword) {
-  return bcrypt.compare(enteredPassword, this.password);
-};
-
-/**
- * ADD CUSTOMER TO AGENT
- */
-agentSchema.methods.addCustomer = async function (customerId) {
-  if (!this.customers.includes(customerId)) {
-    this.customers.push(customerId);
-    this.totalCustomers += 1;
-    await this.save();
-  }
-};
 
 module.exports = mongoose.model("Agent", agentSchema);

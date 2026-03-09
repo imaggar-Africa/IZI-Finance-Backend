@@ -1,7 +1,7 @@
 // utils/otpService.js
 
 const isUsingFirebase = process.env.OTP_PROVIDER === "firebase";
-const sendOtpFirebase = require("./firebaseOtp");
+// const sendOtpFirebase = require("./firebaseOtp");
 const sendOtpAT = require("./africatalkingOtp");
 
 exports.sendOTP = async (phone) => {

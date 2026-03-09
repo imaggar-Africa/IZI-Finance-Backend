@@ -12,409 +12,667 @@ const AgentModel = require("../models/AgentModel");
 const { recalculateCreditScore } = require("../utils/creditScore");
 
 
+
 // Single callback for all STK Push transactions
 
 
 // ✅ STK Callback Controller
 
+// exports.stkCallback = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
 
-// ✅ STK Callback Controller
+//   try {
+//     const callbackData = req.body;
+//     console.log("📥 STK Callback Received:", JSON.stringify(callbackData, null, 2));
+
+//     const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } =
+//       callbackData?.Body?.stkCallback || {};
+
+//     if (!CheckoutRequestID) throw new Error("CheckoutRequestID missing in callback");
+
+//     /* ===============================
+//        EXTRACT AMOUNT + RECEIPT
+//     =============================== */
+//     let Amount = 0;
+//     let MpesaReceiptNumber = "";
+
+//     if (CallbackMetadata?.Item) {
+//       CallbackMetadata.Item.forEach(item => {
+//         if (item.Name === "Amount") Amount = item.Value;
+//         if (item.Name === "MpesaReceiptNumber") MpesaReceiptNumber = item.Value;
+//       });
+//     }
+
+//     /* ===============================
+//        FIND TRANSACTION
+//     =============================== */
+//     const transaction = await Transaction.findOne({
+//       checkoutRequestID: CheckoutRequestID
+//     }).session(session);
+
+//     if (!transaction) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(404).json({ message: "Transaction not found" });
+//     }
+
+//     // Prevent duplicate callback
+//     if (transaction.status === "successful") {
+//       await session.commitTransaction();
+//       session.endSession();
+//       return res.status(200).json({ message: "Duplicate callback ignored" });
+//     }
+
+//     /* ===============================
+//        HANDLE FAILED MPESA
+//     =============================== */
+//     if (ResultCode !== 0) {
+//       transaction.status = "failed";
+//       transaction.failureReason = ResultDesc;
+//       transaction.mpesaPayload = callbackData;
+//       await transaction.save({ session });
+
+//       await session.commitTransaction();
+//       session.endSession();
+//       return res.status(200).json({ message: "Payment failed handled" });
+//     }
+
+//     /* ===============================
+//        MARK TRANSACTION SUCCESS
+//     =============================== */
+//     transaction.status = "successful";
+//     transaction.transactionId = MpesaReceiptNumber || transaction.transactionId;
+
+//     /* ===============================
+//        REPAYMENT FLOW
+//     =============================== */
+//     if (transaction.type === "repayment") {
+
+//       const borrower = await Customer.findById(transaction.userId).session(session);
+//       const loan = await Loan.findById(transaction.loanId).session(session);
+
+//       if (!borrower || !loan) {
+//         throw new Error("Borrower or Loan not found");
+//       }
+
+//       transaction.balanceBefore = loan.balance;
+
+//       loan.repaidAmount += Number(Amount);
+//       loan.balance -= Number(Amount);
+
+//       let isFullyRepaid = false;
+//       if (loan.balance <= 0) {
+//         loan.balance = 0;
+//         loan.status = "fully paid";
+//         isFullyRepaid = true;
+//       }
+
+// loan.repayments.push({
+//   loanId: loan._id,                 // ✅ REQUIRED
+//   transactionId: transaction._id,
+//   borrowerId: borrower._id,
+//   amount,
+//   date: new Date(),
+//   expectedPaymentDate: loan.dueDate, // ✅ REQUIRED
+//   wasPaymentLate: event === "LATE",
+//   daysLate,
+//   creditScoreDelta: scoreDelta || 0
+// });
+
+
+//       await loan.save({ session });
+
+//       /* ===============================
+//          ADD REPAYMENT TO LENDER WALLET
+//       =============================== */
+//       const lender = await User.findById(loan.lenderId).session(session);
+//       if (lender) {
+//         lender.walletBalance += Number(Amount);
+//         await lender.save({ session });
+//       }
+
+//       borrower.loanBalance = loan.balance;
+//       transaction.balanceAfter = loan.balance;
+
+//       /* =====================================================
+//          ⭐ CREDIT SCORE UPDATE (EVERY REPAYMENT)
+//       ===================================================== */
+//       let event = "ON_TIME";
+//       let daysLate = 0;
+
+//       if (loan.dueDate && new Date() > loan.dueDate) {
+//         event = "LATE";
+//         daysLate = Math.ceil(
+//           (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+//         );
+//       }
+
+//       const { newScore, scoreDelta } = await recalculateCreditScore({
+//         currentScore: borrower.creditScore || 500,
+//         event,
+//         daysLate
+//       });
+
+//       borrower.creditScore = newScore;
+//       borrower.lastScoreUpdate = new Date();
+//       borrower.lastCreditScoreChange = {
+//         delta: scoreDelta,
+//         reason: event === "LATE"
+//           ? `Late repayment (${daysLate} days)`
+//           : "On-time repayment",
+//         date: new Date()
+//       };
+
+//       /* ===============================
+//          FULL REPAYMENT EXTRA UPDATES
+//       =============================== */
+//       if (isFullyRepaid) {
+//         borrower.completedLoans = (borrower.completedLoans || 0) + 1;
+//         borrower.totalLoans = (borrower.totalLoans || 0) + 1;
+
+//         loan.creditScoreAfter = newScore;
+//         await loan.save({ session });
+//       }
+
+//       await borrower.save({ session });
+
+//       console.log(
+//         `📊 CREDIT SCORE UPDATED | Borrower=${borrower._id} | Event=${event} | Δ=${scoreDelta} | New=${newScore}`
+//       );
+//     }
+
+//     /* ===============================
+//        SAVE TRANSACTION
+//     =============================== */
+//     await transaction.save({ session });
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "STK callback processed successfully",
+//       transaction
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) await session.abortTransaction();
+//     session.endSession();
+
+//     console.error("❌ STK CALLBACK ERROR:", error);
+//     return res.status(500).json({
+//       message: "Error processing STK callback",
+//       error: error.message
+//     });
+//   }
+// };
+
+// exports.stkCallback = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const stk = req.body?.Body?.stkCallback;
+//     if (!stk?.CheckoutRequestID) {
+//       throw new Error("CheckoutRequestID missing in callback");
+//     }
+
+//     const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = stk;
+
+//     /* ===============================
+//        EXTRACT AMOUNT + RECEIPT
+//     =============================== */
+//     let amount = 0;
+//     let mpesaReceipt = "";
+
+//     if (CallbackMetadata?.Item) {
+//       CallbackMetadata.Item.forEach(item => {
+//         if (item.Name === "Amount") amount = Number(item.Value);
+//         if (item.Name === "MpesaReceiptNumber") mpesaReceipt = item.Value;
+//       });
+//     }
+
+//     /* ===============================
+//        FIND TRANSACTION
+//     =============================== */
+//     const transaction = await Transaction.findOne({
+//       checkoutRequestID: CheckoutRequestID
+//     }).session(session);
+
+//     if (!transaction) throw new Error("Transaction not found");
+
+//     /* ===============================
+//        DUPLICATE CALLBACK PROTECTION
+//     =============================== */
+//     if (transaction.status === "successful") {
+//       await session.commitTransaction();
+//       session.endSession();
+//       return res.json({ message: "Duplicate callback ignored" });
+//     }
+
+//     /* ===============================
+//        HANDLE FAILED MPESA
+//     =============================== */
+//     if (ResultCode !== 0) {
+//       transaction.status = "failed";
+//       transaction.failureReason = ResultDesc;
+//       transaction.mpesaPayload = req.body;
+
+//       await transaction.save({ session });
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       return res.json({ message: "Payment failed handled" });
+//     }
+
+//     /* ===============================
+//        MARK TRANSACTION SUCCESS
+//     =============================== */
+//     transaction.status = "successful";
+//     transaction.transactionId = mpesaReceipt || transaction.transactionId;
+
+//     /* =====================================================
+//        CASE 1️⃣ : LOAN ISSUED (B2C SUCCESS)
+//     ===================================================== */
+//     if (transaction.type === "loan issued") {
+//       const loan = await Loan.findById(transaction.loanId).session(session);
+//       const lender = await User.findById(transaction.userId).session(session);
+
+//       if (!loan || !lender) throw new Error("Loan or Lender not found");
+
+//       transaction.balanceBefore = lender.walletBalance;
+//       lender.walletBalance -= amount;
+//       transaction.balanceAfter = lender.walletBalance;
+
+//       await lender.save({ session });
+
+//       loan.status = "active";
+//       await loan.save({ session });
+//     }
+
+//     /* =====================================================
+//        CASE 2️⃣ : LOAN REPAYMENT
+//     ===================================================== */
+//  if (transaction.type === "repayment") {
+//   const loan = await Loan.findById(transaction.loanId).session(session);
+//   const borrower = await Customer.findById(transaction.userId).session(session);
+
+//   if (!loan || !borrower) throw new Error("Loan or Borrower not found");
+
+//   transaction.balanceBefore = loan.balance;
+
+//   /* ===============================
+//      1️⃣ APPLY REPAYMENT FIRST
+//   =============================== */
+//   loan.repaidAmount += amount;
+//   loan.balance -= amount;
+
+//   let event = "ON_TIME";
+//   let daysLate = 0;
+
+//   /* ===============================
+//      2️⃣ LATE CHECK + PENALTY
+//   =============================== */
+//   if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+//     event = "LATE";
+//     daysLate = Math.ceil(
+//       (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+//     );
+
+//     const penalty = Math.ceil(loan.balance * 0.15);
+//     loan.balance += penalty;
+//     loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+
+//     await sendSMS(
+//       borrower.phone,
+//       `Dear ${borrower.fullName},
+// Your loan payment was late.
+
+// Penalty (15%): KES ${penalty}
+// New balance: KES ${loan.balance}
+
+// - IziFinance`
+//     );
+//   }
+
+//   /* ===============================
+//      3️⃣ CREDIT SCORE
+//   =============================== */
+//   const { newScore, scoreDelta } = await recalculateCreditScore({
+//     currentScore: borrower.creditScore || 500,
+//     event,
+//     daysLate
+//   });
+
+//   borrower.creditScore = newScore;
+//   borrower.lastScoreUpdate = new Date();
+//   borrower.lastCreditScoreChange = {
+//     delta: scoreDelta,
+//     reason:
+//       event === "LATE"
+//         ? `Late repayment (${daysLate} days)`
+//         : "On-time repayment",
+//     date: new Date()
+//   };
+
+//   /* ===============================
+//      4️⃣ PUSH REPAYMENT RECORD
+//   =============================== */
+//   loan.repayments.push({
+//     transactionId: transaction._id,
+//     loanId: loan._id,
+//     borrowerId: borrower._id,
+//     amount,
+//     date: new Date(),
+//     expectedPaymentDate: loan.dueDate,
+//     wasPaymentLate: event === "LATE",
+//     daysLate,
+//     creditScoreDelta: scoreDelta
+//   });
+
+//   /* ===============================
+//      5️⃣ FULLY PAID CHECK
+//   =============================== */
+//   let isFullyRepaid = false;
+//   if (loan.balance <= 0) {
+//     loan.balance = 0;
+//     loan.status = "fully paid";
+//     isFullyRepaid = true;
+//     loan.creditScoreAfter = newScore;
+//   }
+
+//   await loan.save({ session });
+
+//   /* ===============================
+//      6️⃣ CREDIT LENDER WALLET
+//   =============================== */
+//   const lender = await User.findById(loan.lenderId).session(session);
+//   if (lender) {
+//     lender.walletBalance += amount;
+//     await lender.save({ session });
+//   }
+
+//   borrower.loanBalance = loan.balance;
+//   transaction.balanceAfter = loan.balance;
+
+//   /* ===============================
+//      7️⃣ NOTIFY LENDER
+//   =============================== */
+//   await Notification.create([{
+//     userId: loan.lenderId,
+//     userModel: "User",
+//     title: isFullyRepaid ? "Loan Fully Repaid" : "Loan Repayment Received",
+//     message: isFullyRepaid
+//       ? `Loan fully repaid by ${borrower.fullName}.`
+//       : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
+//     type: "repayment",
+//     data: {
+//       loanId: loan._id,
+//       borrowerId: borrower._id,
+//       amountPaid: amount,
+//       remainingBalance: loan.balance,
+//       transactionId: transaction._id
+//     }
+//   }], { session });
+
+//   if (isFullyRepaid) {
+//     borrower.completedLoans = (borrower.completedLoans || 0) + 1;
+//     borrower.totalLoans = (borrower.totalLoans || 0) + 1;
+
+//     if (loan.requestedByAgentId) {
+//       await handleAgentFullRepaymentCommission(loan, transaction, session);
+//     }
+//   }
+
+//   await borrower.save({ session });
+// }
+
+
+//     /* ===============================
+//        SAVE & COMMIT
+//     =============================== */
+//     await transaction.save({ session });
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.json({
+//       success: true,
+//       message: "STK callback processed successfully",
+//       transactionId: transaction._id
+//     });
+
+//   } catch (error) {
+//     if (session.inTransaction()) await session.abortTransaction();
+//     session.endSession();
+
+//     console.error("❌ STK CALLBACK ERROR:", error);
+//     return res.status(500).json({
+//       message: "Error processing STK callback",
+//       error: error.message
+//     });
+//   }
+// };
+
+// local
 exports.stkCallback = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const callbackData = req.body;
-    console.log("📥 STK Callback Received:", JSON.stringify(callbackData, null, 2));
-
-    const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } =
-      callbackData?.Body?.stkCallback || {};
-
-    if (!CheckoutRequestID) throw new Error("CheckoutRequestID missing in callback");
-
-    // ✅ Extract Amount & MpesaReceiptNumber
-    let Amount = 0;
-    let MpesaReceiptNumber = "";
-    if (CallbackMetadata?.Item) {
-      CallbackMetadata.Item.forEach(item => {
-        if (item.Name === "Amount") Amount = item.Value;
-        if (item.Name === "MpesaReceiptNumber") MpesaReceiptNumber = item.Value;
-      });
+   try {
+    const stk = req.body?.Body?.stkCallback;
+    if (!stk?.CheckoutRequestID) {
+      throw new Error("CheckoutRequestID missing");
     }
 
-    // ✅ 1. Find the transaction
-    const transaction = await Transaction.findOne({ checkoutRequestID: CheckoutRequestID }).session(session);
-    if (!transaction) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Transaction not found" });
-    }
+    const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = stk;
 
-    // ✅ Prevent duplicate callback
+    let amount = 0;
+    let mpesaReceipt = "";
+
+    CallbackMetadata?.Item?.forEach(i => {
+      if (i.Name === "Amount") amount = Number(i.Value);
+      if (i.Name === "MpesaReceiptNumber") mpesaReceipt = i.Value;
+    });
+
+    const transaction = await Transaction.findOne({
+      checkoutRequestID: CheckoutRequestID
+    });
+
+    if (!transaction) throw new Error("Transaction not found");
+
+    // 🔁 Duplicate callback
     if (transaction.status === "successful") {
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(200).json({ message: "Duplicate callback ignored" });
+      return res.json({ message: "Duplicate callback ignored" });
     }
 
-    // ✅ Check for M-Pesa failure FIRST
+    // ❌ Failed payment
     if (ResultCode !== 0) {
-      console.log("❌ M-Pesa reported FAILURE - Handling failed transaction...");
-
       transaction.status = "failed";
-      transaction.mpesaPayload = callbackData;
       transaction.failureReason = ResultDesc;
-      
-      await transaction.save({ session });
-
-      // ✅ FAILURE NOTIFICATIONS (outside transaction)
-      const failureTasks = [];
-
-      /* ------------------ ❌ Case 1: Savings Deposit Failure ------------------ */
-      if (transaction.type === "savings") {
-        const user = await User.findById(transaction.userId).session(session);
-        const profile = await Profile.findOne({ userId: transaction.userId }).session(session);
-        const fullName = profile?.fullName || "Customer";
-
-        if (user) {
-          failureTasks.push(async () => {
-            await sendSMS(
-              user.phone,
-              `Dear ${fullName}, your deposit of KES ${transaction.amount} was not processed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nFor assistance, contact izifinance Support.`
-            );
-            await Notification.create({
-              userId: user._id,
-              userModel: transaction.userModel,
-              title: "Deposit Failed",
-              message: `Deposit of KES ${transaction.amount} failed. Reason: ${ResultDesc}`,
-              type: "deposit_failed",
-            });
-          });
-        }
-      }
-
-      /* ------------------ ❌ Case 2: Customer Deposit Failure ------------------ */
-      else if (transaction.type === "customer deposit") {
-        const customer = await Customer.findById(transaction.userId).session(session);
-        const customerName = customer?.fullName || "Customer";
-
-        if (customer) {
-          failureTasks.push(async () => {
-            await sendSMS(
-              customer.phone,
-              `Dear ${customerName}, your savings deposit of KES ${transaction.amount} was not processed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nFor assistance, contact izifinance Support.`
-            );
-            await Notification.create({
-              userId: customer._id,
-              userModel: "Customer",
-              title: "Savings Deposit Failed",
-              message: `Deposit of KES ${transaction.amount} failed. Reason: ${ResultDesc}`,
-              type: "deposit_failed",
-            });
-          });
-        }
-      }
-
-      /* ------------------ ❌ Case 3: Loan Repayment Failure ------------------ */
-      else if (transaction.type === "repayment") {
-        const borrower = await Customer.findById(transaction.userId).session(session);
-        const borrowerName = borrower?.fullName || "Borrower";
-
-        if (borrower) {
-          failureTasks.push(async () => {
-            await sendSMS(
-              borrower.phone,
-              `Dear ${borrowerName}, your loan repayment of KES ${transaction.amount} was not processed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\nPlease try again.\n- izifinance Support`
-            );
-            
-            // Notify lender about failed repayment
-            const loan = await Loan.findById(transaction.loanId);
-            if (loan && loan.lenderId) {
-              const lenderProfile = await Profile.findOne({ userId: loan.lenderId });
-              const lenderName = lenderProfile?.fullName || "Lender";
-              
-              await Notification.create({
-                userId: loan.lenderId,
-                userModel: "User",
-                title: "Loan Repayment Failed",
-                message: `${borrowerName}'s repayment of KES ${transaction.amount} failed. Reason: ${ResultDesc}`,
-                type: "repayment_failed",
-              });
-
-              await sendSMS(
-                loan.lenderId.phone,
-                `Dear ${lenderName}, the loan repayment of KES ${transaction.amount} from ${borrowerName} has failed. \nReason: ${ResultDesc}. \nREF: ${transaction._id}\n- izifinance`
-              );
-            }
-          });
-        }
-      }
-
-      await session.commitTransaction();
-      session.endSession();
-
-      // ✅ Execute failure notifications AFTER DB commit
-      await Promise.all(failureTasks.map(fn => fn()));
-
-      return res.status(200).json({ message: "Transaction failed handled" });
-    }   
-
-    // ✅ CONTINUE WITH SUCCESSFUL TRANSACTIONS
-    // ✅ 2. Find user dynamically (Customer or User)
-    let UserModel;
-
-    if (transaction.userModel === "User") {
-      UserModel = User;
-    } 
-    else if (transaction.userModel === "Customer") {
-      UserModel = Customer;
-    } 
-    else {
-      throw new Error("Invalid userModel in transaction"); 
+      await transaction.save();
+      return res.json({ message: "Payment failed" });
     }
 
-    console.log("UserModel resolved as:", UserModel.modelName);
-
-    let user = await UserModel.findById(transaction.userId).session(session);
-
-    // ❌ If repayment & user not found → Reverse
-    if (transaction.type === "repayment" && !user) {
-      await reverseTransaction(CheckoutRequestID, Amount, transaction.phone);
-      transaction.status = "reversed";
-      await transaction.save({ session });
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(200).json({ message: "Reversal triggered due to invalid borrower" });
-    }
-
-    // ------- Load Profile (to get full name) -------
-    const profile = await Profile.findOne({ userId: transaction.userId }).session(session);
-    const fullName = profile?.fullName || "Customer";
-
-    // ✅ Set status & transactionId FOR SUCCESSFUL TRANSACTIONS
     transaction.status = "successful";
-    transaction.transactionId = MpesaReceiptNumber || transaction.transactionId;
+    transaction.transactionId = mpesaReceipt;
 
-    // ✅ Post-commit tasks (SMS / Notification)
-    const postCommitTasks = [];
+    /* ===================== REPAYMENT FLOW ===================== */
+    if (transaction.type === "repayment") {
+      const loan = await Loan.findById(transaction.loanId);
+      const borrower = await Customer.findById(transaction.userId);
 
-    /* ------------------ 💰 Case 1: Wallet Deposit (User Savings) ------------------ */
-    if (transaction.type === "savings" && user) {
-      transaction.balanceBefore = user.walletBalance;
+      if (!loan || !borrower) {
+        throw new Error("Loan or Borrower not found");
+      }
 
-      user.walletBalance += Number(Amount);
-      transaction.balanceAfter = user.walletBalance;
-      await user.save({ session });
+      transaction.balanceBefore = loan.balance;
 
-      postCommitTasks.push(async () => {
-        await sendSMS(
-          user.phone,
-          `Dear ${fullName}, your wallet deposit of KES ${Amount} has been processed successfully. \nNew wallet balance: KES ${user.walletBalance}. \nREF: ${transaction._id}\nThank you for choosing izifinance.`
-        );
-        await Notification.create({
-          userId: user._id,
-          userModel: transaction.userModel,
-          title: "Deposit Successful",
-          message: `Deposit of KES ${Amount} received. Wallet balance: KES ${user.walletBalance}.`,
-          type: "deposit",
-        });
-      });
-    }
+      /* 1️⃣ Apply repayment */
+      loan.repaidAmount += amount;
+      loan.balance -= amount;
 
-    /* ------------------ 💵 Case 2: Customer Deposit (Savings Balance) --------------- */
-    else if (transaction.type === "customer deposit") {
-      // Fetch borrower from Customer model (because userModel = "Customer")
-      const customer = await Customer.findById(transaction.userId).session(session);
-      const customerName = customer?.fullName || "Customer";
+      let event = "ON_TIME";
+      let daysLate = 0;
 
-      transaction.balanceBefore = customer.savingsBalance;
-
-      customer.savingsBalance += Number(Amount);
-      transaction.balanceAfter = customer.savingsBalance;
-      await customer.save({ session });
-
-      const accountRef = transaction.accountReference || customerName;
-
-      postCommitTasks.push(async () => {
-        // ⭐ Updated SMS using customerName from Customer model
-        await sendSMS(
-          customer.phone,
-          `Dear ${customerName}, your savings deposit of KES ${Amount} has been processed successfully. \nNew savings balance: KES ${customer.savingsBalance}. \nREF: ${transaction._id}\nThank you for saving with izifinance.`
+      /* 2️⃣ Late penalty */
+      if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+        event = "LATE";
+        daysLate = Math.ceil(
+          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
         );
 
-        await Notification.create({
-          userId: customer._id,
-          userModel: "Customer",
-          title: "Savings Deposit Successful",
-          message: `KES ${Amount} saved into (${accountRef}). New savings balance: KES ${customer.savingsBalance}.`,
-          type: "deposit",
-        });
+        const penalty = Math.ceil(loan.balance * 0.15);
+        loan.balance += penalty;
+
+        await sendSMS(
+          borrower.phone,
+          `Dear ${borrower.fullName},
+Your payment was late.
+
+Penalty: KES ${penalty}
+New Balance: KES ${loan.balance}
+
+- IziFinance`
+        );
+      }
+
+      /* 3️⃣ Credit score update */
+      const { newScore, scoreDelta } = recalculateCreditScore({
+        currentScore: borrower.creditScore || 500,
+        event,
+        daysLate
       });
-    }
 
-    /* ------------------ 📉 Case 3: Loan Repayment ------------------ */
-    else if (transaction.type === "repayment") {
-      // ⭐ Correct borrower lookup — get exact customer record
-      const borrower = await Customer.findById(transaction.userId).session(session);
-      const borrowerName = borrower?.fullName || "Borrower";
+      borrower.creditScore = newScore;
+      borrower.lastScoreUpdate = new Date();
+      borrower.lastCreditScoreChange = {
+        delta: scoreDelta,
+        reason: event === "LATE"
+          ? `Late repayment (${daysLate} days)`
+          : "On-time repayment",
+        date: new Date()
+      };
 
-      const loan = await Loan.findById(transaction.loanId).session(session);
-
-      if (loan && borrower) {
-        transaction.balanceBefore = loan.balance;
-
-        loan.repaidAmount += Number(Amount);
-        loan.balance -= Number(Amount);
-
-        let isFullyRepaid = false;
-        if (loan.balance <= 0) {
-          loan.balance = 0;
-          loan.status = "fully paid";
-          isFullyRepaid = true;
-          
-          // ✅ AGENT COMMISSION FOR FULL REPAYMENT
-          if (loan.requestedByAgentId) {
-            await handleAgentFullRepaymentCommission(loan, transaction, session);
-          }
-        }
-
-        loan.repayments.push({
-          amount: Number(Amount),
-          transactionId: transaction.transactionId,
-          date: new Date(),
-        });
-
-        await loan.save({ session });
-
-
-        // ⭐ Add repayment amount to lender wallet
-const lender = await User.findById(loan.lenderId).session(session);
-
-if (lender) {
-  const lenderBalanceBefore = lender.walletBalance;
-  lender.walletBalance += Number(Amount);
-  await lender.save({ session });
-
-  transaction.lenderBalanceBefore = lenderBalanceBefore;
-  transaction.lenderBalanceAfter = lender.walletBalance;
-  
-  console.log(`💰 Added KES ${Amount} to lender (${lender._id}) wallet. New balance: ${lender.walletBalance}`);
-}
-
-        borrower.loanBalance = loan.balance;
-        transaction.balanceAfter = loan.balance;
-        await borrower.save({ session });
-
-        // ================== CREDIT SCORE UPDATE (ADD ONLY) ==================
-
-const paidDate = new Date();           // callback time
-const dueDate = loan.dueDate;          // loan due date
-
-let wasPaymentLate = false;
-let daysLate = 0;
-
-if (dueDate && paidDate > dueDate) {
-  wasPaymentLate = true;
-  daysLate = Math.ceil(
-    (paidDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)
-  );
-}
-
-const { newScore, scoreDelta } = await recalculateCreditScore({
-  currentScore: borrower.creditScore || 500,
-  wasPaymentLate,
-  daysLate
+      /* 4️⃣ Save repayment history */
+    loan.repayments.push({
+  loanId: loan._id,                 // ✅ REQUIRED
+  transactionId: transaction._id,
+  borrowerId: borrower._id,
+  amount,
+  date: new Date(),
+  expectedPaymentDate: loan.dueDate, // ✅ REQUIRED
+  wasPaymentLate: event === "LATE",
+  daysLate,
+  creditScoreDelta: scoreDelta || 0
 });
 
-// update only credit score fields
-borrower.creditScore = newScore;
-borrower.lastCreditScoreChange = {
-  delta: scoreDelta,
-  reason: wasPaymentLate
-    ? `Late payment (${daysLate} days)`
-    : "On-time repayment",
-  date: new Date()
-};
 
-await borrower.save({ session });
+      /* 5️⃣ Fully paid check */
+      let isFullyPaid = false;
+      if (loan.balance <= 0) {
+        loan.balance = 0;
+        loan.status = "fully paid";
+        loan.creditScoreAfter = newScore;
+        isFullyPaid = true;
+      }
 
-console.log(
-  `📊 Credit score updated | Borrower=${borrower._id} | Δ=${scoreDelta} | New=${newScore}`
-);
+      await loan.save();
 
-// ================== END CREDIT SCORE UPDATE ==================
+      /* 6️⃣ Credit lender wallet */
+      const lender = await User.findById(loan.lenderId);
+      if (lender) {
+        lender.walletBalance += amount;
+        await lender.save();
+      }
 
+      borrower.loanBalance = loan.balance;
+      await borrower.save();
 
-        // ⭐ Get lender details for notification
-        const lenderProfile = await Profile.findOne({ userId: loan.lenderId });
-        const lenderName = lenderProfile?.fullName || "Lender";
+      transaction.balanceAfter = loan.balance;
 
-        postCommitTasks.push(async () => {
-          // 📲 SMS to Borrower — WITH NAME FIXED
-          await sendSMS(
-            borrower.phone,
-            `Dear ${borrowerName}, your loan repayment of KES ${Amount} has been processed successfully. \nRemaining loan balance: KES ${loan.balance}. \nREF: ${transaction._id}\nThank you for your timely payment.\n- izifinance`
-          );
+      /* 7️⃣ Lender notification */
+      await Notification.create({
+        userId: loan.lenderId,
+        userModel: "User",
+        title: isFullyPaid ? "Loan Fully Repaid" : "Loan Repayment Received",
+        message: isFullyPaid
+          ? `Loan fully repaid by ${borrower.fullName}`
+          : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
+        type: "repayment",
+        data: {
+          loanId: loan._id,
+          borrowerId: borrower._id,
+          amountPaid: amount,
+          remainingBalance: loan.balance,
+          transactionId: transaction._id
+        }
+      });
 
-          // 🔔 Notification to Lender
-          await Notification.create({
-            userId: loan.lenderId,
-            userModel: "User",
-            title: "Loan Repayment Received",
-            message: `${borrowerName} repaid KES ${Amount}. Remaining balance: KES ${loan.balance}.`,
-            type: "repayment",
-          });
-
-          // 📲 SMS to Lender
-          await sendSMS(
-            loan.lenderId.phone,
-            `Dear ${lenderName}, loan repayment of KES ${Amount} has been received from ${borrowerName}. \nRemaining balance: KES ${loan.balance}. \nREF: ${transaction._id}\n- izifinance`
-          );
-
-          // 🎯 Notify Agent if fully paid
-          if (isFullyRepaid && loan.requestedByAgentId) {
-            const agent = await AgentModel.findById(loan.requestedByAgentId);
-            const agentName = agent?.fullName || "Agent";
-            
-            await Notification.create({
-              userId: loan.requestedByAgentId,
-              userModel: "Agent",
-              title: "Loan Fully Repaid",
-              message: `Loan for ${borrowerName} is now fully repaid. Commission recorded.`,
-              type: "commission",
-            });
-
-            await sendSMS(
-              loan.requestedByAgentId.phone,
-              `Dear ${agentName}, the loan for ${borrowerName} has been fully repaid. \nYour commission has been recorded and will be processed accordingly. \nREF: ${transaction._id}\n- izifinance`
-            );
-          }
-        });
+      /* 8️⃣ Agent commission (only once) */
+      if (isFullyPaid && loan.requestedByAgentId) {
+        await handleAgentFullRepaymentCommission(loan, transaction);
       }
     }
+    /* ===================== SAVINGS (LENDER DEPOSIT) ===================== */
+    if (transaction.type === "savings") {
 
-    // ✅ 3. Save transaction
-    await transaction.save({ session });
+  const user = await User.findById(transaction.userId);
+  if (!user) throw new Error("User not found");
 
-    // ✅ 4. Commit transaction
-    await session.commitTransaction();
-    session.endSession();
+  transaction.balanceBefore = user.walletBalance;
 
-    // ✅ 5. Execute SMS & notifications AFTER DB commit
-    await Promise.all(postCommitTasks.map(fn => fn()));
+  user.walletBalance += amount;
 
-    return res.status(200).json({ message: "STK Callback processed", transaction });
+  transaction.balanceAfter = user.walletBalance;
+
+  await user.save();
+
+  await Notification.create({
+    userId: user._id,
+    userModel: "User",
+    title: "Wallet Deposit Successful",
+    message: `KES ${amount} has been added to your wallet.`,
+    type: "deposit"
+  });
+    }
+
+   /* ===================== CUSTOMER SAVINGS DEPOSIT ===================== */
+    if (transaction.type === "customer deposit") {
+
+  const borrower = await Customer.findById(transaction.userId);
+  if (!borrower) throw new Error("Borrower not found");
+
+  transaction.balanceBefore = borrower.savingsBalance;
+
+  borrower.savingsBalance += amount;
+
+  transaction.balanceAfter = borrower.savingsBalance;
+
+  await borrower.save();
+
+  await Notification.create({
+    userId: borrower._id,
+    userModel: "Customer",
+    title: "Savings Deposit Successful",
+    message: `KES ${amount} has been added to your savings.`,
+    type: "deposit"
+  });
+    }
+
+
+    await transaction.save();
+
+    return res.json({
+      success: true,
+      message: "STK callback processed successfully"
+    });
 
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
-    session.endSession();
-    console.error("❌ STK callback error:", error);
-    return res.status(500).json({ message: "Error processing callback", error: error.message });
+    console.error("❌ STK CALLBACK ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 };
-
-
-
 
 
 // ✅ Agent Commission Handler for Full Repayment

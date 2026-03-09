@@ -12,6 +12,11 @@ router.post("/",protect, notificationController.markAllAsRead);
 // Delete a notification
 router.delete("/:id",protect, notificationController.softDeleteNotification);
 
+router.patch(
+  "/:notificationId",
+  protect, 
+  notificationController.markOneAsRead
+);
 
 
 router.get("/borrower", borrowerProtect, notificationController.getBorrowerNotifications);

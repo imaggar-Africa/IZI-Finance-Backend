@@ -211,4 +211,5 @@ module.exports = {
   querySTK,
   initiateB2C,
   reverseTransaction,
+  getAccessToken
 };

@@ -9,24 +9,35 @@ router.post("/pay/stk", async (req, res) => {
   try {
     const { accountId, amount, phone } = req.body;
 
-    const borrower = await Customer.findOne({ accountId });
-    if (!borrower) {
-      return res.send("Invalid account ID");
+    if (!accountId || !amount || Number(amount) <= 0 || !phone) {
+      return res.status(400).send("Invalid payment data");
     }
 
-    // Create pending transaction (wallet / savings)
+    const borrower = await Customer.findOne({ accountId });
+    if (!borrower) {
+      return res.status(404).send("Invalid account ID");
+    }
+
+    // phone = CUSTOMER phone
     const transaction = await Transaction.create({
-      type: "customer deposit",
+      type: "customer payment",
       userId: borrower._id,
       userModel: "Customer",
-      phone,
-      amount,
+      phone: phone,                 // ✅ only phone
+      amount: Number(amount),
       accountReference: accountId,
       status: "pending"
     });
 
-    // Send STK Push
-    await initiateSTKPush(phone, amount, accountId);
+    const stkResponse = await initiateSTKPush(
+      phone,                        // STK popup → customer phone
+      Number(amount),
+      accountId
+    );
+
+    transaction.checkoutRequestID = stkResponse.CheckoutRequestID;
+    transaction.merchantRequestID = stkResponse.MerchantRequestID;
+    await transaction.save();
 
     res.send(`
       <h3>Payment Request Sent</h3>
@@ -37,5 +48,6 @@ router.post("/pay/stk", async (req, res) => {
     res.status(500).send("Failed to initiate payment");
   }
 });
+
 
 module.exports = router;

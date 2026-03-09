@@ -235,6 +235,41 @@ const borrowerProtect = asyncHandler(async (req, res, next) => {
  * AGENT PROTECT (optional)
  * =========================
  */
+// const agentProtect = asyncHandler(async (req, res, next) => {
+//   let token;
+
+//   if (!req.headers.authorization?.startsWith("Bearer")) {
+//     return res.status(401).json({ message: "Not authorized, no token" });
+//   }
+
+//   try {
+//     token = req.headers.authorization.split(" ")[1];
+
+//     const decoded = jwt.verify(token, JWT_ACCESS_SECRET);
+
+//     const agentId =
+//       decoded.sub ||
+//       decoded.agentId ||
+//       decoded.id;
+
+//     if (!agentId) {
+//       return res.status(401).json({ message: "Invalid token payload" });
+//     }
+
+//     const agent = await AgentModel.findById(agentId).select("-password");
+
+//     if (!agent) {
+//       return res.status(401).json({ message: "Agent not found" });
+//     }
+
+//     req.agent = agent;
+//     next();
+//   } catch (error) {
+//     console.error("Agent auth error:", error.message);
+//     return res.status(401).json({ message: "Not authorized, token failed" });
+//   }
+// });
+
 const agentProtect = asyncHandler(async (req, res, next) => {
   let token;
 
@@ -262,8 +297,45 @@ const agentProtect = asyncHandler(async (req, res, next) => {
       return res.status(401).json({ message: "Agent not found" });
     }
 
+    /* =====================================================
+       ✅ ENFORCEMENT CHECK
+    ===================================================== */
+
+    // 🔴 LEVEL 3 — PERMANENT BLOCK
+    if (agent.enforcementLevel === 3) {
+      return res.status(403).json({
+        message: "Your account has been permanently blocked. Contact lender."
+      });
+    }
+
+    // 🟠 LEVEL 2 — TEMPORARY SUSPENSION
+    if (agent.enforcementLevel === 2) {
+      const now = new Date();
+
+      if (agent.suspensionUntil && now < agent.suspensionUntil) {
+        return res.status(403).json({
+          message: `Account suspended until ${agent.suspensionUntil}`
+        });
+      }
+
+      // ✅ Auto restore after suspension expires
+      agent.enforcementLevel = 0;
+      agent.status = "Active";
+      agent.suspensionUntil = null;
+      await agent.save();
+    }
+
+    // 🟡 LEVEL 1 — WARNING (Allow login but attach warning)
+    if (agent.enforcementLevel === 1) {
+      req.warning = {
+        message: "Warning issued by lender",
+        reason: agent.warningReason
+      };
+    }
+
     req.agent = agent;
     next();
+
   } catch (error) {
     console.error("Agent auth error:", error.message);
     return res.status(401).json({ message: "Not authorized, token failed" });
