@@ -1,7 +1,7 @@
 /*************************************************
  * GLOBAL ERROR SAFETY NET
  *************************************************/
-const morgan = require("morgan");
+
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -14,7 +14,6 @@ process.on("unhandledRejection", (err) => {
  * BASE SETUP
  *************************************************/
 const express = require("express");
-app.use(morgan(":remote-addr :method :url :status :response-time ms"));
 const cors = require("cors");
 
 const connectDB = require("./config/db");
@@ -67,7 +66,7 @@ app.use(sanitizeAll);
 app.get("/", (_req, res) => {
   res.status(200).json({
     status: "healthy",
-    service: "IZI Finance Backend !",
+    service: "IZI Finance Backend...!",
     timestamp: new Date().toISOString(),
   });
 });
