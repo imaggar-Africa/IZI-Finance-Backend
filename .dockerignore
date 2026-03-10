@@ -1,0 +1,8 @@
+node_modules
+.git
+.gitignore
+uploads
+scripts
+*.log
+.env
+functions/node_modules

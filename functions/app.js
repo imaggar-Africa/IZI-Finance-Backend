@@ -1,6 +1,7 @@
 /*************************************************
  * GLOBAL ERROR SAFETY NET
  *************************************************/
+
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -65,7 +66,7 @@ app.use(sanitizeAll);
 app.get("/", (_req, res) => {
   res.status(200).json({
     status: "healthy",
-    service: "IZI Finance Backend",
+    service: "IZI Finance Backend..!",
     timestamp: new Date().toISOString(),
   });
 });
