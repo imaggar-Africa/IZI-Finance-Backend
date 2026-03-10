@@ -1,5 +1,5 @@
-node_modules/
-
-"config/*.json" 
-"config/travelpay-backend-firebase-adminsdk-*.json" 
-"config/travelpay-backend-firebase-adminsdk-*.json" 
+node_modules
+.env
+*.pem
+*.txt
+uploads
