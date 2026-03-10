@@ -62,62 +62,58 @@ exports.createAgentGroup = async (req, res) => {
 exports.addMemberByAgent = async (req, res) => {
   try {
     const { groupId, borrowerId } = req.body;
+ 
+    const borrowerIds = Array.isArray(borrowerId)
+      ? borrowerId
+      : [borrowerId];
 
-    /* ===============================
-       1️⃣ VALIDATE BORROWER
-    =============================== */
-    const borrower = await Customer.findById(borrowerId);
-    if (!borrower) {
-      return res.status(404).json({ message: "Borrower not found" });
-    }
+    const addedMembers = [];
 
-    /* ===============================
-       2️⃣ PREVENT DUPLICATE
-    =============================== */
-    const exists = await GroupMember.findOne({ groupId, borrowerId });
-    if (exists) {
-      return res.status(400).json({
-        message: "Customer already exists in this group"
+    for (const id of borrowerIds) {
+
+      const borrower = await Customer.findById(id);
+      if (!borrower) continue;
+
+      const exists = await GroupMember.findOne({ groupId, borrowerId: id });
+      if (exists) continue;
+
+      const member = await GroupMember.create({
+        groupId,
+        borrowerId: id
       });
-    }
 
-    /* ===============================
-       3️⃣ ADD MEMBER
-    =============================== */
-    const member = await GroupMember.create({ groupId, borrowerId });
+      addedMembers.push(member);
 
-    /* ===============================
-       4️⃣ SEND SMS AFTER ADD
-    =============================== */
-    const group = await Group.findById(groupId)
-      .populate("lenderId", "name");
+      const group = await Group.findById(groupId)
+        .populate("lenderId", "name");
 
-    const members = await GroupMember.find({ groupId })
-      .populate("borrowerId", "fullName")
-      .limit(10);
+      const members = await GroupMember.find({ groupId })
+        .populate("borrowerId", "fullName")
+        .limit(10);
 
-    const memberNames = members
-      .filter(m => m.borrowerId)
-      .map(m => m.borrowerId.fullName?.split(" ")[0])
-      .join(", ");
+      const memberNames = members
+        .filter(m => m.borrowerId)
+        .map(m => m.borrowerId.fullName?.split(" ")[0])
+        .join(", ");
 
-    const adminName = group?.lenderId?.name || "Group Admin";
+      const adminName = group?.lenderId?.name || "Group Admin";
 
-    const message = `You have been added to the ${group.name} Group.
+      const message = `You have been added to the ${group.name} Group.
 
 Admin: ${adminName}
 Total Members: ${members.length}
 Members: ${memberNames}`;
 
-    await sendSMS(borrower.phone, message);
+      await sendSMS(borrower.phone, message);
+    }
 
     /* ===============================
        5️⃣ RESPONSE
     =============================== */
     res.json({
-      success: true,
-      member
-    });
+  success: true,
+  members: addedMembers
+});
 
   } catch (error) {
     // ✅ Handle DB duplicate safely
