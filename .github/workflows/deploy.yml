@@ -19,7 +19,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build image
-        run: docker build -t dockerimaggar/izi-backend .
+        run: docker build -t dockerimaggar/izi-backend:latest .
 
       - name: Push image
         run: docker push dockerimaggar/izi-backend:latest
