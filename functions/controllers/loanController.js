@@ -1287,7 +1287,9 @@ exports.getAllLoanRequests = async (req, res) => {
 
     // 🔥 If first-time borrower → merge borrower details into loan
     if (isFirstLoan) {
-      Object.assign(loan._doc, borrower.toObject());
+      const borrowerData = borrower.toObject();
+      delete borrowerData._id; // Prevent overwriting loan ID
+      Object.assign(loan._doc, borrowerData);
     }
   });
 
@@ -1534,7 +1536,7 @@ exports.reviewLoanRequest = async (req, res) => {
   try {
     const { loanId, action } = req.body;
     const lenderId = req.user._id;
-
+    console.log("loan id ", loanId)
     if (!loanId || !action) {
       throw new Error("loanId and action are required");
     }
@@ -1965,4 +1967,328 @@ Thank you.
   }
 };
 
+/* =====================================================
+   Agent Loan History (Activity Feed)
+===================================================== */
+exports.getAgentLoanHistory = async (req, res) => {
+  try {
+    const agentId = req.user._id;
+    const loans = await Loan.find({
+      requestedByAgentId: agentId
+    })
+      .populate("borrowerId", "fullName phone email") // Customer details
+      .populate("lenderId", "name phone")   // Lender (User) details
+      .lean();
+
+    if (!loans.length) {
+      return res.status(200).json({
+        success: true,
+        message: "No loan history found for this agent",
+        totalActivities: 0,
+        activities: []
+      });
+    }
+
+    let activities = [];
+
+    loans.forEach(loan => {
+      const borrower = loan.borrowerId || {};
+      const baseActivity = {
+        loanId: loan._id,
+        borrowerName: loan.fullName || borrower.fullName,
+        amount: loan.amount, // original loan amount
+        loanStatus: loan.status,
+        requestStatus: loan.loanRequestStatus,
+      };
+
+      // 1. loan_requested
+      if (loan.createdAt) {
+        activities.push({ ...baseActivity, type: "loan_requested", date: loan.createdAt, description: "Loan requested" });
+      }
+
+      // 2. loan_approved & 4. loan_issued
+      if (loan.loanRequestStatus === "approved") {
+        activities.push({ ...baseActivity, type: "loan_approved", date: loan.issueDate || loan.createdAt, description: "Loan approved" });
+
+        // If approved and active/fully paid/overdue, it means it was issued successfully by M-Pesa.
+        if (["active", "fully paid", "overdue"].includes(loan.status)) {
+          activities.push({ ...baseActivity, type: "loan_issued", date: loan.issueDate || loan.createdAt, description: "Loan successfully issued to borrower" });
+        }
+      }
+
+      // 3. loan_rejected
+      if (loan.loanRequestStatus === "rejected") {
+        activities.push({ ...baseActivity, type: "loan_rejected", date: loan.updatedAt, description: "Loan rejected" });
+      }
+
+      // 5. repayment_made
+      if (loan.repayments && loan.repayments.length > 0) {
+        loan.repayments.forEach(rep => {
+          activities.push({
+            ...baseActivity,
+            type: "repayment_made",
+            date: rep.date,
+            repaymentAmount: rep.amount,
+            description: `Repayment of KES ${rep.amount} made`
+          });
+        });
+      }
+
+      // 6. loan_completed
+      if (loan.status === "fully paid") {
+        activities.push({ ...baseActivity, type: "loan_completed", date: loan.updatedAt, description: "Loan fully paid" });
+      }
+
+      // 7. loan_defaulted
+      if (loan.isDefaulted) {
+        // fallback to dueDate or updatedAt if no precise default timestamp
+        activities.push({ ...baseActivity, type: "loan_defaulted", date: loan.dueDate, description: "Loan defaulted" });
+      }
+
+      // 8. reminder_sent
+      if (loan.lastReminderSent) {
+        activities.push({ ...baseActivity, type: "reminder_sent", date: loan.lastReminderSent, description: "Reminder sent to borrower" });
+      }
+    });
+
+    // Sort activities from newest to oldest
+    activities.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return res.status(200).json({
+      success: true,
+      totalActivities: activities.length,
+      activities
+    });
+
+  } catch (error) {
+    console.error("❌ getAgentLoanHistory error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch agent loan history"
+    });
+  }
+};
+
+
+/* =====================================================
+   12️⃣ BORROWER → REQUEST LOAN FROM AGENT
+===================================================== */
+exports.borrowerRequestLoan = async (req, res) => {
+  try {
+    const borrowerId = req.borrower._id;
+    const { amount } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: "Valid loan amount is required" });
+    }
+
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) return res.status(404).json({ message: "Borrower not found" });
+
+    // 1️⃣ Blocked Check
+    if (borrower.is_blocked) {
+      return res.status(403).json({
+        message: "Your account is currently blocked. Please contact support.",
+        reason: borrower.block_reason
+      });
+    }
+
+    // 2️⃣ Verification Check
+    if (!borrower.isVerified) {
+      return res.status(403).json({
+        message: "Your account is not verified. Please complete your profile to request a loan."
+      });
+    }
+
+    // 3️⃣ Credit Score & Eligibility Check
+    let repaymentRatio = 1;
+    const lastLoan = await Loan.findOne({
+      borrowerId: borrower._id,
+      status: "fully paid"
+    }).sort({ createdAt: -1 });
+
+    if (lastLoan && lastLoan.totalRepayment > 0) {
+      repaymentRatio = lastLoan.repaidAmount / lastLoan.totalRepayment;
+    }
+
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore: borrower.creditScore || 500,
+      requestedAmount: amount,
+      borrower,
+      repaymentRatio
+    });
+
+    if (!eligibility.allowed) {
+      return res.status(400).json({
+        message: eligibility.reason || `Requested amount KES ${amount} exceeds your current limit.`,
+        approvedAmount: eligibility.approvedAmount
+      });
+    }
+
+    const agentId = borrower.assignedAgent || borrower.agentId;
+    if (!agentId) {
+      return res.status(400).json({ message: "You don't have an assigned agent. Please contact support." });
+    }
+
+    const agent = await AgentModel.findById(agentId);
+    if (!agent) return res.status(404).json({ message: "Assigned agent not found" });
+
+    // 4️⃣ Outstanding Loan Check (Ensuring all previous loans are fully paid)
+    const existingLoan = await Loan.findOne({
+      borrowerId,
+      status: { $in: ["pending", "active", "overdue"] },
+      loanRequestStatus: { $nin: ["rejected", "agent_rejected"] }
+    });
+
+    if (existingLoan) {
+      return res.status(400).json({
+        message: "You cannot request a new loan until your current loan is fully paid or your pending request is processed.",
+        status: existingLoan.status,
+        requestStatus: existingLoan.loanRequestStatus
+      });
+    }
+
+    const loan = await Loan.create({
+      lenderId: agent.lenderId, // Placeholder, will be confirmed by Agent
+      borrowerId,
+      requestedByAgentId: agentId,
+      fullName: borrower.fullName,
+      phoneNumber: borrower.phone,
+      amount,
+      status: "pending",
+      loanRequestStatus: "borrower_pending"
+    });
+
+    // Notify Agent
+    await Notification.create({
+      userId: agent._id,
+      userModel: "Agent",
+      title: "New Loan Request from Borrower",
+      message: `${borrower.fullName} has requested a loan of KES ${amount}. Review the request.`,
+      type: "loan"
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Loan request sent to your agent successfully.",
+      loan
+    });
+
+  } catch (error) {
+    console.error("❌ borrowerRequestLoan error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/* =====================================================
+   13️⃣ AGENT → GET BORROWER LOAN REQUESTS
+===================================================== */
+exports.getBorrowerLoanRequests = async (req, res) => {
+  try {
+    const agentId = req.user._id;
+
+    const requests = await Loan.find({
+      requestedByAgentId: agentId,
+      loanRequestStatus: "borrower_pending"
+    }).populate("borrowerId", "fullName phone email creditScore");
+
+    return res.status(200).json({
+      success: true,
+      requests
+    });
+
+  } catch (error) {
+    console.error("❌ getBorrowerLoanRequests error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/* =====================================================
+   14️⃣ AGENT → ACTION ON BORROWER REQUEST
+===================================================== */
+exports.agentActionOnBorrowerRequest = async (req, res) => {
+  try {
+    const agentId = req.user._id;
+    const { loanId, action, rejectReason, totalInterest, duration, repaymentPlan } = req.body;
+
+    if (!loanId || !action) {
+      return res.status(400).json({ message: "loanId and action are required" });
+    }
+
+    const loan = await Loan.findById(loanId).populate("borrowerId");
+    if (!loan) return res.status(404).json({ message: "Loan request not found" });
+
+    if (loan.requestedByAgentId.toString() !== agentId.toString()) {
+      return res.status(403).json({ message: "Unauthorized action" });
+    }
+
+    if (loan.loanRequestStatus !== "borrower_pending") {
+      return res.status(400).json({ message: `Request is already ${loan.loanRequestStatus}` });
+    }
+
+    if (action === "rejected") {
+      loan.loanRequestStatus = "agent_rejected";
+      loan.rejectReason = rejectReason || "Rejected by agent";
+      await loan.save();
+
+      // Notify Borrower
+      await Notification.create({
+        userId: loan.borrowerId?._id,
+        userModel: "Customer",
+        title: "Loan Request Rejected",
+        message: `Your loan request for KES ${loan.amount} was rejected by your agent. Reason: ${loan.rejectReason}`,
+        type: "loan_rejected"
+      });
+
+      return res.status(200).json({ success: true, message: "Loan request rejected." });
+    }
+
+    if (action === "approved") {
+      if (!totalInterest || !duration || !repaymentPlan) {
+        return res.status(400).json({ message: "Interest, duration and repayment plan are required for approval" });
+      }
+
+      const totalRepayment = parseFloat(loan.amount) + parseFloat(totalInterest);
+      const dailyRepayment = totalRepayment / duration; // Simplified, assuming daily for calculation reference
+
+      loan.interest = totalInterest;
+      loan.duration = duration;
+      loan.repaymentPlan = repaymentPlan;
+      loan.totalRepayment = totalRepayment;
+      loan.dailyRepayment = dailyRepayment;
+      loan.balance = totalRepayment;
+      loan.dueDate = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
+      loan.loanRequestStatus = "pending"; // Now visible to Lender
+      loan.billRefNumber = loan.borrowerId.idNumber;
+
+      await loan.save();
+
+      // Notify Lender
+      await Notification.create({
+        userId: loan.lenderId,
+        userModel: "User",
+        title: "New Loan Request (from Agent)",
+        message: `Agent ${req.user.name} has approved and forwarded a loan request for ${loan.fullName} of KES ${loan.amount}.`,
+        type: "loan"
+      });
+
+      // Notify Borrower
+      await Notification.create({
+        userId: loan.borrowerId?._id,
+        userModel: "Customer",
+        title: "Loan Request Updated",
+        message: `Your agent has reviewed and forwarded your loan request for KES ${loan.amount} to the lender.`,
+        type: "loan"
+      });
+
+      return res.status(200).json({ success: true, message: "Loan request approved and forwarded to lender.", loan });
+    }
+
+    return res.status(400).json({ message: "Invalid action" });
+
+  } catch (error) {
+    console.error("❌ agentActionOnBorrowerRequest error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 

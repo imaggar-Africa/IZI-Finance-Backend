@@ -6,25 +6,26 @@ const { protect, borrowerProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware");
 
 // Deposit money into wallet
-router.post("/deposit",protect, walletController.deposit);
+router.post("/deposit", protect, walletController.deposit);
 
 // Withdraw money from wallet
-router.post("/withdraw", protect,walletController.withdraw);
+router.post("/withdraw", protect, walletController.withdraw);
 
 // Send balance via SMS
 router.post("/send-balance-sms", walletController.sendBalanceSMS);
 
-router.post("/customer/deposit",borrowerProtect,walletController.depositSavings)
+router.post("/customer/deposit", borrowerProtect, walletController.depositSavings)
 
-router.post("/customer/withdraw",borrowerProtect,walletController.withdrawCustomerSavings)
+router.post("/customer/withdraw", borrowerProtect, walletController.withdrawCustomerSavings)
 
-router.post("/agent/withdraw",protect,
-  authorizeRoles("agent"),walletController.requestAgentWithdrawal)
+router.post("/agent/withdraw", protect,
+  authorizeRoles("agent"), walletController.requestAgentWithdrawal)
 
 
-router.post("/agent/review-withdraw",protect,
-  authorizeRoles("lender"),walletController.reviewAgentWithdrawRequest)
+router.post("/agent/review-withdraw", protect,
+  authorizeRoles("lender"), walletController.reviewAgentWithdrawRequest)
 
-  router.get("/agent-withdrawal", protect, walletController.getPendingWithdrawalsForLender);
-  
+router.get("/agent-withdrawal", protect, walletController.getPendingWithdrawalsForLender);
+
+router.get("/agent/history", protect, authorizeRoles("agent"), walletController.getAgentWalletHistory);
 module.exports = router; // Export the router

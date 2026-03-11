@@ -92,7 +92,7 @@ module.exports.evaluateLoanByCreditScore = ({
     return {
       allowed: requestedAmount <= starterLimit,
       approvedAmount: starterLimit,
-      reason: "Starter loan"
+      reason: "New customers are eligible for a starter loan up to KES 1,000. Please adjust the loan amount to proceed."
     };
   }
 

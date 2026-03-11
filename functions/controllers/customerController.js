@@ -722,7 +722,8 @@ exports.getBorrowerProfile = async (req, res) => {
 
 exports.getCustomersWithoutActiveLoans = async (req, res) => {
   try {
-    // 1. Find all borrowers who have active loans (these should be EXCLUDED)
+
+    // 1️⃣ Find borrowers who currently have active/pending loans
     const activeLoanBorrowerIds = await Loan.find({
       $or: [
         { status: "active" },
@@ -733,18 +734,53 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
       ]
     }).distinct("borrowerId");
 
-    // 2. Find all borrowers who are NOT in the active loans list
+    // 2️⃣ Get borrowers without active loans
     const customersWithoutActiveLoans = await Borrower.find({
       _id: { $nin: activeLoanBorrowerIds }
     });
 
-    // 3. Attach Loan Details to Each Customer (these will only be non-active loans)
+    // 3️⃣ Attach Loan Details + Borrower Type
     const customersWithLoanDetails = await Promise.all(
       customersWithoutActiveLoans.map(async (customer) => {
-        const loanDetails = await Loan.find({ borrowerId: customer._id });
+
+        // Fetch all approved loans
+        const loans = await Loan.find({
+          borrowerId: customer._id,
+          loanRequestStatus: "approved"
+        }).sort({ issueDate: -1 });
+
+        const lastLoan = loans[0] || null;
+
+        // BLOCKLIST LOGIC
+        const hasOverdueLoan = loans.some(
+          (l) => l.status === "overdue" || l.isDefaulted === true
+        );
+
+        // REPEATED BORROWER LOGIC
+        const isRepeatedBorrower =
+          loans.length > 0 &&
+          lastLoan &&
+          lastLoan.status === "fully paid";
+
+        // BORROWER TYPE
+        let borrowerType = "NEW";
+        if (hasOverdueLoan) borrowerType = "BLOCKLISTED";
+        else if (isRepeatedBorrower) borrowerType = "REPEATED";
+
+        // CREDIT SCORE
+        const creditScore = lastLoan?.creditScoreAfter || 500;
+        const rating = Math.min(
+          5,
+          Math.max(0, Number((creditScore / 100).toFixed(1)))
+        );
+
         return {
           ...customer.toObject(),
-          loans: loanDetails
+          loans,
+          lastLoanAmount: lastLoan ? lastLoan.amount : 0,
+          borrowerType,
+          isBlocked: borrowerType === "BLOCKLISTED",
+          rating
         };
       })
     );
