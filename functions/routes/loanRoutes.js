@@ -8,7 +8,7 @@ const loanRestriction = require("../middleware/loanRestriction");
 
 2
 // Issue loan
-router.post("/issue", protect,loanRestriction, loanController.issueLoan);
+router.post("/issue", protect, loanRestriction, loanController.issueLoan);
 
 // Outstanding loans (borrower)
 router.post(
@@ -47,7 +47,7 @@ router.get(
 router.get(
   "/outstanding/:borrowerId",
   protect,
-  authorizeRoles("lender","agent"),
+  authorizeRoles("lender", "agent"),
   loanController.getLoansByBorrower
 );
 
@@ -91,6 +91,39 @@ router.get(
   loanController.getActiveLoansByAgent
 );
 
+// Agent → loan history
+router.get(
+  "/history",
+  protect,
+  authorizeRoles("agent"),
+  loanController.getAgentLoanHistory
+);
+
+// --- NEW Borrower-Agent-Lender Flow ---
+
+// Borrower → request loan from agent
+router.post(
+  "/borrower/request",
+  borrowerProtect,
+  loanController.borrowerRequestLoan
+);
+
+// Agent → view borrower requests
+router.get(
+  "/agent/borrower-requests",
+  protect,
+  authorizeRoles("agent"),
+  loanController.getBorrowerLoanRequests
+);
+
+// Agent → approve/reject borrower request
+router.post(
+  "/agent/borrower-action",
+  protect,
+  authorizeRoles("agent"),
+  loanController.agentActionOnBorrowerRequest
+);
+
 // Get payment instructions (QR / Pay link)
 router.get(
   "/pay/:loanId",
@@ -103,7 +136,7 @@ router.get(
   "/customer-statement/:borrowerId",
   protect,
   authorizeRoles("lender"),
-loanController.getCustomerStatement
+  loanController.getCustomerStatement
 );
 
 router.post(

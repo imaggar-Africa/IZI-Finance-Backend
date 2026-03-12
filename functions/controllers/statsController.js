@@ -2,9 +2,25 @@ const Stats = require('../models/Stats');
 const Loan = require("../models/Loan");
 const PDFDocument = require("pdfkit");
 const Customer = require("../models/customer");
+const path = require("path");
+const fs = require("fs");
+const logoPath = path.join(__dirname, "../assets/izi-logo.png");
 
 
 
+function maskPhone(phone) {
+
+  if (!phone) return "N/A";
+
+  const str = phone.toString();
+
+  if (str.length <= 6) return str;
+
+  const start = str.slice(0, 6);
+  const end = str.slice(-2);
+
+  return start + "****" + end;
+}
 
 const buildLoanFilter = (filters) => {
   const query = {
@@ -553,17 +569,18 @@ const loans = await Loan.find({
 
 exports.downloadStatsPDF = async (req, res) => {
   try {
+
     const { fromDate, toDate } = req.query;
     const now = new Date();
-
-    /* ================= DATE FILTER ================= */
     const lenderId = req.user._id;
 
-const loanFilter = {
-  loanRequestStatus: "approved",
-  lenderId: lenderId
-};
-
+    const loanFilter = {
+      loanRequestStatus: "approved",
+      lenderId: lenderId,
+      status: { $in: ["active", "fully paid", "overdue"] },
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true }
+    };
 
     if (fromDate || toDate) {
       loanFilter.createdAt = {};
@@ -571,11 +588,11 @@ const loanFilter = {
       if (toDate) loanFilter.createdAt.$lte = new Date(toDate);
     }
 
-    /* ================= FETCH LOANS ================= */
     const loans = await Loan.find(loanFilter)
       .populate("borrowerId", "fullName phone");
 
-    /* ================= CALCULATIONS ================= */
+    const loanDetails = loans.map(mapLoanDetail);
+
     let totalPrincipal = 0;
     let totalLoanAmount = 0;
     let totalCollected = 0;
@@ -584,23 +601,19 @@ const loanFilter = {
     let paidLoans = 0;
     let overdueLoans = 0;
 
-    loans.forEach((loan) => {
-      totalPrincipal += loan.amount || 0;
+    loanDetails.forEach((loan) => {
+
+      totalPrincipal += loan.principal || 0;
       totalLoanAmount += loan.totalRepayment || 0;
-      totalCollected += Array.isArray(loan.repayments)
-        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
-        : 0;
+      totalCollected += loan.collectedAmount || 0;
       outstanding += loan.balance || 0;
 
-      if (loan.balance > 0) {
-        activeLoans++;
-        if (new Date(loan.dueDate) < now) overdueLoans++;
-      } else {
-        paidLoans++;
-      }
+      if (loan.status === "Paid") paidLoans++;
+      else if (loan.status === "Overdue") overdueLoans++;
+      else if (loan.status === "Active") activeLoans++;
+
     });
 
-    /* ================= CREATE PDF ================= */
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -615,11 +628,29 @@ const loanFilter = {
 
     doc.pipe(res);
 
-    /* ================= TITLE ================= */
+    /* LOGO (ONLY ONCE) */
+
+    if (fs.existsSync(logoPath)) {
+
+      const logoWidth = 90;
+
+      doc.image(
+        logoPath,
+        (doc.page.width - logoWidth) / 2,
+        20,
+        { width: logoWidth }
+      );
+
+    }
+
+    doc.y = 120;
+
+    /* TITLE */
+
     doc.fontSize(18).text("Loan Report", { align: "center" });
-    doc.moveDown(0.5);
 
     if (fromDate || toDate) {
+
       doc.fontSize(10).text(
         `Period: ${
           fromDate ? new Date(fromDate).toDateString() : "Start"
@@ -628,29 +659,30 @@ const loanFilter = {
         }`,
         { align: "center" }
       );
+
     }
 
-    doc.moveDown(1);
+    /* SUMMARY */
 
-    /* ================= OVERALL SUMMARY ================= */
-    doc.fontSize(14).text("Overall Summary", { underline: true });
     doc.moveDown(0.5);
 
+    doc.fontSize(14).text("Overall Summary", { underline: true });
+
     doc.fontSize(10);
-    doc.text(`Total Loans           : ${loans.length}`);
+
+    doc.text(`Total Loans           : ${loanDetails.length}`);
     doc.text(`Total Principal       : KES ${totalPrincipal}`);
     doc.text(`Total Loan Amount     : KES ${totalLoanAmount}`);
     doc.text(`Total Collected       : KES ${totalCollected}`);
-    doc.text(`Outstanding Amount   : KES ${outstanding}`);
+    doc.text(`Outstanding Amount    : KES ${outstanding}`);
     doc.text(`Active Loans          : ${activeLoans}`);
     doc.text(`Paid Loans            : ${paidLoans}`);
     doc.text(`Overdue Loans         : ${overdueLoans}`);
 
-    doc.moveDown(1.5);
+    /* TABLE START (NO EXTRA SPACE) */
 
-    /* ================= TABLE ================= */
     const rowHeight = 18;
-    let y = doc.y;
+    let y = doc.y + 5;
 
     const col = {
       sn: 30,
@@ -681,59 +713,70 @@ const loanFilter = {
     ]);
 
     y += rowHeight;
+
     doc.font("Helvetica");
 
-    loans.forEach((loan, index) => {
-      const collected = Array.isArray(loan.repayments)
-        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
-        : 0;
+    loanDetails.forEach((loan, index) => {
 
-      let status = "Paid";
-      if (loan.balance > 0 && new Date(loan.dueDate) < now) status = "Overdue";
-      else if (loan.balance > 0) status = "Active";
+  // PAGE SPACE CHECK FIRST
+  if (y + rowHeight > doc.page.height - 40) {
 
-      drawRow(doc, y, col, [
-        index + 1,
-        loan.borrowerId?.fullName || "N/A",
-        loan.borrowerId?.phone || "N/A",
-        loan.amount,
-        loan.totalRepayment,
-        collected,
-        loan.balance,
-        new Date(loan.createdAt).toDateString(),
-        new Date(loan.dueDate).toDateString(),
-        status
-      ]);
-
-      y += rowHeight;
-
-      if (y > doc.page.height - 40) {
-        doc.addPage({ layout: "landscape", margin: 30 });
-        y = 40;
-
-        doc.fontSize(8).font("Helvetica-Bold");
-        drawRow(doc, y, col, [
-          "#",
-          "Borrower",
-          "Phone",
-          "Principal",
-          "Total",
-          "Collected",
-          "Balance",
-          "Issue Date",
-          "Due Date",
-          "Status"
-        ]);
-        y += rowHeight;
-        doc.font("Helvetica");
-      }
+    doc.addPage({
+      size: "A4",
+      layout: "landscape",
+      margin: 30
     });
+
+    y = 40;
+
+    doc.fontSize(8).font("Helvetica-Bold");
+
+    drawRow(doc, y, col, [
+      "#",
+      "Borrower",
+      "Phone",
+      "Principal",
+      "Total",
+      "Collected",
+      "Balance",
+      "Issue Date",
+      "Due Date",
+      "Status"
+    ]);
+
+    y += rowHeight;
+
+    doc.font("Helvetica");
+  }
+
+  // NOW DRAW ROW
+  drawRow(doc, y, col, [
+    index + 1,
+    loan.borrower,
+     maskPhone(loan.phone),
+    loan.principal,
+    loan.totalRepayment,
+    loan.collectedAmount,
+    loan.balance,
+    new Date(loan.issueDate).toDateString(),
+    new Date(loan.dueDate).toDateString(),
+    loan.status
+  ]);
+
+  y += rowHeight;
+
+});
 
     doc.end();
 
   } catch (error) {
+
     console.error("PDF download error:", error);
-    res.status(500).json({ message: "Failed to generate PDF" });
+
+    res.status(500).json({
+      message: "Failed to generate PDF"
+    });
+
   }
 };
 
@@ -765,39 +808,76 @@ function drawRow(doc, y, col, row) {
 
 exports.downloadFullOverallReportPDF = async (req, res) => {
   try {
+
     const now = new Date();
+    const lenderId = req.user._id;
 
     /* ================= FETCH DATA ================= */
-   const lenderId = req.user._id;
 
-const loans = await Loan.find({
-  loanRequestStatus: "approved",
-  lenderId: lenderId
-}).populate("borrowerId", "fullName phone");
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      lenderId: lenderId,
+      status: { $in: ["active", "fully paid", "overdue"] },
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true }
+    }).populate("borrowerId", "fullName phone");
 
+    const customers = await Customer.find({
+      isDeleted: { $ne: true }
+    });
 
-    const customers = await Customer.find({registeredBy: lenderId});
+    /* ================= CORRECT FINANCIAL LOGIC ================= */
 
-    /* ================= CALCULATIONS ================= */
     let totalPrincipal = 0;
-    let totalRepayment = 0;
+    let totalLoanAmount = 0;
     let totalCollected = 0;
     let totalOutstanding = 0;
 
-    loans.forEach((loan) => {
-      totalPrincipal += loan.amount || 0;
-      totalRepayment += loan.totalRepayment || 0;
-      totalOutstanding += loan.balance || 0;
+    let activeLoans = 0;
+    let overdueLoans = 0;
+    let paidLoans = 0;
 
-      if (Array.isArray(loan.repayments)) {
-        totalCollected += loan.repayments.reduce(
-          (s, r) => s + (r.amount || 0),
-          0
-        );
+    loans.forEach((loan) => {
+
+      const principal = loan.amount || 0;
+      const total = loan.totalRepayment || 0;
+      const balance = loan.balance || 0;
+
+      const collected = Array.isArray(loan.repayments)
+        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+        : 0;
+
+      totalPrincipal += principal;
+      totalLoanAmount += total;
+      totalCollected += collected;
+      totalOutstanding += balance;
+
+      if (balance === 0) {
+
+        paidLoans++;
+
       }
+      else if (
+        balance > 0 &&
+        loan.dueDate &&
+        new Date(loan.dueDate) < now
+      ) {
+
+        overdueLoans++;
+
+      }
+      else if (balance > 0) {
+
+        activeLoans++;
+
+      }
+
     });
 
+    const loanDetails = loans.map(mapLoanDetail);
+
     /* ================= CREATE PDF ================= */
+
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -812,99 +892,126 @@ const loans = await Loan.find({
 
     doc.pipe(res);
 
-    /* =======================================================
-       1️⃣ TITLE
-    ======================================================= */
+    /* ================= LOGO ================= */
+
+    if (fs.existsSync(logoPath)) {
+
+      const logoWidth = 90;
+
+      doc.image(
+        logoPath,
+        (doc.page.width - logoWidth) / 2,
+        20,
+        { width: logoWidth }
+      );
+
+    }
+
+    doc.y = 120;
+
+    /* ================= TITLE ================= */
+
     doc.fontSize(18).text("Overall System Report", { align: "center" });
-    doc.moveDown();
 
-    doc.fontSize(10).text(`Generated On: ${now.toDateString()}`, {
-      align: "center"
-    });
+    doc.moveDown(0.5);
 
-    doc.moveDown(2);
+    doc.fontSize(10).text(
+      `Generated On: ${now.toDateString()}`,
+      { align: "center" }
+    );
 
-    /* =======================================================
-       2️⃣ OVERALL SUMMARY
-    ======================================================= */
+    doc.moveDown(1);
+
+    /* ================= FINANCIAL SUMMARY ================= */
+
     doc.fontSize(14).text("Overall Financial Summary", { underline: true });
+
     doc.moveDown(0.5);
 
     doc.fontSize(10);
+
     doc.text(`Total Customers       : ${customers.length}`);
     doc.text(`Total Loans Issued    : ${loans.length}`);
     doc.text(`Total Principal       : KES ${totalPrincipal}`);
-    doc.text(`Total Repayment       : KES ${totalRepayment}`);
+    doc.text(`Total Loan Amount     : KES ${totalLoanAmount}`);
     doc.text(`Total Collected       : KES ${totalCollected}`);
     doc.text(`Total Outstanding     : KES ${totalOutstanding}`);
+    doc.text(`Active Loans          : ${activeLoans}`);
+    doc.text(`Paid Loans            : ${paidLoans}`);
+    doc.text(`Overdue Loans         : ${overdueLoans}`);
 
-    doc.addPage({ layout: "landscape", margin: 30 });
+    /* ================= CUSTOMER DETAILS ================= */
 
-    /* =======================================================
-       3️⃣ CUSTOMER DETAILS TABLE
-    ======================================================= */
+    doc.addPage();
+
     doc.fontSize(14).text("Customer Details", { underline: true });
-    doc.moveDown();
+
+    doc.moveDown(0.5);
 
     customers.forEach((customer, index) => {
+
       doc.fontSize(9).text(
-        `${index + 1}. ${customer.fullName} | ${customer.phone} | ${customer.email} | ${customer.physicalAddress}`
+        `${index + 1}. ${customer.fullName} | ${maskPhone(customer.phone)} | ${customer.email || "N/A"} | ${customer.physicalAddress || "N/A"}`
       );
+
     });
 
-    doc.addPage({ layout: "landscape", margin: 30 });
+    /* ================= LOAN DETAILS ================= */
 
-    /* =======================================================
-       4️⃣ LOAN DETAILS TABLE
-    ======================================================= */
+    doc.addPage();
+
     doc.fontSize(14).text("Loan Details", { underline: true });
-    doc.moveDown();
 
-    loans.forEach((loan, index) => {
-      const collected = Array.isArray(loan.repayments)
-        ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
-        : 0;
+    doc.moveDown(0.5);
 
-      let status = "Paid";
-      if (loan.balance > 0 && new Date(loan.dueDate) < now)
-        status = "Overdue";
-      else if (loan.balance > 0)
-        status = "Active";
+    loanDetails.forEach((loan, index) => {
 
       doc.fontSize(9).text(
-        `${index + 1}. ${loan.borrowerId?.fullName || "N/A"} | Principal: ${
-          loan.amount
-        } | Total: ${loan.totalRepayment} | Collected: ${collected} | Balance: ${
-          loan.balance
-        } | Status: ${status}`
+        `${index + 1}. ${loan.borrower} | Phone: ${maskPhone(loan.phone)} | Principal: ${
+          loan.principal
+        } | Total: ${loan.totalRepayment} | Collected: ${
+          loan.collectedAmount
+        } | Balance: ${loan.balance} | Status: ${loan.status}`
       );
+
     });
 
-    doc.addPage({ layout: "landscape", margin: 30 });
+    /* ================= REPAYMENT DETAILS ================= */
 
-    /* =======================================================
-       5️⃣ REPAYMENT DETAILS
-    ======================================================= */
+    doc.addPage();
+
     doc.fontSize(14).text("Repayment Details", { underline: true });
-    doc.moveDown();
+
+    doc.moveDown(0.5);
 
     loans.forEach((loan) => {
+
       if (Array.isArray(loan.repayments)) {
+
         loan.repayments.forEach((repayment) => {
+
           doc.fontSize(9).text(
-            `${loan.borrowerId?.fullName || "N/A"} | ${
+            `${loan.borrowerId?.fullName || "N/A"} | ${new Date(
               repayment.date
-            } | Amount: ${repayment.amount}`
+            ).toDateString()} | Amount: ${repayment.amount}`
           );
+
         });
+
       }
+
     });
 
     doc.end();
 
   } catch (error) {
+
     console.error("Full report PDF error:", error);
-    res.status(500).json({ message: "Failed to generate full report" });
+
+    res.status(500).json({
+      message: "Failed to generate full report"
+    });
+
   }
 };
 

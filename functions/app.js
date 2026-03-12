@@ -1,6 +1,11 @@
+
+
+
+
 /*************************************************
  * GLOBAL ERROR SAFETY NET
  *************************************************/
+
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -14,6 +19,7 @@ process.on("unhandledRejection", (err) => {
  *************************************************/
 const express = require("express");
 const cors = require("cors");
+const morgan = require("morgan"); // ✅ Morgan logger
 
 const connectDB = require("./config/db");
 const { ensureRedis } = require("./utils/redis");
@@ -38,6 +44,7 @@ const {
   mongoSanitizeMiddleware,
   xssProtectionMiddleware,
 } = require("./middleware/securityMiddleware");
+
 const { sanitizeAll } = require("./middleware/sanitizationMiddleware");
 
 const app = express();
@@ -48,7 +55,22 @@ let initialized = false;
 /*************************************************
  * MIDDLEWARE (SAFE AT LOAD TIME)
  *************************************************/
+
 app.use(cors({ origin: true }));
+
+// ✅ Request Logger
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+} else {
+  app.use(
+    morgan("combined", {
+      stream: {
+        write: (message) => console.log(message.trim()),
+      },
+    })
+  );
+}
+
 app.use(helmetMiddleware);
 
 if (process.env.NODE_ENV !== "development") {
@@ -62,10 +84,11 @@ app.use(sanitizeAll);
 /*************************************************
  * HEALTH CHECKS (VERY IMPORTANT FOR CLOUD RUN)
  *************************************************/
+
 app.get("/", (_req, res) => {
   res.status(200).json({
     status: "healthy",
-    service: "IZI Finance Backend",
+    service: "IZI Finance Backend..!",
     timestamp: new Date().toISOString(),
   });
 });
@@ -84,6 +107,7 @@ app.get("/ping", (_req, res) => res.send("pong"));
 /*************************************************
  * INITIALIZATION (LAZY – RUNS ON FIRST REQUEST)
  *************************************************/
+
 async function initializeApp(secrets = {}) {
   if (initialized) return;
 
@@ -98,12 +122,12 @@ async function initializeApp(secrets = {}) {
     );
   } catch (err) {
     console.error("❌ Init error (non-fatal):", err);
-    // ❗ DO NOT throw — let Cloud Run stay healthy
   }
 
   // JWT Secrets
   process.env.JWT_ACCESS_SECRET =
     secrets.jwtAccessSecret || process.env.JWT_ACCESS_SECRET;
+
   process.env.JWT_REFRESH_SECRET =
     secrets.jwtRefreshSecret || process.env.JWT_REFRESH_SECRET;
 
@@ -117,12 +141,14 @@ async function initializeApp(secrets = {}) {
   /*************************************************
    * BODY PARSERS (ROUTE-SCOPED)
    *************************************************/
+
   const jsonParser = express.json({ limit: "10mb" });
   const urlEncodedParser = express.urlencoded({ extended: true });
 
   /*************************************************
    * ROUTES
    *************************************************/
+
   app.use("/api/customers", jsonParser, require("./routes/customerRoutes"));
   app.use("/api/guarantors", jsonParser, require("./routes/guarantorRoutes"));
   app.use("/api/next-of-kin", jsonParser, require("./routes/nextOfKinRoutes"));
@@ -131,6 +157,7 @@ async function initializeApp(secrets = {}) {
   app.use("/api/mpesa", jsonParser, require("./routes/mpesaCallbackRoutes"));
 
   app.use("/api/auth", authRateLimit, jsonParser, require("./routes/authRoutes"));
+
   app.use(
     "/api/auth/borrower",
     authRateLimit,
@@ -163,6 +190,7 @@ async function initializeApp(secrets = {}) {
   /*************************************************
    * ERROR HANDLING
    *************************************************/
+
   const {
     errorHandler,
     notFoundHandler,
@@ -178,6 +206,7 @@ async function initializeApp(secrets = {}) {
 /*************************************************
  * EXPORTS (FOR FIREBASE FUNCTIONS)
  *************************************************/
+
 module.exports = {
   app,
   initializeApp,

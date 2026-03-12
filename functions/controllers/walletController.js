@@ -9,6 +9,7 @@ const Notification = require("../models/Notification");
 const Profile = require("../models/Profile");
 const WithdrawRequest = require("../models/WithdrawRequest");
 const { getB2CCharge } = require("../utils/mpesaCharges");
+const AgentCommission = require("../models/AgentCommission");
 
 // Send balance via SMS
 exports.sendBalanceSMS = async (req, res) => {
@@ -133,10 +134,10 @@ exports.withdraw = async (req, res) => {
     if (user.walletBalance < withdrawalAmount) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ 
-        message: "Insufficient balance", 
+      return res.status(400).json({
+        message: "Insufficient balance",
         currentBalance: user.walletBalance,
-        requestedAmount: withdrawalAmount 
+        requestedAmount: withdrawalAmount
       });
     }
 
@@ -168,9 +169,9 @@ exports.withdraw = async (req, res) => {
 
     // --- LIVE ENVIRONMENT ONLY ---
     const normalizedPhone = user.phone.startsWith('+') ? user.phone : `+${user.phone}`;
-    
+
     console.log(`🚀 Initiating B2C payment to: ${normalizedPhone}, Amount: ${withdrawalAmount}`);
-    
+
     const b2cResponse = await initiateB2C(normalizedPhone, withdrawalAmount);
 
     if (!b2cResponse || !b2cResponse.OriginatorConversationID) {
@@ -180,7 +181,7 @@ exports.withdraw = async (req, res) => {
     // ✅ CRITICAL FIX: Save ALL relevant IDs for callback matching
     transaction.checkoutRequestID = b2cResponse.OriginatorConversationID;
     transaction.conversationID = b2cResponse.ConversationID;
-    
+
     await transaction.save({ session });
 
     await session.commitTransaction();
@@ -217,9 +218,9 @@ exports.withdraw = async (req, res) => {
     } finally {
       session.endSession();
     }
-    
+
     console.error("🔥 Withdrawal Error:", error);
-    
+
     // ✅ USER-FRIENDLY ERROR MESSAGES
     let errorMessage = "Error processing withdrawal";
     if (error.message.includes("insufficient balance")) {
@@ -229,10 +230,10 @@ exports.withdraw = async (req, res) => {
     } else if (error.message.includes("M-Pesa")) {
       errorMessage = "M-Pesa service temporarily unavailable";
     }
-    
-    res.status(500).json({ 
-      message: errorMessage, 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+
+    res.status(500).json({
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -386,7 +387,7 @@ exports.depositSavings = async (req, res) => {
       amount: Number(amount),
       status: "pending",
       phone: phoneNumber,
-      accountReference: accountRef, 
+      accountReference: accountRef,
       balanceBefore: borrower.savingsBalance,
       balanceAfter: borrower.savingsBalance
     });
@@ -696,9 +697,9 @@ exports.requestAgentWithdrawal = async (req, res) => {
       status: "pending",
     });
 
-       /* ===============================
-       2️⃣ CREATE LENDER NOTIFICATION
-    =============================== */
+    /* ===============================
+    2️⃣ CREATE LENDER NOTIFICATION
+ =============================== */
     await Notification.create({
       userId: agent.lenderId,        // ✅ LENDER USER ID
       userModel: "User",
@@ -890,5 +891,80 @@ exports.getPendingWithdrawalsForLender = async (req, res) => {
   } catch (error) {
     console.error("Get pending withdrawals error:", error);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+/* =====================================================
+   Agent Wallet History
+===================================================== */
+exports.getAgentWalletHistory = async (req, res) => {
+  try {
+    const agentId = req.user ? req.user._id : (req.agent && req.agent._id);
+
+    if (!agentId) {
+      return res.status(401).json({ success: false, message: "Unauthorized: Agent ID not found" });
+    }
+    const withdrawals = await WithdrawRequest.find({ agentId }).lean() || [];
+    const commissions = await AgentCommission.find({ agentId }).populate("loanId", "amount status").lean() || [];
+
+    let activities = [];
+
+    // Map withdrawals
+    withdrawals.forEach(w => {
+      activities.push({
+        id: w._id,
+        type: `agent_withdrawal_${w.status}`,
+        amount: w.amount,
+        status: w.status,
+        date: w.createdAt,
+        updatedAt: w.updatedAt,
+        description: `Withdrawal request of KES ${w.amount} (${w.status})`
+      });
+    });
+
+    // Map commissions
+    commissions.forEach(c => {
+      activities.push({
+        id: c._id,
+        type: "commission_earned",
+        amount: c.amount,
+        status: c.status,
+        date: c.createdAt,
+        loanId: c.loanId ? c.loanId._id : null,
+        description: `Commission earned: KES ${c.amount}`
+      });
+    });
+
+    const transactions = await Transaction.find({ userId: agentId }).lean() || [];
+    transactions.forEach(t => {
+      activities.push({
+        id: t._id,
+        type: t.type,
+        amount: t.amount,
+        status: t.status,
+        date: t.createdAt,
+        balanceAfter: t.balanceAfter,
+        description: `Wallet transaction: ${t.type} of KES ${t.amount}`
+      });
+    });
+
+    activities.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const AgentModel = require("../models/AgentModel");
+    const agent = await AgentModel.findById(agentId);
+
+    return res.status(200).json({
+      success: true,
+      currentBalance: agent ? agent.walletBalance : 0,
+      totalActivities: activities.length,
+      activities
+    });
+
+  } catch (error) {
+    console.error("❌ getAgentWalletHistory error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch agent wallet history"
+    });
   }
 };
