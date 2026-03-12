@@ -25,7 +25,7 @@ router.get("/eligible-loan",protect,customerController.getCustomersWithoutActive
 router.post(
   "/register",
   protect,
-  authorizeRoles("lender"),
+  authorizeRoles("lender","agent"),
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
     { name: "backID", maxCount: 1 },
