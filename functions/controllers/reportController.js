@@ -497,155 +497,123 @@ exports.getLoansReport = async (req, res) => {
 =========================== */
 exports.getRepaymentsReport = async (req, res) => {
   try {
-    const lenderId = req.user._id; // multi-tenant safe
-    const { startDate, endDate } = req.query;
+    const lenderId = req.user._id;
+    const { startDate, endDate, region, agentId, loanProduct } = req.query;
 
-    const query = {
+    const baseFilter = {
       lenderId: new mongoose.Types.ObjectId(lenderId),
+      loanRequestStatus: "approved",
       status: { $in: ["active", "overdue", "fully paid"] },
-      loanRequestStatus: "approved"
+      isDeleted: { $ne: true }
     };
 
+    // Period filtering based on due date for "Expected" perspective
+    // or updated at for "Action" perspective. We'll use dueDate for expectations.
     if (startDate || endDate) {
-      query.updatedAt = {}; // Assuming 'updatedAt' reflects changes in loan status/repayments
-      if (startDate) query.updatedAt.$gte = new Date(startDate);
-      if (endDate) query.updatedAt.$lte = new Date(endDate);
+      baseFilter.dueDate = {};
+      if (startDate) baseFilter.dueDate.$gte = new Date(startDate);
+      if (endDate) baseFilter.dueDate.$lte = new Date(endDate);
     }
 
-    const loans = await Loan.find(query);
+    if (agentId) baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(agentId);
+    if (loanProduct) baseFilter.productType = loanProduct;
+
+    const loans = await Loan.find(baseFilter)
+      .populate("borrowerId", "fullName town region")
+      .populate("requestedByAgentId", "name");
+
+    // Optional Region Filter (Post-fetch if not aggregate joined)
+    let filteredLoans = loans;
+    if (region) {
+      filteredLoans = loans.filter(l => l.borrowerId?.town === region || l.borrowerId?.region === region);
+    }
+
+    const today = new Date();
 
     /* =====================================================
-       1️⃣ BASIC COLLECTION PERFORMANCE
+       1️⃣ COLLECTION PERFORMANCE
     ===================================================== */
+    const totalExpectedRepayments = filteredLoans.reduce((sum, l) => sum + (l.totalRepayment || 0), 0);
+    const totalCollected = filteredLoans.reduce((sum, l) => sum + (l.repaidAmount || 0), 0);
+    const collectionRate = totalExpectedRepayments > 0 ? Number(((totalCollected / totalExpectedRepayments) * 100).toFixed(2)) : 0;
+    
+    const overdueAmount = filteredLoans
+      .filter(l => l.status === "overdue")
+      .reduce((sum, l) => sum + (l.balance || 0), 0);
 
-    const totalLoansIssued = loans.reduce(
-      (sum, l) => sum + l.amount,
-      0
-    );
-
-    const totalCollected = loans.reduce(
-      (sum, l) => sum + l.repaidAmount,
-      0
-    );
-
-const collectionRate =
-  totalLoansIssued > 0
-    ? ((totalCollected / totalLoansIssued) * 100).toFixed(2)
-    : 0;
-
-const overdueAmount = loans
-  .filter(l => l.status === "overdue")
-  .reduce((sum, l) => sum + l.balance, 0);
-
-const missedRepayments = loans.reduce((sum, l) => {
-  return (
-    sum +
-    l.repayments.filter(r => r.wasPaymentLate).length
-  );
-}, 0);
+    let missedRepaymentsCount = 0;
+    filteredLoans.forEach(l => {
+        // Scheduled vs actual check (simplified)
+        if (l.status === "overdue" || l.balance > 0) {
+            missedRepaymentsCount++;
+        }
+    });
 
     /* =====================================================
        2️⃣ REPAYMENT BEHAVIOR
     ===================================================== */
-
-    let totalRepaymentsCount = 0;
-    let lateCount = 0;
-    let earlyCount = 0;
+    let totalRepayments = 0;
+    let lateRepayments = 0;
+    let onTimeRepayments = 0;
+    let earlyRepayments = 0;
+    let partialPayments = 0;
+    let fullPayments = 0;
     let totalDaysLate = 0;
 
-    loans.forEach(loan => {
+    filteredLoans.forEach(loan => {
       loan.repayments.forEach(r => {
-        totalRepaymentsCount++;
-
+        totalRepayments++;
         if (r.wasPaymentLate) {
-          lateCount++;
-          totalDaysLate += r.daysLate;
+            lateRepayments++;
+            totalDaysLate += (r.daysLate || 0);
+        } else {
+            onTimeRepayments++;
+            // Check if early (payment date < expected payment date)
+            if (new Date(r.date) < new Date(r.expectedPaymentDate)) {
+                earlyRepayments++;
+            }
         }
 
-        if (!r.wasPaymentLate && r.daysLate === 0) {
-          earlyCount++;
-        }
+        // Partial vs Full (Simplified: if repayment records individual target vs received)
+        // Here we assume if they made a payment, we check if it met a daily requirement or similar
+        // For simplicity, we'll mark as 'Full' if it matched the expected amount in the record
+        if (r.amount >= (loan.dailyRepayment || 0)) fullPayments++;
+        else partialPayments++;
       });
     });
 
-    const onTimePercent =
-      totalRepaymentsCount > 0
-        ? (((totalRepaymentsCount - lateCount) / totalRepaymentsCount) * 100).toFixed(2)
-        : 0;
+    /* =====================================================
+       3️⃣ CHANNEL ANALYSIS
+    ===================================================== */
+    const loanIds = filteredLoans.map(l => l._id);
+    const transactions = await Transaction.find({
+      loanId: { $in: loanIds },
+      type: "repayment",
+      status: "successful"
+    });
 
-    const latePercent =
-      totalRepaymentsCount > 0
-        ? ((lateCount / totalRepaymentsCount) * 100).toFixed(2)
-        : 0;
+    const channelMap = { mpesa: 0, cash: 0, bank_transfer: 0, other: 0 };
+    const regionMap = {};
+    const agentRepaymentMap = {};
 
-    const averageDaysLate =
-      lateCount > 0 ? (totalDaysLate / lateCount).toFixed(1) : 0;
+    transactions.forEach(t => {
+      // Channel
+      const method = t.paymentMethod?.toLowerCase() || (t.checkoutRequestID ? "mpesa" : "other");
+      channelMap[method] = (channelMap[method] || 0) + t.amount;
 
-    const earlyRepaymentsPercent =
-      totalRepaymentsCount > 0
-        ? ((earlyCount / totalRepaymentsCount) * 100).toFixed(2)
-        : 0;
+      // Map back to regions/agents (requires finding the associated loan)
+      const associatedLoan = filteredLoans.find(l => l._id.toString() === t.loanId?.toString());
+      if (associatedLoan) {
+        const regionName = associatedLoan.borrowerId?.town || "Other";
+        const agentName = associatedLoan.requestedByAgentId?.name || "Direct";
+        regionMap[regionName] = (regionMap[regionName] || 0) + t.amount;
+        agentRepaymentMap[agentName] = (agentRepaymentMap[agentName] || 0) + t.amount;
+      }
+    });
 
-  /* =====================================================
-   3️⃣ CHANNEL ANALYSIS (FIXED FOR YOUR SCHEMA)
-===================================================== */
-
-// Get approved issued loans
-const issuedLoans = await Loan.find({
-  lenderId,
-  status: { $in: ["active", "overdue", "fully paid"] },
-  loanRequestStatus: "approved"
-}).select("_id");
-
-const loanIds = issuedLoans.map(l => l._id);
-
-// Now fetch repayment transactions for those loans
-const transactions = await Transaction.find({
-  loanId: { $in: loanIds },
-  type: "repayment",
-  status: "successful"
-});
-
-const totalChannelAmount = transactions.reduce(
-  (sum, t) => sum + t.amount,
-  0
-);
-
-const channelMap = {
-  mpesa: 0,
-  cash: 0,
-  bank_transfer: 0,
-  other: 0
-};
-
-transactions.forEach(t => {
-  // infer mpesa from checkoutRequestID presence
-  let method = "other";
-
-  if (t.checkoutRequestID) method = "mpesa";
-  if (t.paymentMethod) method = t.paymentMethod.toLowerCase();
-
-  if (channelMap[method] !== undefined) {
-    channelMap[method] += t.amount;
-  } else {
-    channelMap.other += t.amount;
-  }
-});
-
-const channelAnalysis = Object.keys(channelMap).map(key => ({
-  channel: key,
-  amount: channelMap[key],
-  percentage:
-    totalChannelAmount > 0
-      ? Number(((channelMap[key] / totalChannelAmount) * 100).toFixed(2))
-      : 0
-}));
     /* =====================================================
        4️⃣ AGING ANALYSIS
     ===================================================== */
-
-    const today = new Date();
-
     let aging = {
       current: 0,
       days_1_7: 0,
@@ -654,89 +622,47 @@ const channelAnalysis = Object.keys(channelMap).map(key => ({
       days_90_plus: 0
     };
 
-    loans.forEach(loan => {
+    filteredLoans.forEach(loan => {
       if (loan.balance <= 0) return;
+      const diffDays = Math.floor((today - new Date(loan.dueDate)) / (1000 * 60 * 60 * 24));
 
-      const diffDays = Math.floor(
-        (today - new Date(loan.dueDate)) / (1000 * 60 * 60 * 24)
-      );
-
-      if (diffDays <= 0) {
-        aging.current += loan.balance;
-      } else if (diffDays <= 7) {
-        aging.days_1_7 += loan.balance;
-      } else if (diffDays <= 30) {
-        aging.days_8_30 += loan.balance;
-      } else if (diffDays <= 90) {
-        aging.days_31_90 += loan.balance;
-      } else {
-        aging.days_90_plus += loan.balance;
-      }
+      if (diffDays <= 0) aging.current += loan.balance;
+      else if (diffDays <= 7) aging.days_1_7 += loan.balance;
+      else if (diffDays <= 30) aging.days_8_30 += loan.balance;
+      else if (diffDays <= 90) aging.days_31_90 += loan.balance;
+      else aging.days_90_plus += loan.balance;
     });
-
-    /* =====================================================
-       5️⃣ REPAYMENTS BY AGENT
-    ===================================================== */
-
-    const repaymentsByAgent = await Loan.aggregate([
-      { $match: { lenderId: new mongoose.Types.ObjectId(lenderId) } },
-      { $unwind: "$repayments" },
-      {
-        $group: {
-          _id: "$requestedByAgentId",
-          totalCollected: { $sum: "$repayments.amount" },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $lookup: {
-          from: "agents",
-          localField: "_id",
-          foreignField: "_id",
-          as: "agent"
-        }
-      },
-      { $unwind: "$agent" }
-    ]);
-
-    /* =====================================================
-       FINAL RESPONSE STRUCTURE (MATCH IMAGE)
-    ===================================================== */
 
     res.json({
       success: true,
       collectionPerformance: {
-        totalLoansIssued,
+        totalExpectedRepayments,
         totalCollected,
-        collectionRate: Number(collectionRate),
-        missedRepayments,
+        collectionRate,
+        missedRepayments: missedRepaymentsCount,
         overdueAmount
       },
-
       repaymentBehavior: {
-        onTimePercent: Number(onTimePercent),
-        latePercent: Number(latePercent),
-        averageDaysLate: Number(averageDaysLate),
-        earlyRepaymentsPercent: Number(earlyRepaymentsPercent)
+        onTime: onTimeRepayments,
+        late: lateRepayments,
+        earlyRepayments: totalRepayments > 0 ? Number(((earlyRepayments / totalRepayments) * 100).toFixed(2)) : 0,
+        averageDaysLate: lateRepayments > 0 ? Number((totalDaysLate / lateRepayments).toFixed(1)) : 0,
+        partialVsFull: {
+            partial: partialPayments,
+            full: fullPayments
+        }
       },
-
-      channelAnalysis,
-
-      agingAnalysis: aging,
-
-      repaymentsByAgent: repaymentsByAgent.map(a => ({
-        agentId: a._id,
-        agentName: a.agent.name,
-        totalCollected: a.totalCollected,
-        repaymentCount: a.count
-      }))
+      channelAnalysis: {
+        byMethod: Object.keys(channelMap).map(k => ({ method: k, amount: channelMap[k] })),
+        byRegion: Object.keys(regionMap).map(k => ({ region: k, amount: regionMap[k] })),
+        byAgent: Object.keys(agentRepaymentMap).map(k => ({ agent: k, amount: agentRepaymentMap[k] }))
+      },
+      agingAnalysis: aging
     });
+
   } catch (error) {
     console.error("Repayment Report Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to generate repayment report"
-    });
+    res.status(500).json({ success: false, message: "Failed to generate repayment report" });
   }
 };
 
@@ -945,7 +871,7 @@ exports.getProfitReport = async (req, res) => {
 };
 
 /* ===========================
-   BORROWERS PROFESSIONAL REPORT
+   BORROWERS PROFESSIONAL REPORTS
 =========================== */
 exports.getBorrowersReport = async (req, res) => {
   try {
