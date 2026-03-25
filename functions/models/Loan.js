@@ -97,6 +97,13 @@ const loanSchema = new mongoose.Schema({
 
 
 
+// ✅ Indexes for Dashboard performance
+loanSchema.index({ lenderId: 1, status: 1 });
+loanSchema.index({ lenderId: 1, loanRequestStatus: 1 });
+loanSchema.index({ dueDate: 1 });
+loanSchema.index({ requestedByAgentId: 1 });
+loanSchema.index({ createdAt: 1 });
+
 // Update the `updatedAt` field before saving
 loanSchema.pre("save", function (next) {
   this.updatedAt = Date.now();

@@ -14,7 +14,6 @@ const connectDB = async () => {
     return;
   }
 
-  console.log(uri)
   try {
     // Use unified topology and modern options
     await mongoose.connect(uri, {

@@ -1,11 +1,6 @@
-
-
-
-
 /*************************************************
  * GLOBAL ERROR SAFETY NET
  *************************************************/
-
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -19,23 +14,12 @@ process.on("unhandledRejection", (err) => {
  *************************************************/
 const express = require("express");
 const cors = require("cors");
-const morgan = require("morgan"); // ✅ Morgan logger
+const morgan = require("morgan");
 
 const connectDB = require("./config/db");
 const { ensureRedis } = require("./utils/redis");
 const otpServiceFactory = require("./utils/africatalking");
 
-// ✅ Load dotenv ONLY for emulator
-if (process.env.FUNCTIONS_EMULATOR) {
-  require("dotenv").config();
-}
-
-// ❌ DO NOT run localInit in Cloud Functions
-if (process.env.FUNCTIONS_EMULATOR) {
-  require("./utils/localInit")();
-}
-
-// Security & Validation Middleware
 const {
   helmetMiddleware,
   generalRateLimit,
@@ -53,47 +37,12 @@ app.set("trust proxy", 1);
 let initialized = false;
 
 /*************************************************
- * MIDDLEWARE (SAFE AT LOAD TIME)
+ * HEALTH CHECK ROUTES (MUST BE FIRST)
  *************************************************/
-
-app.use(cors({ origin: true }));
-
-// ✅ Request Logger
-if (process.env.NODE_ENV !== "production") {
-  app.use(morgan("dev"));
-} else {
-  app.use(
-    morgan("combined", {
-      stream: {
-        write: (message) => console.log(message.trim()),
-      },
-    })
-  );
-}
-
-app.use(helmetMiddleware);
-
-if (process.env.NODE_ENV !== "development") {
-  app.use(generalRateLimit);
-}
-
-app.use(mongoSanitizeMiddleware);
-app.use(xssProtectionMiddleware);
-app.use(sanitizeAll);
-
-/*************************************************
- * HEALTH CHECKS (VERY IMPORTANT FOR CLOUD RUN)
- *************************************************/
-
-app.get("/", (_req, res) => {
-  res.status(200).json({
-    status: "healthy",
-    service: "IZI Finance Backend..!",
-    timestamp: new Date().toISOString(),
-  });
-});
 
 app.get("/healthz", (_req, res) => res.status(200).send("OK"));
+
+app.get("/ping", (_req, res) => res.send("pong"));
 
 app.get("/version", (_req, res) => {
   res.status(200).json({
@@ -102,44 +51,101 @@ app.get("/version", (_req, res) => {
   });
 });
 
-app.get("/ping", (_req, res) => res.send("pong"));
+/*************************************************
+ * GLOBAL MIDDLEWARE
+ *************************************************/
+
+app.use(cors({ origin: true }));
+
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+} else {
+  app.use(morgan("combined"));
+}
+
+app.use(helmetMiddleware);
+
+if (process.env.NODE_ENV === "production") {
+  app.use(generalRateLimit);
+}
+
+app.use(mongoSanitizeMiddleware);
+app.use(xssProtectionMiddleware);
+app.use(sanitizeAll);
 
 /*************************************************
- * INITIALIZATION (LAZY – RUNS ON FIRST REQUEST)
+ * LAZY INITIALIZATION (ONLY ONE)
+ *************************************************/
+
+// app.use(async (req, res, next) => {
+//   if (!initialized) {
+//     console.log("🚀 Lazy initializing app...");
+
+//     try {
+//       const config = global.config || {};
+//       await initializeApp(config);
+//     } catch (err) {
+//       console.error("❌ Lazy init failed:", err);
+
+//       return res.status(500).json({
+//         error: "Initialization failed",
+//         details: err.message,
+//       });
+//     }
+//   }
+
+//   next();
+// });
+
+/*************************************************
+ * ROOT STATUS
+ *************************************************/
+
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    status: "healthy",
+    service: "IZI Finance Backend",
+    timestamp: new Date().toISOString(),
+    initialized: initialized,
+  });
+});
+
+/*************************************************
+ * INITIALIZATION
  *************************************************/
 
 async function initializeApp(secrets = {}) {
   if (initialized) return;
 
-  console.log("📦 Initializing DB, Redis, services...");
+  console.log("Initializing DB and Redis");
 
   try {
-    await connectDB(secrets.mongoUri || process.env.MONGO_URI);
-
-    await ensureRedis(
-      secrets.redisUrl || process.env.REDIS_URL,
-      secrets.redisToken || process.env.REDIS_TOKEN
-    );
+    await connectDB(secrets.mongoUri);
   } catch (err) {
-    console.error("❌ Init error (non-fatal):", err);
+    console.error("Mongo connection error:", err);
   }
 
-  // JWT Secrets
-  process.env.JWT_ACCESS_SECRET =
-    secrets.jwtAccessSecret || process.env.JWT_ACCESS_SECRET;
+  try {
+    await ensureRedis(secrets.redisUrl, secrets.redisToken);
+  } catch (err) {
+    console.warn("Redis skipped:", err.message);
+  }
 
-  process.env.JWT_REFRESH_SECRET =
-    secrets.jwtRefreshSecret || process.env.JWT_REFRESH_SECRET;
+  /*************************************************
+   * STORE SECRETS
+   *************************************************/
 
-  // OTP Service
+  app.locals.jwtAccessSecret = secrets.jwtAccessSecret;
+  app.locals.jwtRefreshSecret = secrets.jwtRefreshSecret;
+
   app.locals.otpService = otpServiceFactory({
-    atUsername: secrets.atUsername || process.env.AT_USERNAME,
-    atApiKey: secrets.atApiKey || process.env.AT_API_KEY,
-    atSenderId: secrets.atSenderId || process.env.AT_SENDER_ID,
+    atUsername: secrets.atUsername,
+    atApiKey: secrets.atApiKey,
+    atSenderId: secrets.atSenderId,
   });
 
   /*************************************************
-   * BODY PARSERS (ROUTE-SCOPED)
+   * BODY PARSERS
    *************************************************/
 
   const jsonParser = express.json({ limit: "10mb" });
@@ -165,7 +171,13 @@ async function initializeApp(secrets = {}) {
     require("./routes/borrowerauthRouter")
   );
 
-  app.use("/api/wallet", walletRateLimit, jsonParser, require("./routes/walletRoutes"));
+  app.use(
+    "/api/wallet",
+    walletRateLimit,
+    jsonParser,
+    require("./routes/walletRoutes")
+  );
+
   app.use("/api/loans", jsonParser, require("./routes/loanRoutes"));
   app.use("/api", jsonParser, require("./routes/activityRoutes"));
   app.use("/api/suggestions", jsonParser, require("./routes/suggestionRoutes"));
@@ -181,30 +193,23 @@ async function initializeApp(secrets = {}) {
   app.use("/api", jsonParser, require("./routes/qrRoutes"));
   app.use("/api", urlEncodedParser, require("./routes/paymentPage"));
   app.use("/api", urlEncodedParser, require("./routes/stkPayment"));
-  app.use("/debug", require("./routes/debug"));
-  app.use("/api/groups", jsonParser, require("./routes/groupRoutes"));
-  app.use("/api/agent-groups", jsonParser, require("./routes/agentGroupRoutes"));
-  app.use("/api/kyc/company", jsonParser, require("./routes/companyKycRoutes"));
-  app.use("/api", jsonParser, require("./routes/sms.routes"));
 
   /*************************************************
    * ERROR HANDLING
    *************************************************/
 
-  const {
-    errorHandler,
-    notFoundHandler,
-  } = require("./middleware/errorMiddleware");
+  const { errorHandler, notFoundHandler } = require("./middleware/errorMiddleware");
 
   app.use(notFoundHandler);
   app.use(errorHandler);
 
   initialized = true;
-  console.log("✅ App initialization complete");
+
+  console.log("✅ App initialized");
 }
 
 /*************************************************
- * EXPORTS (FOR FIREBASE FUNCTIONS)
+ * EXPORTS
  *************************************************/
 
 module.exports = {

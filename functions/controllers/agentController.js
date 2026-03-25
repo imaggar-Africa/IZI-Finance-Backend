@@ -240,6 +240,10 @@ const loginAgent = async (req, res) => {
       ip: req.ip
     });
 
+    // Update last activity
+    agent.lastActiveAt = new Date();
+    await agent.save();
+
     return res.status(200).json({
       message: "Login successful",
       accessToken,
