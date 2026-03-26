@@ -1840,352 +1840,460 @@ exports.getRegionalRepaymentReport = async (req, res) => {
 
 exports.getRegionPerformanceReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
-    const today = new Date();
+    const lenderId = new mongoose.Types.ObjectId(req.user._id);
+    const { startDate, endDate } = req.query;
 
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate
+      ? new Date(startDate)
+      : new Date(new Date().setDate(new Date().getDate() - 30));
 
-    /* ================= GET AGENTS ================= */
+    const duration = end.getTime() - start.getTime();
+    const prevStart = new Date(start.getTime() - duration);
+    const prevEnd = start;
 
-    const agents = await Agent.find({ lenderId }).select("_id").lean();
-    const agentIds = agents.map(a => a._id);
+    const aggResult = await Loan.aggregate([
+      {
+        $match: {
+          lenderId,
+          loanRequestStatus: "approved",
+          isDeleted: { $ne: true }
+        }
+      },
 
-    /* ================= GET CUSTOMERS (LENDER + AGENT CREATED) ================= */
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "customer"
+        }
+      },
 
-    const customers = await Customer.find({
-      isDeleted: false,
+      { $unwind: "$customer" },
+
+      {
+        $project: {
+          amount: { $ifNull: ["$amount", 0] },
+          balance: { $ifNull: ["$balance", 0] },
+          repaidAmount: { $ifNull: ["$repaidAmount", 0] },
+          totalRepayment: { $ifNull: ["$totalRepayment", 0] },
+          status: 1,
+          isDefaulted: 1,
+          issueDate: 1,
+          requestedByAgentId: 1,
+          repayments: 1,
+
+region: {
+  $cond: [
+    {
       $or: [
-        { registeredBy: lenderId, registeredByModel: "User" },
-        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+        { $eq: ["$customer.town", ""] },
+        { $eq: ["$customer.town", null] },
+        { $not: ["$customer.town"] }
       ]
-    }).lean();
+    },
+    "Other",
+    "$customer.town"
+  ]
+},
 
-    /* ================= REGION DETECTION ================= */
+          coords: {
+            $ifNull: ["$customer.gpsLocation", { lat: 0, lng: 0 }]
+          }
+        }
+      },
 
- function getRegion(customer) {
+      {
+        $facet: {
 
-  const phone = customer.phone || customer.phoneNumber;
+          metrics: [
+            {
+              $group: {
+                _id: "$region",
 
-  if (!phone) return "Unknown";
+                totalDisbursed: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$issueDate", start] },
+                          { $lte: ["$issueDate", end] }
+                        ]
+                      },
+                      "$amount",
+                      0
+                    ]
+                  }
+                },
 
-  const p = phone.replace(/\s+/g, "");
+                prevTotalDisbursed: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$issueDate", prevStart] },
+                          { $lte: ["$issueDate", prevEnd] }
+                        ]
+                      },
+                      "$amount",
+                      0
+                    ]
+                  }
+                },
 
-  /* ================= KENYA ================= */
+                activeLoansCount: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "active"] }, 1, 0]
+                  }
+                },
 
-  if (p.startsWith("+25470") || p.startsWith("+25471"))
-    return "Kenya - Nairobi";
+                outstandingBalance: { $sum: "$balance" },
 
-  if (p.startsWith("+25472") || p.startsWith("+25473"))
-    return "Kenya - Mombasa";
+                overdueAmount: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "overdue"] }, "$balance", 0]
+                  }
+                },
 
-  if (p.startsWith("+25474") || p.startsWith("+25475"))
-    return "Kenya - Kisumu";
+                defaultedLoans: {
+                  $sum: { $cond: ["$isDefaulted", 1, 0] }
+                },
 
-  if (p.startsWith("+25476"))
-    return "Kenya - Nakuru";
+                totalLoansCount: { $sum: 1 },
 
-  if (p.startsWith("+25477") || p.startsWith("+25478"))
-    return "Kenya - Eldoret";
+                uniqueAgents: { $addToSet: "$requestedByAgentId" },
 
-  if (p.startsWith("+25479"))
-    return "Kenya - Thika";
+                lat: { $avg: "$coords.lat" },
+                lng: { $avg: "$coords.lng" }
+              }
+            }
+          ],
 
+          collections: [
+            { $unwind: "$repayments" },
 
-  /* ================= UGANDA ================= */
+            {
+              $match: {
+                "repayments.date": { $gte: start, $lte: end }
+              }
+            },
 
-  if (p.startsWith("+25670") || p.startsWith("+25675"))
-    return "Uganda - Kampala";
-
-  if (p.startsWith("+25677"))
-    return "Uganda - Entebbe";
-
-  if (p.startsWith("+25678"))
-    return "Uganda - Jinja";
-
-  if (p.startsWith("+25674"))
-    return "Uganda - Gulu";
-
-  if (p.startsWith("+25676"))
-    return "Uganda - Mbale";
-
-
-  /* ================= TANZANIA ================= */
-
-  if (p.startsWith("+25571") || p.startsWith("+25575"))
-    return "Tanzania - Dar es Salaam";
-
-  if (p.startsWith("+25576"))
-    return "Tanzania - Arusha";
-
-  if (p.startsWith("+25573"))
-    return "Tanzania - Mwanza";
-
-  if (p.startsWith("+25574"))
-    return "Tanzania - Dodoma";
-
-  if (p.startsWith("+25578"))
-    return "Tanzania - Zanzibar";
-
-
-  /* ================= RWANDA ================= */
-
-  if (p.startsWith("+25078"))
-    return "Rwanda - Kigali";
-
-  if (p.startsWith("+25072"))
-    return "Rwanda - Butare";
-
-  if (p.startsWith("+25073"))
-    return "Rwanda - Gisenyi";
-
-  if (p.startsWith("+25079"))
-    return "Rwanda - Ruhengeri";
-
-
-  /* ================= NIGERIA ================= */
-
-  if (p.startsWith("+23470") || p.startsWith("+23480"))
-    return "Nigeria - Lagos";
-
-  if (p.startsWith("+23481"))
-    return "Nigeria - Abuja";
-
-  if (p.startsWith("+23490"))
-    return "Nigeria - Port Harcourt";
-
-  if (p.startsWith("+23491"))
-    return "Nigeria - Kano";
-
-  if (p.startsWith("+23492"))
-    return "Nigeria - Ibadan";
-
-
-  /* ================= GHANA ================= */
-
-  if (p.startsWith("+23324") || p.startsWith("+23354"))
-    return "Ghana - Accra";
-
-  if (p.startsWith("+23320"))
-    return "Ghana - Kumasi";
-
-  if (p.startsWith("+23327"))
-    return "Ghana - Tamale";
-
-  if (p.startsWith("+23326"))
-    return "Ghana - Takoradi";
-
-  if (p.startsWith("+23328"))
-    return "Ghana - Cape Coast";
-
-
-  return "Other";
-}
-
-    /* ================= GET LOANS ================= */
-
-    const loans = await Loan.find({
-      lenderId,
-      loanRequestStatus: "approved"
-    }).lean();
-
-    /* ================= BUILD REGION MAP ================= */
-
-    const regionMap = {};
-
-    customers.forEach(customer => {
-      const region = getRegion(customer);
-
-      if (!regionMap[region]) {
-        regionMap[region] = {
-          borrowers: new Set(),
-          agents: new Set(),
-          totalDisbursed: 0,
-          activeLoans: 0,
-          outstandingBalance: 0,
-          collections: 0,
-          overdueAmount: 0,
-          totalLoans: 0,
-          defaultedLoans: 0,
-          currentMonthLoans: 0,
-          previousMonthLoans: 0
-        };
+            {
+              $group: {
+                _id: "$region",
+                collectedInPeriod: { $sum: "$repayments.amount" }
+              }
+            }
+          ]
+        }
       }
+    ]);
 
-      regionMap[region].borrowers.add(customer._id.toString());
+    const metricsData = aggResult[0].metrics;
+    const collectionsData = aggResult[0].collections;
+
+    const collectionsMap = {};
+    collectionsData.forEach(c => {
+      collectionsMap[c._id] = c.collectedInPeriod;
     });
 
-    /* ================= PROCESS LOANS ================= */
-
-    loans.forEach(loan => {
-      const customer = customers.find(
-        c => c._id.toString() === loan.borrowerId.toString()
-      );
-
-      if (!customer) return;
-
-      const region = getRegion(customer);
-      const regionData = regionMap[region];
-
-      regionData.totalDisbursed += loan.amount || 0;
-      regionData.outstandingBalance += loan.balance || 0;
-      regionData.collections += loan.repaidAmount || 0;
-      regionData.totalLoans++;
-
-      if (loan.status === "active") regionData.activeLoans++;
-
-      if (loan.status === "overdue") {
-        regionData.overdueAmount += loan.balance || 0;
-      }
-
-      if (loan.isDefaulted) regionData.defaultedLoans++;
-
-      if (loan.issueDate >= startOfMonth) {
-        regionData.currentMonthLoans++;
-      }
-
-      if (
-        loan.issueDate >= startOfLastMonth &&
-        loan.issueDate <= endOfLastMonth
-      ) {
-        regionData.previousMonthLoans++;
-      }
-
-      if (loan.requestedByAgentId) {
-        regionData.agents.add(loan.requestedByAgentId.toString());
-      }
-    });
-
-    /* ================= BUILD FINAL RESPONSE ARRAYS ================= */
-
-    const regionalPortfolioMetrics = [];
+    const regionalPortfolio = [];
     const riskHeatmap = [];
     const operationalEfficiency = [];
     const mapHeatView = [];
-    const growthArray = [];
+    const growthStats = [];
 
-    Object.keys(regionMap).forEach(region => {
-      const r = regionMap[region];
+    metricsData.forEach(m => {
+      const region = m._id;
+      const collections = collectionsMap[region] || 0;
 
-      const parByRegion =
-        r.totalDisbursed > 0
-          ? Number(((r.overdueAmount / r.totalDisbursed) * 100).toFixed(2))
+      const par =
+        m.outstandingBalance > 0
+          ? (m.overdueAmount / m.outstandingBalance) * 100
           : 0;
 
-      const defaultRateByRegion =
-        r.totalLoans > 0
-          ? Number(((r.defaultedLoans / r.totalLoans) * 100).toFixed(2))
+      const defaultRate =
+        m.totalLoansCount > 0
+          ? (m.defaultedLoans / m.totalLoansCount) * 100
           : 0;
 
-      const collectionEfficiencyPerRegion =
-        r.totalDisbursed > 0
-          ? Number(((r.collections / r.totalDisbursed) * 100).toFixed(2))
+      const efficiency =
+        m.outstandingBalance + collections > 0
+          ? (collections / (m.outstandingBalance + collections)) * 100
           : 0;
 
-      /* ===== FIXED HEAT SCORE ===== */
+      const heatScore =
+        par * 0.5 + defaultRate * 0.3 + (100 - efficiency) * 0.2;
 
-      let heatScore = 0;
-
-      if (r.totalDisbursed > 0) {
-        heatScore = Number(
-          (
-            parByRegion * 0.5 +
-            defaultRateByRegion * 0.3 +
-            (100 - collectionEfficiencyPerRegion) * 0.2
-          ).toFixed(2)
-        );
-      }
-
-      let riskLevel = "Low";
+      let riskLevel = "Minimal";
       if (heatScore > 30) riskLevel = "Critical";
       else if (heatScore > 20) riskLevel = "High";
-      else if (heatScore > 10) riskLevel = "Medium";
+      else if (heatScore > 10) riskLevel = "Moderate";
 
-      /* ===== GROWTH ===== */
-
-      const growthRate =
-        r.previousMonthLoans > 0
-          ? Number(
-              (
-                ((r.currentMonthLoans - r.previousMonthLoans) /
-                  r.previousMonthLoans) *
-                100
-              ).toFixed(2)
-            )
-          : r.currentMonthLoans > 0
-          ? 100
-          : 0;
-
-      regionalPortfolioMetrics.push({
+      regionalPortfolio.push({
         region,
-        totalDisbursedPerRegion: r.totalDisbursed,
-        activeLoansPerRegion: r.activeLoans,
-        outstandingBalancePerRegion: r.outstandingBalance,
-        collectionsPerRegion: r.collections
+        totalDisbursed: m.totalDisbursed,
+        activeLoans: m.activeLoansCount,
+        outstandingBalance: m.outstandingBalance,
+        collections
       });
 
       riskHeatmap.push({
         region,
-        parByRegion,
-        defaultRateByRegion,
-        overdueConcentration: r.overdueAmount,
-        heatScore
+        par: Number(par.toFixed(2)),
+        defaultRate: Number(defaultRate.toFixed(2)),
+        overdueAmount: m.overdueAmount,
+        heatScore: Number(heatScore.toFixed(2))
       });
 
       operationalEfficiency.push({
         region,
-        agentsPerRegion: r.agents.size,
-        revenuePerRegion: r.collections,
-        collectionEfficiencyPerRegion
+        agents: m.uniqueAgents.length,
+        revenue: collections,
+        collectionEfficiency: Number(efficiency.toFixed(2))
       });
 
       mapHeatView.push({
         region,
-        heatScore,
+        lat: m.lat || 0,
+        lng: m.lng || 0,
+        heatScore: Number(heatScore.toFixed(2)),
         riskLevel
       });
 
-      growthArray.push({
+      const growthRate =
+        m.prevTotalDisbursed > 0
+          ? ((m.totalDisbursed - m.prevTotalDisbursed) /
+              m.prevTotalDisbursed) *
+            100
+          : m.totalDisbursed > 0
+          ? 100
+          : 0;
+
+      growthStats.push({
         region,
-        growthRate,
-        currentMonthLoans: r.currentMonthLoans
+        growthRate: Number(growthRate.toFixed(1)),
+        isNewMarket: m.prevTotalDisbursed === 0 && m.totalDisbursed > 0,
+        currentVolume: m.totalDisbursed
       });
     });
 
-    const fastestGrowingRegions = growthArray
-      .filter(g => g.growthRate > 0)
-      .sort((a, b) => b.growthRate - a.growthRate)
-      .slice(0, 3);
+    const growthIndicators = {
+      fastestGrowingRegions: growthStats
+        .filter(g => g.growthRate > 0)
+        .sort((a, b) => b.growthRate - a.growthRate)
+        .slice(0, 5),
 
-    const decliningRegions = growthArray
-      .filter(g => g.growthRate < 0)
-      .sort((a, b) => a.growthRate - b.growthRate)
-      .slice(0, 3);
+      decliningRegions: growthStats
+        .filter(g => g.growthRate < 0)
+        .sort((a, b) => a.growthRate - b.growthRate)
+        .slice(0, 5),
 
-    const newMarketPerformance = growthArray.filter(
-      g => g.currentMonthLoans > 0 && g.growthRate === 100
-    );
+      newMarketPerformance: growthStats.filter(g => g.isNewMarket)
+    };
 
-    return res.json({
+    res.json({
       success: true,
-      regionalPortfolioMetrics,
+      regionalPortfolio,
       riskHeatmap,
-      growthIndicators: {
-        fastestGrowingRegions,
-        decliningRegions,
-        newMarketPerformance
-      },
+      growthIndicators,
       operationalEfficiency,
       mapHeatView
     });
 
   } catch (error) {
-    console.error("Region performance error:", error);
-    return res.status(500).json({
+    console.error("Region report error:", error);
+    res.status(500).json({
       success: false,
-      message: "Failed to generate regional performance report"
+      message: error.message
     });
+  }
+};
+
+
+exports.getBusinessTypeLoanReport = async (req, res) => {
+  try {
+    const lenderId = new mongoose.Types.ObjectId(req.user._id);
+    const { startDate, endDate } = req.query;
+
+    const start = startDate ? new Date(startDate) : new Date(0);
+    const end = endDate ? new Date(endDate) : new Date();
+
+    const aggResult = await Loan.aggregate([
+      {
+        $match: {
+          lenderId,
+          loanRequestStatus: "approved",
+          isDeleted: { $ne: true },
+          issueDate: { $gte: start, $lte: end }
+        }
+      },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "customer"
+        }
+      },
+      { $unwind: "$customer" },
+      {
+        $project: {
+          amount: 1,
+          balance: 1,
+          status: 1,
+          isDefaulted: 1,
+          issueDate: 1,
+          dueDate: 1,
+          repaidAmount: 1,
+          totalRepayment: 1,
+          dailyRepayment: 1,
+          repayments: 1,
+businessType: {
+ $trim:{
+  input:{
+   $ifNull:[
+     "$customer.businessType",
+     { $ifNull:["$customer.occupation","Other"] }
+   ]
+  }
+ }
+},
+          demographics: {
+            maritalStatus: { $ifNull: ["$customer.maritalStatus", "Unknown"] },
+            educationLevel: { $ifNull: ["$customer.educationLevel", "Unknown"] },
+            householdSize: { $ifNull: ["$customer.householdSize", 0] },
+            urbanRural: {
+              $cond: [
+                { 
+                  $regexMatch: { 
+                    input: { $ifNull: ["$customer.physicalAddress", ""] }, 
+                    regex: /city|urban|nairobi|mombasa|kisumu|nakuru|kampala|dar|lagos|accra|kigali/i 
+                  } 
+                },
+                "Urban", 
+                "Rural"
+              ]
+            }
+          }
+        }
+      },
+      {
+        $facet: {
+          main: [
+            {
+              $group: {
+                _id: "$businessType",
+                issuedLoans: { $sum: 1 },
+                totalDisbursed: { $sum: "$amount" },
+                activeLoans: { $sum: { $cond: [{ $eq: ["$status", "active"] }, 1, 0] } },
+                completedLoans: { $sum: { $cond: [{ $eq: ["$status", "fully paid"] }, 1, 0] } },
+                defaultedLoans: { $sum: { $cond: ["$isDefaulted", 1, 0] } },
+                portfolioBalance: { $sum: "$balance" },
+                overdueBalance: { $sum: { $cond: [{ $eq: ["$status", "overdue"] }, "$balance", 0] } },
+                totalRepaid: { $sum: "$repaidAmount" },
+                totalExpected: { $sum: "$totalRepayment" },
+                nearingDueCount: {
+                   $sum: {
+                     $cond: [
+                       { 
+                         $and: [
+                           { $gt: ["$balance", 0] },
+                           { $gte: ["$dueDate", new Date()] },
+                           { $lte: ["$dueDate", new Date(new Date().setDate(new Date().getDate() + 7))] }
+                         ] 
+                       },
+                       1,
+                       0
+                     ]
+                   }
+                }
+              }
+            }
+          ],
+          behavior: [
+            { $unwind: "$repayments" },
+            {
+              $group: {
+                _id: "$businessType",
+                onTimeCount: { $sum: { $cond: [{ $eq: ["$repayments.wasPaymentLate", false] }, 1, 0] } },
+                lateCount: { $sum: { $cond: [{ $eq: ["$repayments.wasPaymentLate", true] }, 1, 0] } },
+                totalDaysLate: { $sum: { $ifNull: ["$repayments.daysLate", 0] } },
+                partialCount: { $sum: { $cond: [{ $lt: ["$repayments.amount", "$dailyRepayment"] }, 1, 0] } },
+                fullCount: { $sum: { $cond: [{ $gte: ["$repayments.amount", "$dailyRepayment"] }, 1, 0] } }
+              }
+            }
+          ],
+          demographics_marital: [
+            { $group: { _id: { businessType: "$businessType", value: "$demographics.maritalStatus" }, count: { $sum: 1 } } }
+          ],
+          demographics_education: [
+            { $group: { _id: { businessType: "$businessType", value: "$demographics.educationLevel" }, count: { $sum: 1 } } }
+          ],
+          demographics_urbanRural: [
+            { $group: { _id: { businessType: "$businessType", value: "$demographics.urbanRural" }, count: { $sum: 1 } } }
+          ]
+        }
+      }
+    ]);
+
+    const { main, behavior, demographics_marital, demographics_education, demographics_urbanRural } = aggResult[0];
+
+    const behaviorMap = behavior.reduce((acc, b) => { acc[b._id] = b; return acc; }, {});
+
+    const businessMetrics = main.map(m => ({
+      businessType: m._id,
+      issuedLoans: m.issuedLoans,
+      totalDisbursed: m.totalDisbursed,
+      averageLoanSize: m.issuedLoans > 0 ? Number((m.totalDisbursed / m.issuedLoans).toFixed(2)) : 0,
+      activeLoans: m.activeLoans,
+      completedLoans: m.completedLoans,
+      defaultedLoans: m.defaultedLoans,
+      restructuredLoans: 0
+    }));
+
+    const riskIndicators = main.map(m => ({
+      businessType: m._id,
+      par: m.portfolioBalance > 0 ? Number(((m.overdueBalance / m.portfolioBalance) * 100).toFixed(2)) : 0,
+      defaultRate: m.issuedLoans > 0 ? Number(((m.defaultedLoans / m.issuedLoans) * 100).toFixed(2)) : 0,
+      loansNearingDueDate: m.nearingDueCount
+    }));
+
+    const borrowerBehavior = main.map(m => {
+      const b = behaviorMap[m._id] || {};
+      return {
+        businessType: m._id,
+        repaymentRate: m.totalExpected > 0 ? Number(((m.totalRepaid / m.totalExpected) * 100).toFixed(2)) : 0,
+        onTimeRepayments: b.onTimeCount || 0,
+        lateRepayments: b.lateCount || 0,
+        averageDaysLate: b.lateCount > 0 ? Number((b.totalDaysLate / b.lateCount).toFixed(1)) : 0,
+        partialRepayments: b.partialCount || 0,
+        fullRepayments: b.fullCount || 0
+      };
+    });
+
+    const demographicInsights = main.map(m => {
+      const bType = m._id;
+      return {
+        businessType: bType,
+        maritalBreakdown: demographics_marital.filter(x => x._id.businessType === bType).map(x => ({ type: x._id.value, count: x.count })),
+        educationBreakdown: demographics_education.filter(x => x._id.businessType === bType).map(x => ({ type: x._id.value, count: x.count })),
+        urbanRuralBreakdown: demographics_urbanRural.filter(x => x._id.businessType === bType).map(x => ({ type: x._id.value, count: x.count }))
+      };
+    });
+
+    res.json({
+      success: true,
+      businessMetrics,
+      borrowerBehavior,
+      riskIndicators,
+      demographicInsights
+    });
+
+  } catch (err) {
+    console.error("Business type report error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -2702,4 +2810,4 @@ exports.getDemographicsAnalysis = async (req, res) => {
   }
 };
 
-
+
