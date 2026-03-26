@@ -166,28 +166,14 @@ exports.getDashboardReport = async (req, res) => {
       { $sort: { _id: 1 } }
     ]);
 
-    // Trend based on actual transaction records
-    const repaymentTrend = await Transaction.aggregate([
-      {
-        $match: {
-          type: "repayment",
-          status: "successful"
-        }
-      },
-      {
-        $lookup: {
-          from: "loans",
-          localField: "loanId",
-          foreignField: "_id",
-          as: "loan"
-        }
-      },
-      { $unwind: "$loan" },
-      { $match: { "loan.lenderId": new mongoose.Types.ObjectId(lenderId) } },
+    // Trend based on Loan repayments array
+    const repaymentTrend = await Loan.aggregate([
+      { $match: baseFilter },
+      { $unwind: "$repayments" },
       {
         $group: {
-          _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
-          amount: { $sum: "$amount" }
+          _id: { $dateToString: { format: "%Y-%m", date: "$repayments.date" } },
+          amount: { $sum: "$repayments.amount" }
         }
       },
       { $sort: { _id: 1 } }
@@ -224,25 +210,15 @@ exports.getDashboardReport = async (req, res) => {
       createdAt: { $gte: startOfToday }
     });
 
-    const repaymentsTodayAggregation = await Transaction.aggregate([
+    const repaymentsTodayAggregation = await Loan.aggregate([
+      { $match: baseFilter },
+      { $unwind: "$repayments" },
       {
         $match: {
-          type: "repayment",
-          status: "successful",
-          createdAt: { $gte: startOfToday }
+          "repayments.date": { $gte: startOfToday }
         }
       },
-      {
-        $lookup: {
-          from: "loans",
-          localField: "loanId",
-          foreignField: "_id",
-          as: "loan"
-        }
-      },
-      { $unwind: "$loan" },
-      { $match: { "loan.lenderId": new mongoose.Types.ObjectId(lenderId) } },
-      { $group: { _id: null, total: { $sum: "$amount" } } }
+      { $group: { _id: null, total: { $sum: "$repayments.amount" } } }
     ]);
 
     const overdueLoansCount = overdueLoans.length;
@@ -524,7 +500,8 @@ exports.getRepaymentsReport = async (req, res) => {
 
     const loans = await Loan.find(baseFilter)
       .populate("borrowerId", "fullName town region")
-      .populate("requestedByAgentId", "name");
+      .populate("requestedByAgentId", "name")
+      .populate("repayments.transactionId");
 
     let filteredLoans = loans;
 
@@ -593,54 +570,35 @@ exports.getRepaymentsReport = async (req, res) => {
        CHANNEL ANALYSIS
     ============================== */
 
-    const loanIds = filteredLoans.map(l => l._id);
-
-    const transactions = await Transaction.find({
-      loanId: { $in: loanIds },
-      type: "repayment",
-      status: "successful"
-    });
-
-    // ✅ Correct totalCollected calculation
-    const totalCollected = transactions.reduce(
-      (sum, t) => sum + (t.amount || 0),
-      0
-    );
-
-    const collectionRate =
-      totalExpectedRepayments > 0
-        ? Number(
-            ((totalCollected / totalExpectedRepayments) * 100).toFixed(2)
-          )
-        : 0;
-
+    // ✅ Correct totalCollected calculation from repayments array
+    let totalCollected = 0;
     const channelMap = { mpesa: 0, cash: 0, bank_transfer: 0, other: 0 };
     const regionMap = {};
     const agentRepaymentMap = {};
 
-    // ⚡ Faster lookup instead of find()
-    const loanMap = new Map(
-      filteredLoans.map(l => [l._id.toString(), l])
-    );
+    filteredLoans.forEach(loan => {
+      loan.repayments.forEach(r => {
+        totalCollected += r.amount || 0;
 
-    transactions.forEach(t => {
-      const method =
-        t.paymentMethod?.toLowerCase() ||
-        (t.checkoutRequestID ? "mpesa" : "other");
+        // Check channel/method if available via populated transaction
+        const method =
+          r.transactionId?.paymentMethod?.toLowerCase() ||
+          (r.transactionId?.checkoutRequestID ? "mpesa" : "other");
+        
+        channelMap[method] = (channelMap[method] || 0) + r.amount;
 
-      channelMap[method] = (channelMap[method] || 0) + t.amount;
-
-      const loan = loanMap.get(t.loanId?.toString());
-
-      if (loan) {
         const regionName = loan.borrowerId?.town || "Other";
         const agentName = loan.requestedByAgentId?.name || "Direct";
 
-        regionMap[regionName] = (regionMap[regionName] || 0) + t.amount;
-        agentRepaymentMap[agentName] =
-          (agentRepaymentMap[agentName] || 0) + t.amount;
-      }
+        regionMap[regionName] = (regionMap[regionName] || 0) + r.amount;
+        agentRepaymentMap[agentName] = (agentRepaymentMap[agentName] || 0) + r.amount;
+      });
     });
+
+    const collectionRate =
+      totalExpectedRepayments > 0
+        ? Number(((totalCollected / totalExpectedRepayments) * 100).toFixed(2))
+        : 0;
 
     /* ==============================
        AGING ANALYSIS
@@ -758,36 +716,26 @@ exports.getProfitReport = async (req, res) => {
       totalInterestEarned += (loanInterest * ratio);
     });
 
-    // Aggregated Period Interest from Transactions
-    const periodInterestAggregation = await Transaction.aggregate([
+    // Aggregated Period Interest from Loan repayments array
+    const periodInterestAggregation = await Loan.aggregate([
+      { $match: baseFilter },
+      { $unwind: "$repayments" },
       {
         $match: {
-          type: "repayment",
-          status: "successful",
-          createdAt: {
+          "repayments.date": {
             $gte: startObj || new Date(0),
             $lte: endObj || now
           }
         }
       },
       {
-        $lookup: {
-          from: "loans",
-          localField: "loanId",
-          foreignField: "_id",
-          as: "loan"
-        }
-      },
-      { $unwind: "$loan" },
-      { $match: { "loan.lenderId": new mongoose.Types.ObjectId(lenderId) } },
-      {
         $group: {
           _id: null,
           interestPortion: {
             $sum: {
               $multiply: [
-                "$amount",
-                { $cond: [{ $gt: ["$loan.totalRepayment", 0] }, { $divide: ["$loan.interest", "$loan.totalRepayment"] }, 0] }
+                "$repayments.amount",
+                { $cond: [{ $gt: ["$totalRepayment", 0] }, { $divide: ["$interest", "$totalRepayment"] }, 0] }
               ]
             }
           }
@@ -838,32 +786,17 @@ exports.getProfitReport = async (req, res) => {
     /* =====================================================
        4️⃣ TREND CHARTS
     ===================================================== */
-    const interestTrend = await Transaction.aggregate([
-      {
-        $match: {
-          loanId: { $exists: true },
-          type: "repayment",
-          status: "successful"
-        }
-      },
-      {
-        $lookup: {
-          from: "loans",
-          localField: "loanId",
-          foreignField: "_id",
-          as: "loan"
-        }
-      },
-      { $unwind: "$loan" },
-      { $match: { "loan.lenderId": new mongoose.Types.ObjectId(lenderId) } },
+    const interestTrend = await Loan.aggregate([
+      { $match: baseFilter },
+      { $unwind: "$repayments" },
       {
         $group: {
-          _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
+          _id: { $dateToString: { format: "%Y-%m", date: "$repayments.date" } },
           interest: {
             $sum: {
               $multiply: [
-                "$amount",
-                { $cond: [{ $gt: ["$loan.totalRepayment", 0] }, { $divide: ["$loan.interest", "$loan.totalRepayment"] }, 0] }
+                "$repayments.amount",
+                { $cond: [{ $gt: ["$totalRepayment", 0] }, { $divide: ["$interest", "$totalRepayment"] }, 0] }
               ]
             }
           }
@@ -872,11 +805,14 @@ exports.getProfitReport = async (req, res) => {
       { $sort: { _id: 1 } }
     ]);
 
+    const profitTrend = interestTrend; // For now profit is linked to interest (simplified)
+
     /* =====================================================
-       5️⃣ GEO BREAKDOWN
+       5️⃣ GEOGRAPHIC Breakdown
     ===================================================== */
     const townBreakdown = await Loan.aggregate([
       { $match: baseFilter },
+      { $unwind: "$repayments" },
       {
         $lookup: {
           from: "customers",
@@ -892,23 +828,11 @@ exports.getProfitReport = async (req, res) => {
           interest: {
             $sum: {
               $multiply: [
-                "$interest",
-                { $cond: [{ $gt: ["$totalRepayment", 0] }, { $divide: ["$repaidAmount", "$totalRepayment"] }, 0] }
+                "$repayments.amount",
+                { $cond: [{ $gt: ["$totalRepayment", 0] }, { $divide: ["$interest", "$totalRepayment"] }, 0] }
               ]
             }
           }
-        }
-      },
-      {
-        $project: {
-          _id: { $cond: [{ $eq: ["$_id", ""] }, "Unknown", "$_id"] },
-          interest: 1
-        }
-      },
-      {
-        $group: {
-          _id: "$_id",
-          interest: { $sum: "$interest" }
         }
       },
       { $sort: { interest: -1 } }
@@ -1007,7 +931,7 @@ exports.getBorrowersReport = async (req, res) => {
         $group: {
           _id: null,
           totalExpected: { $sum: "$totalRepayment" },
-          totalCollected: { $sum: "$repaidAmount" },
+          totalCollected: { $sum: { $sum: "$repayments.amount" } },
           totalSuccessfulRepayments: { 
             $sum: { $size: { $ifNull: ["$repayments", []] } } 
           }
@@ -1025,7 +949,7 @@ exports.getBorrowersReport = async (req, res) => {
 
     const topGoodPayers = await Loan.aggregate([
       { $match: loanBaseFilter },
-      { $group: { _id: "$borrowerId", totalPaid: { $sum: "$repaidAmount" } } },
+      { $group: { _id: "$borrowerId", totalPaid: { $sum: { $sum: "$repayments.amount" } } } },
       { $sort: { totalPaid: -1 } },
       { $limit: 5 },
       {
@@ -1186,198 +1110,260 @@ exports.getBorrowersReport = async (req, res) => {
 exports.getAgentsReport = async (req, res) => {
   try {
     const lenderId = req.user._id;
-    const today = new Date();
+    const { startDate, endDate } = req.query;
 
-    const agents = await Agent.find({ lenderId })
-      .select("-password")
-      .lean();
+    const startObj = startDate ? new Date(startDate) : new Date(0);
+    const endObj = endDate ? new Date(endDate) : new Date();
 
-    let summary = {
-      totalRegisteredBorrowers: 0,
-      newBorrowers: 0,
-      repeatBorrowers: 0,
-      totalDisbursed: 0,
-      totalCollected: 0,
-      currentlyRepaying: 0
-    };
+    // 1. Fetch Agents for this lender (excluding deleted ones)
+    const agents = await Agent.find({ 
+      lenderId,
+      isDeleted: { $ne: true } 
+    }).select("name phone status lastActiveAt").lean();
+    
+    const agentMap = new Map();
+    agents.forEach(a => {
+      agentMap.set(a._id.toString(), {
+        ...a,
+        loansIssued: 0,
+        amountDisbursed: 0,
+        collections: 0,
+        activeClients: 0,
+        totalActiveBalance: 0,
+        overdueBalance: 0,
+        totalLoans: 0,
+        defaultedLoansCount: 0,
+        allTimeRepaid: 0,
+        allTimeExpected: 0,
+        riskFlags: []
+      });
+    });
 
-    const portfolioQualityByAgent = [];
+    // 2. Aggregate Productivity & Portfolio Quality from Loans (excluding deleted records)
+    const loanStats = await Loan.aggregate([
+      {
+        $match: {
+          lenderId: new mongoose.Types.ObjectId(lenderId),
+          requestedByAgentId: { $ne: null },
+          loanRequestStatus: "approved",
+          isDeleted: { $ne: true } // Skip deleted loans
+        }
+      },
+      // Ensure borrower (customer) is not deleted
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "borrower"
+        }
+      },
+      { $unwind: "$borrower" },
+      { $match: { "borrower.isDeleted": { $ne: true } } },
+      {
+        $facet: {
+          "productivity": [
+            { $match: { issueDate: { $gte: startObj, $lte: endObj } } },
+            {
+              $group: {
+                _id: "$requestedByAgentId",
+                loansIssued: { $sum: 1 },
+                amountDisbursed: { $sum: "$amount" },
+                activeClients: { $addToSet: "$borrowerId" }
+              }
+            }
+          ],
+          "quality": [
+            {
+              $group: {
+                _id: "$requestedByAgentId",
+                totalActiveBalance: { 
+                  $sum: { $cond: [{ $in: ["$status", ["active", "overdue"]] }, "$balance", 0] } 
+                },
+                overdueBalance: { 
+                  $sum: { $cond: [{ $eq: ["$status", "overdue"] }, "$balance", 0] } 
+                },
+                totalLoans: { $sum: 1 },
+                defaultedLoansCount: { $sum: { $cond: ["$isDefaulted", 1, 0] } },
+                allTimeRepaid: { $sum: "$repaidAmount" },
+                allTimeExpected: { $sum: "$totalRepayment" }
+              }
+            }
+          ],
+          "unusualPatterns": [
+            {
+              $group: {
+                _id: { agent: "$requestedByAgentId", borrower: "$borrowerId" },
+                activeLoanCount: { 
+                  $sum: { $cond: [{ $eq: ["$status", "active"] }, 1, 0] } 
+                }
+              }
+            },
+            { $match: { activeLoanCount: { $gt: 1 } } },
+            {
+              $group: {
+                _id: "$_id.agent",
+                suspiciousBorrowersCount: { $sum: 1 }
+              }
+            }
+          ]
+        }
+      }
+    ]);
+
+    // 3. Aggregate Collections from Transactions
+    const collectionStats = await Transaction.aggregate([
+      {
+        $match: {
+          type: "repayment",
+          status: "successful",
+          createdAt: { $gte: startObj, $lte: endObj }
+        }
+      },
+      {
+        $lookup: {
+          from: "loans",
+          localField: "loanId",
+          foreignField: "_id",
+          as: "loan"
+        }
+      },
+      { $unwind: "$loan" },
+      { 
+        $match: { 
+          "loan.lenderId": new mongoose.Types.ObjectId(lenderId),
+          "loan.requestedByAgentId": { $ne: null },
+          "loan.isDeleted": { $ne: true } // Skip transactions for deleted loans
+        } 
+      },
+      {
+        $group: {
+          _id: "$loan.requestedByAgentId",
+          collections: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    // 4. Merge results into agentMap
+    const prod = loanStats[0].productivity;
+    const qual = loanStats[0].quality;
+    const patterns = loanStats[0].unusualPatterns;
+
+    prod.forEach(p => {
+      const a = agentMap.get(p._id.toString());
+      if (a) {
+        a.loansIssued = p.loansIssued;
+        a.amountDisbursed = p.amountDisbursed;
+        a.activeClients = p.activeClients.length;
+      }
+    });
+
+    qual.forEach(q => {
+      const a = agentMap.get(q._id.toString());
+      if (a) {
+        a.totalActiveBalance = q.totalActiveBalance;
+        a.overdueBalance = q.overdueBalance;
+        a.totalLoans = q.totalLoans;
+        a.defaultedLoansCount = q.defaultedLoansCount;
+        a.allTimeRepaid = q.allTimeRepaid;
+        a.allTimeExpected = q.allTimeExpected;
+      }
+    });
+
+    collectionStats.forEach(c => {
+      const a = agentMap.get(c._id.toString());
+      if (a) a.collections = c.collections;
+    });
+
+    // Patterns map for easy lookup
+    const patternMap = new Map(patterns.map(p => [p._id.toString(), p.suspiciousBorrowersCount]));
+
+    // 5. Build final response objects & Calculate Risks
+    const agentProductivity = [];
+    const portfolioQuality = [];
     const operationalBehavior = [];
+    const riskFlags = [];
     const leaderboardData = [];
 
-    for (const agent of agents) {
-
-      /* ===================================================
-         GET LOANS CREATED BY AGENT
-      =================================================== */
-
-      const loans = await Loan.find({
-        lenderId,
-        requestedByAgentId: agent._id,
-        loanRequestStatus: "approved"
-      }).lean();
-
-      const loansHandled = loans.length;
-
-      const totalDisbursed = loans.reduce(
-        (sum, loan) => sum + (loan.amount || 0),
-        0
-      );
-
-      /* ===================================================
-         COLLECTION (FROM EMBEDDED REPAYMENTS)
-      =================================================== */
-
-      let totalCollected = 0;
-
-      loans.forEach(loan => {
-        if (loan.repayments && loan.repayments.length > 0) {
-          loan.repayments.forEach(r => {
-            if (r.status === "successful") {
-              totalCollected += r.amount || 0;
-            }
-          });
-        }
+    agentMap.forEach((agent, id) => {
+      // Productivity
+      agentProductivity.push({
+        agentId: id,
+        agentName: agent.name,
+        loansIssued: agent.loansIssued,
+        amountDisbursed: agent.amountDisbursed,
+        collections: agent.collections,
+        activeClients: agent.activeClients
       });
 
-      /* ===================================================
-         BORROWER ANALYSIS (FROM LOANS)
-      =================================================== */
+      // Quality
+      const par = agent.totalActiveBalance > 0 ? (agent.overdueBalance / agent.totalActiveBalance) * 100 : 0;
+      const defaultRate = agent.totalLoans > 0 ? (agent.defaultedLoansCount / agent.totalLoans) * 100 : 0;
+      const collectionEfficiency = agent.allTimeExpected > 0 ? (agent.allTimeRepaid / agent.allTimeExpected) * 100 : 0;
 
-      const borrowerIds = loans.map(l => l.borrowerId?.toString());
+      portfolioQuality.push({
+        agentId: id,
+        agentName: agent.name,
+        par: Number(par.toFixed(2)),
+        defaultRate: Number(defaultRate.toFixed(2)),
+        overdueAmount: agent.overdueBalance,
+        collectionEfficiency: Number(collectionEfficiency.toFixed(2))
+      });
 
-      const uniqueBorrowers = [...new Set(borrowerIds)];
+      // Risk Flags detection
+      const flags = [];
+      if (agent.amountDisbursed > 50000 && agent.collections < agent.amountDisbursed * 0.2) {
+        flags.push("HIGH_DISBURSE_LOW_COLLECTION");
+      }
+      if (par > 30) {
+        flags.push("HIGH_PAR_DANGER");
+      }
+      if (patternMap.has(id)) {
+        flags.push("UNUSUAL_BORROWER_PATTERN");
+      }
 
-      const totalBorrowersForAgent = uniqueBorrowers.length;
+      if (flags.length > 0) {
+        riskFlags.push({
+          agentId: id,
+          agentName: agent.name,
+          flags
+        });
+      }
 
-      const repeatBorrowers = borrowerIds.length - uniqueBorrowers.length;
+      // Operational
+      operationalBehavior.push({
+        agentId: id,
+        agentName: agent.name,
+        lastActivityDate: agent.lastActiveAt,
+        loginFrequency: "N/A", // Not tracked in current schema
+        suspiciousBehavior: flags.length > 0 ? `Detected ${flags.length} flags` : "None"
+      });
 
-      /* ===================================================
-         ACTIVE LOANS
-      =================================================== */
-
-      const activeLoans = loans.filter(
-        l => l.loanStatus === "active"
-      );
-
-      const currentlyRepaying = activeLoans.length;
-
-      /* ===================================================
-         PORTFOLIO QUALITY
-      =================================================== */
-
-      const overdueLoans = loans.filter(
-        l =>
-          l.loanStatus === "active" &&
-          l.nextDueDate &&
-          new Date(l.nextDueDate) < today
-      );
-
-      const overdueAmount = overdueLoans.reduce(
-        (sum, l) => sum + (l.outstandingBalance || 0),
-        0
-      );
-
-      const par =
-        totalDisbursed > 0
-          ? (overdueAmount / totalDisbursed) * 100
-          : 0;
-
-      const defaultedLoans = loans.filter(
-        l => l.loanStatus === "defaulted"
-      );
-
-      const defaultRate =
-        loansHandled > 0
-          ? (defaultedLoans.length / loansHandled) * 100
-          : 0;
-
-      const collectionEfficiency =
-        totalDisbursed > 0
-          ? (totalCollected / totalDisbursed) * 100
-          : 0;
-
-      /* ===================================================
-         RISK FLAGS
-      =================================================== */
-
-      const riskFlags = [];
-
-      if (totalDisbursed > 100000 && totalCollected < totalDisbursed * 0.3)
-        riskFlags.push("HIGH_DISBURSE_LOW_COLLECTION");
-
-      if (par > 20)
-        riskFlags.push("HIGH_PAR");
-
-      if (defaultRate > 15)
-        riskFlags.push("HIGH_DEFAULT_RATE");
-
-      if (repeatBorrowers > 5)
-        riskFlags.push("REPEATED_BORROWER_PATTERN");
-
-      /* ===================================================
-         PUSH AGENT DATA
-      =================================================== */
-
-      portfolioQualityByAgent.push({
-  agentName: agent.name,
-  par: Number(par.toFixed(2)),
-  defaultRate: Number(defaultRate.toFixed(2)),
-  overdueAmount,
-  collectionEfficiency: Number(collectionEfficiency.toFixed(2))
-});
-
-    operationalBehavior.push({
-  agentName: agent.name,
-  lastActivity: agent.lastActiveAt || null,
-  riskFlags
-});
-
+      // Leaderboard Score
+      // Score = (Collection % * 0.6) + (Productivity Score * 0.4) - (PAR * 0.5)
+      const score = (collectionEfficiency * 0.6) + ((agent.loansIssued / 10) * 0.4) - (par * 0.5);
       leaderboardData.push({
-  agentName: agent.name,
-  score: collectionEfficiency - par - defaultRate,
-  riskFlags
-});
+        agentId: id,
+        agentName: agent.name,
+        score: Number(score.toFixed(2)),
+        riskFlags: flags
+      });
+    });
 
-      /* ===================================================
-         UPDATE SUMMARY
-      =================================================== */
-
-      summary.totalRegisteredBorrowers += totalBorrowersForAgent;
-      summary.repeatBorrowers += repeatBorrowers;
-      summary.totalDisbursed += totalDisbursed;
-      summary.totalCollected += totalCollected;
-      summary.currentlyRepaying += currentlyRepaying;
-    }
-
-    /* ===================================================
-       LEADERBOARDS
-    =================================================== */
-
-    const topPerforming = [...leaderboardData]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-
-    const underPerforming = [...leaderboardData]
-      .sort((a, b) => a.score - b.score)
-      .slice(0, 3);
-
-    const highRiskAgents = leaderboardData.filter(
-      a => a.riskFlags.length > 0
-    );
-
-    /* ===================================================
-       RESPONSE
-    =================================================== */
+    // Leaderboards
+    const topPerforming = [...leaderboardData].sort((a, b) => b.score - a.score).slice(0, 5);
+    const underperforming = [...leaderboardData].sort((a, b) => a.score - b.score).slice(0, 5);
+    const highRiskAgents = [...leaderboardData].filter(a => a.riskFlags.length > 0).sort((a, b) => b.riskFlags.length - a.riskFlags.length).slice(0, 5);
 
     return res.json({
       success: true,
-      summary,
-      portfolioQualityByAgent,
+      agentProductivity,
+      portfolioQuality,
       operationalBehavior,
+      riskFlags,
       leaderboards: {
         topPerforming,
-        underPerforming,
+        underperforming,
         highRiskAgents
       }
     });
@@ -2442,332 +2428,278 @@ exports.getDetailedProfitReport = async (req, res) => {
 exports.getDemographicsAnalysis = async (req, res) => {
   try {
     const lenderId = req.user._id;
-    const today = new Date();
+    const { startDate, endDate } = req.query;
 
-    /* =====================================================
-       1️⃣ GET ALL AGENTS UNDER THIS LENDER
-    ===================================================== */
+    const startObj = startDate ? new Date(startDate) : null;
+    const endObj = endDate ? new Date(endDate) : new Date();
 
-    const agents = await Agent.find({ lenderId }).select("_id");
+    // 1. Get agents for this lender to filter customers
+    const agents = await Agent.find({ lenderId }).select("_id").lean();
     const agentIds = agents.map(a => a._id);
 
-    /* =====================================================
-       2️⃣ GET ALL BORROWERS (LENDER + AGENT CREATED)
-    ===================================================== */
-
-    const borrowers = await Customer.find({
-      // $or: [
-      //   { registeredBy: lenderId, registeredByModel: "User" },
-      //   { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
-      // ],
-      isDeleted: { $ne: true }
-    }).lean();
-
-    /* =====================================================
-       3️⃣ GET LOANS FOR THIS LENDER
-    ===================================================== */
-
-    const loans = await Loan.find({
-      lenderId,
-      loanRequestStatus: "approved",
-      isDeleted: { $ne: true }
-    }).lean();
-
-    /* =====================================================
-       4️⃣ BORROWER → LOAN MAP
-    ===================================================== */
-
-    const borrowerLoanMap = {};
-
-    loans.forEach(l => {
-      const id = l.borrowerId.toString();
-
-      if (!borrowerLoanMap[id]) {
-        borrowerLoanMap[id] = {
-          totalLoans: 0,
-          totalAmount: 0,
-          totalRepaid: 0,
-          defaulted: 0
-        };
-      }
-
-      borrowerLoanMap[id].totalLoans++;
-      borrowerLoanMap[id].totalAmount += l.amount || 0;
-      borrowerLoanMap[id].totalRepaid += l.repaidAmount || 0;
-
-      if (l.isDefaulted) borrowerLoanMap[id].defaulted++;
-    });
-
-    /* =====================================================
-       5️⃣ BASE DEMOGRAPHICS
-    ===================================================== */
-
-    const ageDistribution = {
-      under25: 0,
-      age25_34: 0,
-      age35_44: 0,
-      age45_54: 0,
-      above55: 0
+    const borrowerMatch = {
+      $and: [
+        {
+          $or: [
+            { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
+            { agentId: { $in: agentIds } },
+            { assignedAgent: { $in: agentIds } }
+          ]
+        },
+        { isDeleted: { $ne: true } }
+      ]
     };
 
-    const genderDistribution = {};
-    const occupationDistribution = {};
-    const incomeBands = {};
-    const regionMap = {};
-
-    borrowers.forEach(b => {
-
-      // AGE
-      if (b.dateOfBirth) {
-        const age =
-          (today - new Date(b.dateOfBirth)) /
-          (1000 * 60 * 60 * 24 * 365);
-
-        if (age < 25) ageDistribution.under25++;
-        else if (age < 35) ageDistribution.age25_34++;
-        else if (age < 45) ageDistribution.age35_44++;
-        else if (age < 55) ageDistribution.age45_54++;
-        else ageDistribution.above55++;
+    // 2. Aggregate Demographics & Geographic Insights
+    const demographicsData = await Customer.aggregate([
+      { $match: borrowerMatch },
+      {
+        $facet: {
+          ageGroup: [
+            {
+              $addFields: {
+                age: {
+                  $divide: [
+                    { $subtract: [new Date(), "$dateOfBirth"] },
+                    1000 * 60 * 60 * 24 * 365
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: {
+                  $switch: {
+                    branches: [
+                      { case: { $lt: ["$age", 26] }, then: "18-25" },
+                      { case: { $lt: ["$age", 36] }, then: "26-35" },
+                      { case: { $lt: ["$age", 46] }, then: "36-45" },
+                      { case: { $lt: ["$age", 61] }, then: "46-60" },
+                      { case: { $gte: ["$age", 61] }, then: "60+" }
+                    ],
+                    default: "Unknown"
+                  }
+                },
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          gender: [
+            { $group: { _id: { $ifNull: ["$gender", "Unknown"] }, count: { $sum: 1 } } }
+          ],
+          occupation: [
+            { $group: { _id: { $ifNull: ["$occupation", "Unknown"] }, count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+          ],
+          income: [
+            { $group: { _id: { $ifNull: ["$monthlyIncomeRange", "Unknown"] }, count: { $sum: 1 } } }
+          ],
+          regional: [
+            { $group: { _id: { $ifNull: ["$town", "Unknown"] }, count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
+          ],
+          urbanRural: [
+            {
+              $group: {
+                _id: {
+                  $cond: [
+                    { 
+                      $regexMatch: { 
+                        input: { $ifNull: ["$physicalAddress", ""] }, 
+                        regex: /city|urban|nairobi|mombasa|kisumu|nakuru|kampala|dar|lagos|accra|kigali/i 
+                      } 
+                    },
+                    "Urban", 
+                    "Rural"
+                  ]
+                },
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          growth: [
+            {
+              $match: {
+                createdAt: { $gte: startObj || new Date(0), $lte: endObj }
+              }
+            },
+            {
+              $group: {
+                _id: { $ifNull: ["$town", "Unknown"] },
+                newBorrowers: { $sum: 1 }
+              }
+            }
+          ]
+        }
       }
+    ]);
 
-      // GENDER
-      const gender = b.gender || "Unknown";
-      genderDistribution[gender] =
-        (genderDistribution[gender] || 0) + 1;
+    // 3. Aggregate Behavior Patterns by Demographic Segments
+    const behaviorData = await Loan.aggregate([
+      {
+        $match: {
+          lenderId: new mongoose.Types.ObjectId(lenderId),
+          loanRequestStatus: "approved",
+          isDeleted: { $ne: true }
+        }
+      },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "borrower"
+        }
+      },
+      { $unwind: "$borrower" },
+      {
+        $facet: {
+          byGender: [
+            {
+              $group: {
+                _id: { $ifNull: ["$borrower.gender", "Unknown"] },
+                avgLoanSize: { $avg: "$amount" },
+                defaultRatePercentage: { $avg: { $cond: ["$isDefaulted", 1, 0] } },
+                repaymentRatePercentage: { 
+                  $avg: { 
+                    $cond: [
+                      { $gt: ["$totalRepayment", 0] }, 
+                      { $divide: ["$repaidAmount", "$totalRepayment"] }, 
+                      0
+                    ] 
+                  } 
+                }
+              }
+            }
+          ],
+          byEducation: [
+            {
+              $group: {
+                _id: { $ifNull: ["$borrower.educationLevel", "Unknown"] },
+                count: { $sum: 1 },
+                avgLoanSize: { $avg: "$amount" },
+                defaultRatePercentage: { $avg: { $cond: ["$isDefaulted", 1, 0] } },
+                repaymentRatePercentage: { 
+                  $avg: { 
+                    $cond: [
+                      { $gt: ["$totalRepayment", 0] }, 
+                      { $divide: ["$repaidAmount", "$totalRepayment"] }, 
+                      0
+                    ] 
+                  } 
+                }
+              }
+            }
+          ],
+          byMarital: [
+            {
+              $group: {
+                _id: { $ifNull: ["$borrower.maritalStatus", "Unknown"] },
+                count: { $sum: 1 },
+                defaultRatePercentage: { $avg: { $cond: ["$isDefaulted", 1, 0] } },
+                repaymentRatePercentage: { 
+                  $avg: { 
+                    $cond: [
+                      { $gt: ["$totalRepayment", 0] }, 
+                      { $divide: ["$repaidAmount", "$totalRepayment"] }, 
+                      0
+                    ] 
+                  } 
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]);
 
-      // OCCUPATION
-      const occ = b.occupation || "Unknown";
-      occupationDistribution[occ] =
-        (occupationDistribution[occ] || 0) + 1;
+    // 4. Transform & Format Response
+    const d = demographicsData[0] || {};
+    const b = behaviorData[0] || {};
 
-      // INCOME
-      const band = b.monthlyIncomeRange || "Unknown";
-      incomeBands[band] =
-        (incomeBands[band] || 0) + 1;
+    const formatToObj = (arr) => (arr || []).reduce((acc, curr) => {
+      acc[curr._id] = curr.count;
+      return acc;
+    }, {});
 
-      // REGION (using market/town fallback)
-      const region = b.market || b.town || "Unknown";
-      regionMap[region] =
-        (regionMap[region] || 0) + 1;
-    });
+    const customerDemographics = {
+      ageDistribution: formatToObj(d.ageGroup),
+      genderDistribution: formatToObj(d.gender),
+      occupationDistribution: formatToObj(d.occupation),
+      incomeBands: formatToObj(d.income)
+    };
 
-    const underservedRegions = Object.entries(regionMap)
-      .filter(([_, count]) => count < 5)
-      .map(([region]) => region);
+    const geographicInsights = {
+      borrowersByRegion: formatToObj(d.regional),
+      urbanRuralSplit: formatToObj(d.urbanRural),
+      borrowerGrowthByLocation: (d.growth || []).reduce((acc, curr) => {
+        acc[curr._id] = curr.newBorrowers;
+        return acc;
+      }, {})
+    };
 
-    /* =====================================================
-       6️⃣ BEHAVIOR BY GENDER
-    ===================================================== */
+    const behaviorPatterns = {
+      byGender: (b.byGender || []).map(item => ({
+        segment: item._id,
+        avgLoanSize: Math.round(item.avgLoanSize || 0),
+        defaultRate: Number(((item.defaultRatePercentage || 0) * 100).toFixed(2)),
+        repaymentRate: Number(((item.repaymentRatePercentage || 0) * 100).toFixed(2))
+      })),
+      byEducation: (b.byEducation || []).map(item => ({
+        level: item._id,
+        count: item.count,
+        avgLoanSize: Math.round(item.avgLoanSize || 0),
+        defaultRate: Number(((item.defaultRatePercentage || 0) * 100).toFixed(2)),
+        repaymentRate: Number(((item.repaymentRatePercentage || 0) * 100).toFixed(2))
+      })),
+      byMaritalStatus: (b.byMarital || []).map(item => ({
+        status: item._id,
+        count: item.count,
+        defaultRate: Number(((item.defaultRatePercentage || 0) * 100).toFixed(2)),
+        repaymentRate: Number(((item.repaymentRatePercentage || 0) * 100).toFixed(2))
+      }))
+    };
 
-    const genderLoanStats = {};
+    // Market Opportunities Logic
+    const underservedRegions = (d.regional || [])
+      .filter(r => r.count < 5)
+      .map(r => r._id);
 
-    loans.forEach(l => {
-      const borrower = borrowers.find(
-        b => b._id.toString() === l.borrowerId.toString()
+    const fastGrowingSegments = (d.growth || [])
+      .sort((a, b) => b.newBorrowers - a.newBorrowers)
+      .slice(0, 3)
+      .map(s => s._id);
+
+    const highRiskDemographics = (b.byGender || [])
+      .filter(g => (g.defaultRatePercentage || 0) > 0.2)
+      .map(g => `${g._id} Borrowers`)
+      .concat(
+        (b.byEducation || []).filter(e => (e.defaultRatePercentage || 0) > 0.2).map(e => `${e._id} Education Level`)
       );
-      if (!borrower) return;
 
-      const gender = borrower.gender || "Unknown";
-
-      if (!genderLoanStats[gender]) {
-        genderLoanStats[gender] = {
-          total: 0,
-          defaulted: 0,
-          totalAmount: 0
-        };
-      }
-
-      genderLoanStats[gender].total++;
-      genderLoanStats[gender].totalAmount += l.amount || 0;
-
-      if (l.isDefaulted) genderLoanStats[gender].defaulted++;
-    });
-
-    const behaviorByGender = Object.keys(genderLoanStats).map(g => ({
-      gender: g,
-      defaultRate:
-        genderLoanStats[g].total > 0
-          ? Number(
-              ((genderLoanStats[g].defaulted /
-                genderLoanStats[g].total) * 100).toFixed(2)
-            )
-          : 0,
-      averageLoanSize:
-        genderLoanStats[g].total > 0
-          ? Number(
-              (genderLoanStats[g].totalAmount /
-                genderLoanStats[g].total).toFixed(2)
-            )
-          : 0
-    }));
-
-    const highRiskDemographics =
-      behaviorByGender.filter(g => g.defaultRate > 20);
-
-    /* =====================================================
-       7️⃣ MARITAL STATUS ANALYSIS
-    ===================================================== */
-
-    const maritalStatusAnalysis = {};
-
-    borrowers.forEach(b => {
-      const key = b.maritalStatus || "Unknown";
-
-      if (!maritalStatusAnalysis[key]) {
-        maritalStatusAnalysis[key] = {
-          borrowers: 0,
-          avgLoanSize: 0,
-          defaultRate: 0,
-          repaymentRate: 0
-        };
-      }
-
-      maritalStatusAnalysis[key].borrowers++;
-
-      const loanData = borrowerLoanMap[b._id];
-      if (loanData && loanData.totalLoans > 0) {
-        maritalStatusAnalysis[key].avgLoanSize +=
-          loanData.totalAmount / loanData.totalLoans;
-
-        maritalStatusAnalysis[key].defaultRate +=
-          loanData.defaulted / loanData.totalLoans;
-
-        maritalStatusAnalysis[key].repaymentRate +=
-          loanData.totalRepaid / loanData.totalAmount;
-      }
-    });
-
-    /* =====================================================
-       8️⃣ EDUCATION ANALYSIS
-    ===================================================== */
-
-    const educationAnalysis = {};
-
-    borrowers.forEach(b => {
-      const key = b.educationLevel || "Unknown";
-
-      if (!educationAnalysis[key]) {
-        educationAnalysis[key] = {
-          borrowers: 0,
-          avgLoanSize: 0,
-          repaymentRate: 0
-        };
-      }
-
-      educationAnalysis[key].borrowers++;
-
-      const loanData = borrowerLoanMap[b._id];
-      if (loanData && loanData.totalLoans > 0) {
-        educationAnalysis[key].avgLoanSize +=
-          loanData.totalAmount / loanData.totalLoans;
-
-        educationAnalysis[key].repaymentRate +=
-          loanData.totalRepaid / loanData.totalAmount;
-      }
-    });
-
-    /* =====================================================
-       9️⃣ HOUSEHOLD RISK
-    ===================================================== */
-
-    const householdAnalysis = {
-      small: { borrowers: 0, defaultRate: 0 },
-      medium: { borrowers: 0, defaultRate: 0 },
-      large: { borrowers: 0, defaultRate: 0 }
+    const marketOpportunities = {
+      underservedRegions,
+      fastGrowingSegments,
+      highRiskDemographics
     };
 
-    borrowers.forEach(b => {
-      const size = b.householdSize || 0;
-
-      const category =
-        size <= 2 ? "small" :
-        size <= 5 ? "medium" : "large";
-
-      householdAnalysis[category].borrowers++;
-
-      const loanData = borrowerLoanMap[b._id];
-      if (loanData && loanData.totalLoans > 0) {
-        householdAnalysis[category].defaultRate +=
-          loanData.defaulted / loanData.totalLoans;
-      }
-    });
-
-    /* =====================================================
-       🔟 URBAN vs RURAL
-    ===================================================== */
-
-    const locationSplit = { urban: 0, rural: 0 };
-
-    borrowers.forEach(b => {
-      if (b.market?.toLowerCase().includes("city"))
-        locationSplit.urban++;
-      else locationSplit.rural++;
-    });
-
-    /* =====================================================
-       1️⃣1️⃣ TENURE ANALYSIS
-    ===================================================== */
-
-    const tenureAnalysis = {
-      lessThan1Year: 0,
-      oneToThreeYears: 0,
-      aboveThreeYears: 0
-    };
-
-    borrowers.forEach(b => {
-      if (!b.createdAt) return;
-
-      const years =
-        (today - new Date(b.createdAt)) /
-        (1000 * 60 * 60 * 24 * 365);
-
-      if (years < 1) tenureAnalysis.lessThan1Year++;
-      else if (years < 3) tenureAnalysis.oneToThreeYears++;
-      else tenureAnalysis.aboveThreeYears++;
-    });
-
-    /* =====================================================
-       FINAL RESPONSE
-    ===================================================== */
-
-    res.json({
+    return res.json({
       success: true,
-      totalBorrowers: borrowers.length,
-
-      customerDemographics: {
-        ageDistribution,
-        genderDistribution,
-        occupationDistribution,
-        incomeBands
-      },
-
-      geographicInsights: {
-        borrowersByRegion: regionMap,
-        underservedRegions
-      },
-
-      behaviorPatterns: {
-        byGender: behaviorByGender,
-        maritalStatusAnalysis,
-        educationAnalysis,
-        householdRiskAnalysis: householdAnalysis
-      },
-
-      socioeconomicInsights: {
-        urbanRuralSplit: locationSplit,
-        tenureAnalysis
-      },
-
-      marketOpportunitySignals: {
-        highRiskDemographics
-      }
+      customerDemographics,
+      geographicInsights,
+      behaviorPatterns,
+      marketOpportunities
     });
 
   } catch (error) {
-    console.error("Demographics analysis error:", error);
-    res.status(500).json({
+    console.error("Demographics Analysis Error:", error);
+    return res.status(500).json({
       success: false,
-      message: "Failed to generate demographics analysis"
+      message: "Failed to generate demographics analysis",
+      error: error.message
     });
   }
 };
+
+
