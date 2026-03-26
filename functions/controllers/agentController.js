@@ -261,7 +261,25 @@ const loginAgent = async (req, res) => {
   }
 };
 
+const CustomersForAgent = async (req, res) => {
+  try {
+    const { agentId } = req.params;
 
+    const customers = await Borrower.find({ agentId })
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      message: "Customers retrieved successfully",
+      total: customers.length,
+      customers
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: "Error retrieving customers"
+    });
+  }
+};
 
 const getCustomersForAgent  = async (req, res) => {
      console.log("👉 AUTH USER:", req.user);
@@ -626,4 +644,4 @@ const getAgentProfile = asyncHandler(async (req, res) => {
 });
 
 
-module.exports = { registerAgent ,changePassword,loginAgent , registerCustomer ,getAgentProfile,getCustomersForAgent };
+module.exports = { CustomersForAgent,registerAgent ,changePassword,loginAgent , registerCustomer ,getAgentProfile,getCustomersForAgent };

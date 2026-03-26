@@ -161,6 +161,8 @@ async function initializeApp(secrets = {}) {
   app.use("/api/agent", jsonParser, require("./routes/agentRoutes"));
   app.use("/ussd", jsonParser, require("./routes/ussdRoutes"));
   app.use("/api/mpesa", jsonParser, require("./routes/mpesaCallbackRoutes"));
+  app.use("/api/groups", jsonParser, require("./routes/groupRoutes"));
+  app.use("/api/agent-groups", jsonParser, require("./routes/agentGroupRoutes"));
 
   app.use("/api/auth", authRateLimit, jsonParser, require("./routes/authRoutes"));
 

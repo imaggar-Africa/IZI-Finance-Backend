@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 
-const { registerAgent, changePassword, loginAgent, registerCustomer, getAgentProfile, getCustomersForAgent , } = require("../controllers/agentController");
+const { registerAgent, changePassword,CustomersForAgent, loginAgent, registerCustomer, getAgentProfile, getCustomersForAgent , } = require("../controllers/agentController");
 const { protect, agentProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware.js");
 // Get upload from app locals
@@ -33,6 +33,13 @@ router.get(
   getCustomersForAgent 
 );
 
+
+router.get(
+  "/customers/:agentId",
+  protect,
+  authorizeRoles("agent", "admin", "lender"),
+  CustomersForAgent
+);
 
 router.post("/register", protect,authorizeRoles("lender"), validateAfricaPhone, // ✅ phone validation here
 registerAgent);

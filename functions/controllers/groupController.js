@@ -207,3 +207,125 @@ exports.getLenderGroups = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+/* =========================
+   UPDATE GROUP
+========================= */
+exports.updateGroup = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const updateData = req.body;
+
+    const group = await Group.findByIdAndUpdate(
+      groupId,
+      { $set: updateData },
+      { new: true }
+    );
+
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    res.json({
+      success: true,
+      group
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   DELETE GROUP
+========================= */
+exports.deleteGroup = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+
+    const group = await Group.findByIdAndDelete(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Also remove all members
+    await GroupMember.deleteMany({ groupId });
+
+    res.json({
+      success: true,
+      message: "Group and its members deleted"
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP ANALYTICS
+========================= */
+exports.getGroupAnalytics = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+
+    // 1. Basic group stats
+    const totalGroups = await Group.countDocuments({ lenderId });
+    
+    // 2. Aggregate member stats per group
+    const memberStats = await GroupMember.aggregate([
+      {
+        $lookup: {
+          from: "groups",
+          localField: "groupId",
+          foreignField: "_id",
+          as: "group"
+        }
+      },
+      { $unwind: "$group" },
+      { $match: { "group.lenderId": new mongoose.Types.ObjectId(lenderId) } },
+      {
+        $group: {
+          _id: "$groupId",
+          groupName: { $first: "$group.name" },
+          memberCount: { $sum: 1 },
+          totalContribution: { $first: "$group.totalContribution" },
+          totalOwed: { $first: "$group.totalOwed" }
+        }
+      },
+      { $sort: { memberCount: -1 } }
+    ]);
+
+    const avgMembersPerGroup = totalGroups > 0 
+      ? memberStats.reduce((sum, s) => sum + s.memberCount, 0) / totalGroups 
+      : 0;
+
+    const topGroupsByContribution = [...memberStats]
+      .sort((a, b) => b.totalContribution - a.totalContribution)
+      .slice(0, 5);
+
+    const topGroupsByDebt = [...memberStats]
+      .sort((a, b) => b.totalOwed - a.totalOwed)
+      .slice(0, 5);
+
+    res.json({
+      success: true,
+      summary: {
+        totalGroups,
+        avgMembersPerGroup: Number(avgMembersPerGroup.toFixed(1)),
+        totalMembers: memberStats.reduce((sum, s) => sum + s.memberCount, 0)
+      },
+      performance: {
+        topGroupsByContribution,
+        topGroupsByDebt
+      },
+      memberDistribution: memberStats.map(s => ({
+        groupName: s.groupName,
+        count: s.memberCount
+      }))
+    });
+
+  } catch (error) {
+    console.error("Group analytics error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};

@@ -361,20 +361,26 @@ exports.getLoansReport = async (req, res) => {
     /* =====================================================
        2️⃣ LOAN STATUS BREAKDOWN
     ===================================================== */
-    const statusCounts = { active: 0, completed: 0, defaulted: 0, restructured: 0 };
-    loans.forEach(l => {
-      if (l.isDefaulted) statusCounts.defaulted++;
-      else if (l.status === "fully paid") statusCounts.completed++;
-      else if (l.status === "active") statusCounts.active++;
-      else if (l.isRestructured) statusCounts.restructured++;
-    });
+const statusCounts = {
+ pending: 0,
+ active: 0,
+ completed: 0,
+ overdue: 0
+};
 
-    const statusBreakdown = [
-      { status: "Active", count: statusCounts.active },
-      { status: "Completed", count: statusCounts.completed },
-      { status: "Defaulted", count: statusCounts.defaulted },
-      { status: "Restructured", count: statusCounts.restructured }
-    ];
+loans.forEach(l => {
+ if (l.status === "pending") statusCounts.pending++;
+ else if (l.status === "active") statusCounts.active++;
+ else if (l.status === "fully paid") statusCounts.completed++;
+ else if (l.status === "overdue") statusCounts.overdue++;
+});
+
+const statusBreakdown = [
+ { status: "Pending", count: statusCounts.pending },
+ { status: "Active", count: statusCounts.active },
+ { status: "Completed", count: statusCounts.completed },
+ { status: "Overdue", count: statusCounts.overdue }
+];
 
     /* =====================================================
        3️⃣ LOAN STATUS TREND (Aggregation)
@@ -507,8 +513,6 @@ exports.getRepaymentsReport = async (req, res) => {
       isDeleted: { $ne: true }
     };
 
-    // Period filtering based on due date for "Expected" perspective
-    // or updated at for "Action" perspective. We'll use dueDate for expectations.
     if (startDate || endDate) {
       baseFilter.dueDate = {};
       if (startDate) baseFilter.dueDate.$gte = new Date(startDate);
@@ -522,36 +526,41 @@ exports.getRepaymentsReport = async (req, res) => {
       .populate("borrowerId", "fullName town region")
       .populate("requestedByAgentId", "name");
 
-    // Optional Region Filter (Post-fetch if not aggregate joined)
     let filteredLoans = loans;
+
     if (region) {
-      filteredLoans = loans.filter(l => l.borrowerId?.town === region || l.borrowerId?.region === region);
+      filteredLoans = loans.filter(
+        l => l.borrowerId?.town === region || l.borrowerId?.region === region
+      );
     }
 
     const today = new Date();
 
-    /* =====================================================
-       1️⃣ COLLECTION PERFORMANCE
-    ===================================================== */
-    const totalExpectedRepayments = filteredLoans.reduce((sum, l) => sum + (l.totalRepayment || 0), 0);
-    const totalCollected = filteredLoans.reduce((sum, l) => sum + (l.repaidAmount || 0), 0);
-    const collectionRate = totalExpectedRepayments > 0 ? Number(((totalCollected / totalExpectedRepayments) * 100).toFixed(2)) : 0;
-    
+    /* ==============================
+       COLLECTION PERFORMANCE
+    ============================== */
+
+    const totalExpectedRepayments = filteredLoans.reduce(
+      (sum, l) => sum + (l.totalRepayment || 0),
+      0
+    );
+
     const overdueAmount = filteredLoans
       .filter(l => l.status === "overdue")
       .reduce((sum, l) => sum + (l.balance || 0), 0);
 
     let missedRepaymentsCount = 0;
+
     filteredLoans.forEach(l => {
-        // Scheduled vs actual check (simplified)
-        if (l.status === "overdue" || l.balance > 0) {
-            missedRepaymentsCount++;
-        }
+      if (l.status === "overdue" || l.balance > 0) {
+        missedRepaymentsCount++;
+      }
     });
 
-    /* =====================================================
-       2️⃣ REPAYMENT BEHAVIOR
-    ===================================================== */
+    /* ==============================
+       REPAYMENT BEHAVIOR
+    ============================== */
+
     let totalRepayments = 0;
     let lateRepayments = 0;
     let onTimeRepayments = 0;
@@ -563,57 +572,80 @@ exports.getRepaymentsReport = async (req, res) => {
     filteredLoans.forEach(loan => {
       loan.repayments.forEach(r => {
         totalRepayments++;
+
         if (r.wasPaymentLate) {
-            lateRepayments++;
-            totalDaysLate += (r.daysLate || 0);
+          lateRepayments++;
+          totalDaysLate += r.daysLate || 0;
         } else {
-            onTimeRepayments++;
-            // Check if early (payment date < expected payment date)
-            if (new Date(r.date) < new Date(r.expectedPaymentDate)) {
-                earlyRepayments++;
-            }
+          onTimeRepayments++;
+
+          if (new Date(r.date) < new Date(r.expectedPaymentDate)) {
+            earlyRepayments++;
+          }
         }
 
-        // Partial vs Full (Simplified: if repayment records individual target vs received)
-        // Here we assume if they made a payment, we check if it met a daily requirement or similar
-        // For simplicity, we'll mark as 'Full' if it matched the expected amount in the record
         if (r.amount >= (loan.dailyRepayment || 0)) fullPayments++;
         else partialPayments++;
       });
     });
 
-    /* =====================================================
-       3️⃣ CHANNEL ANALYSIS
-    ===================================================== */
+    /* ==============================
+       CHANNEL ANALYSIS
+    ============================== */
+
     const loanIds = filteredLoans.map(l => l._id);
+
     const transactions = await Transaction.find({
       loanId: { $in: loanIds },
       type: "repayment",
       status: "successful"
     });
 
+    // ✅ Correct totalCollected calculation
+    const totalCollected = transactions.reduce(
+      (sum, t) => sum + (t.amount || 0),
+      0
+    );
+
+    const collectionRate =
+      totalExpectedRepayments > 0
+        ? Number(
+            ((totalCollected / totalExpectedRepayments) * 100).toFixed(2)
+          )
+        : 0;
+
     const channelMap = { mpesa: 0, cash: 0, bank_transfer: 0, other: 0 };
     const regionMap = {};
     const agentRepaymentMap = {};
 
+    // ⚡ Faster lookup instead of find()
+    const loanMap = new Map(
+      filteredLoans.map(l => [l._id.toString(), l])
+    );
+
     transactions.forEach(t => {
-      // Channel
-      const method = t.paymentMethod?.toLowerCase() || (t.checkoutRequestID ? "mpesa" : "other");
+      const method =
+        t.paymentMethod?.toLowerCase() ||
+        (t.checkoutRequestID ? "mpesa" : "other");
+
       channelMap[method] = (channelMap[method] || 0) + t.amount;
 
-      // Map back to regions/agents (requires finding the associated loan)
-      const associatedLoan = filteredLoans.find(l => l._id.toString() === t.loanId?.toString());
-      if (associatedLoan) {
-        const regionName = associatedLoan.borrowerId?.town || "Other";
-        const agentName = associatedLoan.requestedByAgentId?.name || "Direct";
+      const loan = loanMap.get(t.loanId?.toString());
+
+      if (loan) {
+        const regionName = loan.borrowerId?.town || "Other";
+        const agentName = loan.requestedByAgentId?.name || "Direct";
+
         regionMap[regionName] = (regionMap[regionName] || 0) + t.amount;
-        agentRepaymentMap[agentName] = (agentRepaymentMap[agentName] || 0) + t.amount;
+        agentRepaymentMap[agentName] =
+          (agentRepaymentMap[agentName] || 0) + t.amount;
       }
     });
 
-    /* =====================================================
-       4️⃣ AGING ANALYSIS
-    ===================================================== */
+    /* ==============================
+       AGING ANALYSIS
+    ============================== */
+
     let aging = {
       current: 0,
       days_1_7: 0,
@@ -624,7 +656,10 @@ exports.getRepaymentsReport = async (req, res) => {
 
     filteredLoans.forEach(loan => {
       if (loan.balance <= 0) return;
-      const diffDays = Math.floor((today - new Date(loan.dueDate)) / (1000 * 60 * 60 * 24));
+
+      const diffDays = Math.floor(
+        (today - new Date(loan.dueDate)) / (1000 * 60 * 60 * 24)
+      );
 
       if (diffDays <= 0) aging.current += loan.balance;
       else if (diffDays <= 7) aging.days_1_7 += loan.balance;
@@ -635,6 +670,7 @@ exports.getRepaymentsReport = async (req, res) => {
 
     res.json({
       success: true,
+
       collectionPerformance: {
         totalExpectedRepayments,
         totalCollected,
@@ -642,27 +678,51 @@ exports.getRepaymentsReport = async (req, res) => {
         missedRepayments: missedRepaymentsCount,
         overdueAmount
       },
+
       repaymentBehavior: {
         onTime: onTimeRepayments,
         late: lateRepayments,
-        earlyRepayments: totalRepayments > 0 ? Number(((earlyRepayments / totalRepayments) * 100).toFixed(2)) : 0,
-        averageDaysLate: lateRepayments > 0 ? Number((totalDaysLate / lateRepayments).toFixed(1)) : 0,
+        earlyRepayments:
+          totalRepayments > 0
+            ? Number(((earlyRepayments / totalRepayments) * 100).toFixed(2))
+            : 0,
+
+        averageDaysLate:
+          lateRepayments > 0
+            ? Number((totalDaysLate / lateRepayments).toFixed(1))
+            : 0,
+
         partialVsFull: {
-            partial: partialPayments,
-            full: fullPayments
+          partial: partialPayments,
+          full: fullPayments
         }
       },
+
       channelAnalysis: {
-        byMethod: Object.keys(channelMap).map(k => ({ method: k, amount: channelMap[k] })),
-        byRegion: Object.keys(regionMap).map(k => ({ region: k, amount: regionMap[k] })),
-        byAgent: Object.keys(agentRepaymentMap).map(k => ({ agent: k, amount: agentRepaymentMap[k] }))
+        byMethod: Object.keys(channelMap).map(k => ({
+          method: k,
+          amount: channelMap[k]
+        })),
+
+        byRegion: Object.keys(regionMap).map(k => ({
+          region: k,
+          amount: regionMap[k]
+        })),
+
+        byAgent: Object.keys(agentRepaymentMap).map(k => ({
+          agent: k,
+          amount: agentRepaymentMap[k]
+        }))
       },
+
       agingAnalysis: aging
     });
 
   } catch (error) {
     console.error("Repayment Report Error:", error);
-    res.status(500).json({ success: false, message: "Failed to generate repayment report" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to generate repayment report" });
   }
 };
 
@@ -875,214 +935,242 @@ exports.getProfitReport = async (req, res) => {
 =========================== */
 exports.getBorrowersReport = async (req, res) => {
   try {
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const lenderId = req.user._id;
+    const { startDate, endDate } = req.query;
 
-    const borrowers = await Customer.find().lean();
-    const loans = await Loan.find({
+    const dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter.createdAt = {};
+      if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+      if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+    }
+
+    // 1. Get all agents for this lender to filter customers
+    const agents = await Agent.find({ lenderId }).select("_id").lean();
+    const agentIds = agents.map(a => a._id);
+
+    const borrowerMatch = { 
+      $or: [
+        { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
+        { agentId: { $in: agentIds } },
+        { assignedAgent: { $in: agentIds } }
+      ],
+      isDeleted: { $ne: true }
+    };
+
+    const loanBaseFilter = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
       loanRequestStatus: "approved",
-      isDeleted: { $ne: true },
-      isWrittenOff: { $ne: true }
-    }).lean();
+      isDeleted: { $ne: true }
+    };
+
+    const periodLoanFilter = { ...loanBaseFilter };
+    if (startDate || endDate) {
+      periodLoanFilter.issueDate = {};
+      if (startDate) periodLoanFilter.issueDate.$gte = new Date(startDate);
+      if (endDate) periodLoanFilter.issueDate.$lte = new Date(endDate);
+    }
 
     /* =========================================================
        1️⃣ BORROWER BASE METRICS
     ========================================================= */
+    const totalRegisteredBorrowers = await Customer.countDocuments(borrowerMatch);
+    
+    const activeBorrowersCount = await Loan.aggregate([
+      { $match: { ...loanBaseFilter, status: "active" } },
+      { $group: { _id: "$borrowerId" } },
+      { $count: "count" }
+    ]);
 
-    const totalRegisteredBorrowers = borrowers.length;
-
-    const activeBorrowerIds = new Set(
-      loans.filter(l => l.status === "active")
-           .map(l => l.borrowerId.toString())
-    );
-
-    const activeBorrowers = activeBorrowerIds.size;
-
-    const newBorrowers = borrowers.filter(
-      b => new Date(b.createdAt) >= startOfMonth
-    );
-
-    const repeatBorrowerMap = {};
-    loans.forEach(l => {
-      const id = l.borrowerId.toString();
-      repeatBorrowerMap[id] = (repeatBorrowerMap[id] || 0) + 1;
+    const newBorrowersCount = await Customer.countDocuments({
+      ...borrowerMatch,
+      ...(dateFilter.createdAt ? { createdAt: dateFilter.createdAt } : {})
     });
 
-    const repeatBorrowers = Object.values(repeatBorrowerMap)
-      .filter(c => c > 1).length;
-
-    const currentlyRepaying = loans.filter(
-      l => l.status === "active"
-    ).length;
+    const repeatBorrowersList = await Loan.aggregate([
+      { $match: loanBaseFilter },
+      { $group: { _id: "$borrowerId", count: { $sum: 1 } } },
+      { $match: { count: { $gt: 1 } } }
+    ]);
 
     /* =========================================================
        2️⃣ CREDIT BEHAVIOR
     ========================================================= */
+    const totalLoansCount = await Loan.countDocuments(loanBaseFilter);
+    const averageLoansPerBorrower = totalRegisteredBorrowers > 0 
+      ? Number((totalLoansCount / totalRegisteredBorrowers).toFixed(2)) 
+      : 0;
 
-    const averageLoansPerBorrower =
-      totalRegisteredBorrowers > 0
-        ? Number((loans.length / totalRegisteredBorrowers).toFixed(2))
-        : 0;
+    const repaymentAggregation = await Loan.aggregate([
+      { $match: loanBaseFilter },
+      {
+        $group: {
+          _id: null,
+          totalExpected: { $sum: "$totalRepayment" },
+          totalCollected: { $sum: "$repaidAmount" },
+          totalSuccessfulRepayments: { 
+            $sum: { $size: { $ifNull: ["$repayments", []] } } 
+          }
+        }
+      }
+    ]);
 
-    const totalExpected = loans.reduce(
-      (sum, l) => sum + (l.totalRepayment || 0),
-      0
-    );
+    const repStats = repaymentAggregation[0] || { totalExpected: 0, totalCollected: 0, totalSuccessfulRepayments: 0 };
+    const repaymentPercentage = repStats.totalExpected > 0 
+      ? Number(((repStats.totalCollected / repStats.totalExpected) * 100).toFixed(2)) 
+      : 0;
+    
+    // Repayment score normalized to 0-10
+    const borrowerRepaymentScore = Number((repaymentPercentage / 10).toFixed(1));
 
-    const totalCollected = loans.reduce(
-      (sum, l) => sum + (l.repaidAmount || 0),
-      0
-    );
+    const topGoodPayers = await Loan.aggregate([
+      { $match: loanBaseFilter },
+      { $group: { _id: "$borrowerId", totalPaid: { $sum: "$repaidAmount" } } },
+      { $sort: { totalPaid: -1 } },
+      { $limit: 5 },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "_id",
+          foreignField: "_id",
+          as: "customer"
+        }
+      },
+      { $unwind: "$customer" },
+      { $project: { name: "$customer.fullName", totalPaid: 1 } }
+    ]);
 
-    const repaymentPercentage =
-      totalExpected > 0
-        ? Number(((totalCollected / totalExpected) * 100).toFixed(2))
-        : 0;
-
-    const borrowerRepaymentScore =
-      Number((repaymentPercentage / 10).toFixed(1)); // 0–10 scale
-
-    /* ---------------- TOP GOOD PAYERS ---------------- */
-
-    const borrowerCollectedMap = {};
-
-    loans.forEach(l => {
-      const id = l.borrowerId.toString();
-      borrowerCollectedMap[id] =
-        (borrowerCollectedMap[id] || 0) +
-        (l.repaidAmount || 0);
-    });
-
-    const topGoodPayers = Object.entries(borrowerCollectedMap)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([id, amount]) => {
-        const borrower = borrowers.find(
-          b => b._id.toString() === id
-        );
-        return {
-          name: borrower?.fullName || "Unknown",
-          totalPaid: amount
-        };
-      });
-
-    /* ---------------- TOP DEFAULTERS ---------------- */
-
-    const defaultedBorrowers = loans
-      .filter(l => l.isDefaulted)
-      .map(l => l.borrowerId.toString());
-
-    const defaulterCounts = {};
-
-    defaultedBorrowers.forEach(id => {
-      defaulterCounts[id] = (defaulterCounts[id] || 0) + 1;
-    });
-
-    const topDefaulters = Object.entries(defaulterCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([id, count]) => {
-        const borrower = borrowers.find(
-          b => b._id.toString() === id
-        );
-        return {
-          name: borrower?.fullName || "Unknown",
-          defaultCount: count
-        };
-      });
+    const topDefaulters = await Loan.aggregate([
+      { $match: { ...loanBaseFilter, isDefaulted: true } },
+      { $group: { _id: "$borrowerId", defaultCount: { $sum: 1 } } },
+      { $sort: { defaultCount: -1 } },
+      { $limit: 5 },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "_id",
+          foreignField: "_id",
+          as: "customer"
+        }
+      },
+      { $unwind: "$customer" },
+      { $project: { name: "$customer.fullName", defaultCount: 1 } }
+    ]);
 
     /* =========================================================
        3️⃣ SEGMENTATION
     ========================================================= */
-
-    const segmentation = {
-      borrowersByGender: {},
-      borrowersByBusinessType: {},
-      borrowersByRegion: {},
-      borrowersByRiskLevel: {
-        veryLow: 0,
-        low: 0,
-        moderate: 0,
-        high: 0
+    const segmentationData = await Customer.aggregate([
+      { $match: borrowerMatch },
+      {
+        $facet: {
+          byGender: [{ $group: { _id: { $ifNull: ["$gender", "Unknown"] }, count: { $sum: 1 } } }],
+          byBusinessType: [{ $group: { _id: { $ifNull: ["$occupation", "Unknown"] }, count: { $sum: 1 } } }],
+          byRegion: [{ $group: { _id: { $ifNull: ["$town", "Unknown"] }, count: { $sum: 1 } } }],
+          byRiskLevel: [{ $group: { _id: { $ifNull: ["$creditLevel", "High Risk"] }, count: { $sum: 1 } } }]
+        }
       }
+    ]);
+
+    const formatSegment = (data) => data.reduce((acc, curr) => {
+      acc[curr._id] = curr.count;
+      return acc;
+    }, {});
+
+    const seg = segmentationData[0];
+    const segmentation = {
+      borrowersByGender: formatSegment(seg.byGender),
+      borrowersByBusinessType: formatSegment(seg.byBusinessType),
+      borrowersByRegion: formatSegment(seg.byRegion),
+      borrowersByRiskLevel: formatSegment(seg.byRiskLevel)
     };
-
-    borrowers.forEach(b => {
-      segmentation.borrowersByGender[b.gender || "Unknown"] =
-        (segmentation.borrowersByGender[b.gender || "Unknown"] || 0) + 1;
-
-      segmentation.borrowersByBusinessType[b.businessType || "Unknown"] =
-        (segmentation.borrowersByBusinessType[b.businessType || "Unknown"] || 0) + 1;
-
-      segmentation.borrowersByRegion[b.region || "Unknown"] =
-        (segmentation.borrowersByRegion[b.region || "Unknown"] || 0) + 1;
-
-      const score = b.creditScore || 500;
-
-      if (score >= 750) segmentation.borrowersByRiskLevel.veryLow++;
-      else if (score >= 650) segmentation.borrowersByRiskLevel.low++;
-      else if (score >= 550) segmentation.borrowersByRiskLevel.moderate++;
-      else segmentation.borrowersByRiskLevel.high++;
-    });
 
     /* =========================================================
        4️⃣ LIFECYCLE INSIGHTS
     ========================================================= */
+    const repeatBorrowersCount = repeatBorrowersList.length;
+    const firstTimeBorrowersCount = Math.max(0, totalRegisteredBorrowers - repeatBorrowersCount);
 
-    const firstTimeBorrowers =
-      Object.values(repeatBorrowerMap).filter(c => c === 1).length;
+    const borrowerRetentionRate = totalRegisteredBorrowers > 0 
+      ? Number(((repeatBorrowersCount / totalRegisteredBorrowers) * 100).toFixed(2)) 
+      : 0;
 
-    const borrowerRetentionRate =
-      totalRegisteredBorrowers > 0
-        ? Number(
-            ((repeatBorrowers / totalRegisteredBorrowers) * 100).toFixed(2)
-          )
-        : 0;
+    // Dormant borrowers: registered with this lender's agents, but no loan in selected period
+    // If no period, use last 90 days as default for "activity"
+    const activityPeriod = {};
+    if (startDate || endDate) {
+      if (startDate) activityPeriod.$gte = new Date(startDate);
+      if (endDate) activityPeriod.$lte = new Date(endDate);
+    } else {
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      activityPeriod.$gte = ninetyDaysAgo;
+    }
 
-    const dormantBorrowers = borrowers.filter(b => {
-      const borrowerLoans = loans.filter(
-        l => l.borrowerId.toString() === b._id.toString()
-      );
-      if (!borrowerLoans.length) return true;
+    const borrowersWithActivity = await Loan.distinct("borrowerId", {
+      lenderId,
+      issueDate: activityPeriod
+    });
 
-      const latestLoan = borrowerLoans.sort(
-        (a, b2) => new Date(b2.createdAt) - new Date(a.createdAt)
-      )[0];
+    const dormantBorrowersCount = await Customer.countDocuments({
+      ...borrowerMatch,
+      _id: { $nin: borrowersWithActivity }
+    });
 
-      const daysSinceLastLoan =
-        (today - new Date(latestLoan.createdAt)) /
-        (1000 * 60 * 60 * 24);
-
-      return daysSinceLastLoan > 90;
-    }).length;
-
-    /* =========================================================
-       FINAL RESPONSE (UI MATCH)
-    ========================================================= */
+    const defaultRateBySegment = await Loan.aggregate([
+      { $match: loanBaseFilter },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "customer"
+        }
+      },
+      { $unwind: "$customer" },
+      {
+        $group: {
+          _id: "$customer.creditLevel",
+          total: { $sum: 1 },
+          defaulted: { $sum: { $cond: ["$isDefaulted", 1, 0] } }
+        }
+      },
+      {
+        $project: {
+          segment: { $ifNull: ["$_id", "Unknown"] },
+          rate: { 
+            $cond: [
+              { $gt: ["$total", 0] }, 
+              { $multiply: [{ $divide: ["$defaulted", "$total"] }, 100] }, 
+              0
+            ] 
+          }
+        }
+      }
+    ]);
 
     res.json({
       success: true,
       borrowerBaseMetrics: {
         totalRegisteredBorrowers,
-        thisPeriodNewBorrowers: newBorrowers.length,
-        activeBorrowers,
-        newBorrowers: newBorrowers.length,
-        repeatBorrowers,
-        currentlyRepaying
+        activeBorrowers: activeBorrowersCount[0]?.count || 0,
+        newBorrowers: newBorrowersCount,
+        repeatBorrowers: repeatBorrowersCount
       },
       creditBehavior: {
         averageLoansPerBorrower,
         borrowerRepaymentScore,
         repaymentPercentage,
+        defaultRateBySegment,
         topGoodPayers,
         topDefaulters
       },
       segmentation,
       lifecycleInsights: {
-        firstTimeBorrowers,
-        repeatBorrowers,
+        firstTimeBorrowers: firstTimeBorrowersCount,
+        repeatBorrowers: repeatBorrowersCount,
         borrowerRetentionRate,
-        dormantBorrowers
+        dormantBorrowers: dormantBorrowersCount
       }
     });
 
