@@ -1,323 +1,174 @@
-// // module.exports.evaluateLoanByCreditScore = ({
-// //   creditScore = 500,
-// //   requestedAmount = 0,
-// //   borrower
-// // }) => {
-
-// //   // 🛑 SAFETY
-// //   if (!borrower) {
-// //     return {
-// //       allowed: false,
-// //       approvedAmount: 0,
-// //       reason: "Borrower data missing"
-// //     };
-// //   }
-
-// //   // 🟢 FIRST LOAN OVERRIDE (VERY IMPORTANT)
-// //   if (
-// //     Number(borrower.totalLoans || 0) === 0 &&
-// //     Number(borrower.completedLoans || 0) === 0
-// //   ) {
-// //     const starterLimit = 1000;
-
-// //     return {
-// //       allowed: requestedAmount <= starterLimit,
-// //       approvedAmount: starterLimit,
-// //       reason: "Starter loan for new customer"
-// //     };
-// //   }
-
-// //   // 🔴 BLOCK
-// //   if (creditScore < 600) {
-// //     return { allowed: false, approvedAmount: 0 };
-// //   }
-
-// //   if (creditScore < 650) {
-// //     return { allowed: true, approvedAmount: 2000 };
-// //   }
-
-// //   if (creditScore < 700) {
-// //     return { allowed: true, approvedAmount: 5000 };
-// //   }
-
-// //   if (creditScore < 750) {
-// //     return { allowed: true, approvedAmount: 8000 };
-// //   }
-
-// //   return { allowed: true, approvedAmount: 15000 };
-// // };
-
-// /* ======================================================
-//    CREDIT SCORE – REPAYMENT UPDATE
-// ====================================================== */
-// const recalculateCreditScore = ({
-//   currentScore = 500,
-//   event = "ON_TIME",
-//   daysLate = 0
-// }) => {
-//   let scoreDelta = 0;
-
-//   if (event === "ON_TIME") {
-//     scoreDelta = +10;
-//   }
-
-//   if (event === "LATE") {
-//     scoreDelta = -Math.min(50, daysLate * 2);
-//   }
-
-//   const newScore = Math.max(300, Math.min(900, currentScore + scoreDelta));
-
-//   return {
-//     newScore,
-//     scoreDelta
-//   };
-// };
-
-// /* ======================================================
-//    LOAN ELIGIBILITY – EXISTING FLOW (UNCHANGED)
-// ====================================================== */
-// const evaluateLoanByCreditScore = ({
-//   creditScore = 500,
-//   requestedAmount = 0,
-//   borrower
-// }) => {
-
-//   if (!borrower) {
-//     return {
-//       allowed: false,
-//       approvedAmount: 0,
-//       reason: "Borrower data missing"
-//     };
-//   }
-
-//   // 🟢 FIRST LOAN OVERRIDE
-//   if (
-//     Number(borrower.totalLoans || 0) === 0 &&
-//     Number(borrower.completedLoans || 0) === 0
-//   ) {
-//     const starterLimit = 1000;
-
-//     return {
-//       allowed: requestedAmount <= starterLimit,
-//       approvedAmount: starterLimit,
-//       reason: "Starter loan for new customer"
-//     };
-//   }
-
-//   if (creditScore < 600) {
-//     return { allowed: false, approvedAmount: 0 };
-//   }
-
-//   if (creditScore < 650) {
-//     return { allowed: true, approvedAmount: 2000 };
-//   }
-
-//   if (creditScore < 700) {
-//     return { allowed: true, approvedAmount: 5000 };
-//   }
-
-//   if (creditScore < 750) {
-//     return { allowed: true, approvedAmount: 8000 };
-//   }
-
-//   return { allowed: true, approvedAmount: 15000 };
-// };
-
-// /* ======================================================
-//    EXPORTS (IMPORTANT)
-// ====================================================== */
-// module.exports = {
-//   recalculateCreditScore,
-//   evaluateLoanByCreditScore
-// };
-
-
 /* ======================================================
-   IZIBANK PROFESSIONAL CREDIT ENGINE
+   IZI FINANCE PROFESSIONAL CREDIT ENGINE (MODERNIZED)
 ====================================================== */
 
-const clamp = (value, min, max) =>
-  Math.max(min, Math.min(max, value));
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-/* ======================================================
-   DEFAULT PROBABILITY
-====================================================== */
-const calculateDefaultProbability = (creditScore) => {
-  const probability = 1 - (creditScore / 900);
-  return Number(probability.toFixed(2));
+/**
+ * 1️⃣ RISK MULTIPLIER LOGIC
+ * Calculates a multiplier based on repayment behavior.
+ */
+const getRiskMultiplier = (customer) => {
+  let multiplier = 1.0;
+
+  const latePayments = Number(customer.latePayments || 0);
+  const totalLoans = Number(customer.totalLoansTaken || customer.totalLoans || 0);
+  const totalRepaid = Number(customer.totalLoansRepaid || customer.completedLoans || 0);
+
+  // Late payment penalties
+  if (latePayments >= 3) multiplier -= 0.3;
+  if (latePayments >= 5) multiplier -= 0.2;
+
+  // Repayment rate penalty
+  if (totalLoans > 0) {
+    const repaymentRate = totalRepaid / totalLoans;
+    if (repaymentRate < 0.7) multiplier -= 0.3;
+  }
+
+  return Math.max(0.4, multiplier);
 };
 
-/* ======================================================
-   CREDIT SCORE – REPAYMENT UPDATE
-====================================================== */
-const recalculateCreditScore = ({
-  currentScore = 500,
-  event = "ON_TIME",
-  daysLate = 0
-}) => {
-  let scoreDelta = 0;
+/**
+ * 2️⃣ MAXIMUM LOAN AMOUNT LOGIC
+ */
+const getMaxLoanAmount = (customer) => {
+  const totalTaken = Number(customer.totalLoansTaken || customer.totalLoans || 0);
 
-  if (event === "ON_TIME") {
-    scoreDelta = 10;
-  }
+  // Starter loan for new customers
+  if (totalTaken === 0) return 3000;
 
-  if (event === "LATE") {
-    scoreDelta = -Math.min(50, daysLate * 2);
-  }
+  const score = Number(customer.creditScore || 500);
+  let baseLimit = 1000;
 
-  const newScore = clamp(currentScore + scoreDelta, 300, 900);
+  if (score >= 750) baseLimit = 20000;
+  else if (score >= 700) baseLimit = 10000;
+  else if (score >= 650) baseLimit = 6000;
+  else if (score >= 600) baseLimit = 3000;
+  else baseLimit = 1000;
 
-  return {
-    newScore,
-    scoreDelta
-  };
+  const multiplier = getRiskMultiplier(customer);
+  return Math.round(baseLimit * multiplier);
 };
 
-/* ======================================================
-   LOAN ELIGIBILITY – ADVANCED RISK MODEL
-====================================================== */
-const evaluateLoanByCreditScore = ({
-  creditScore = 500,
-  requestedAmount = 0,
-  borrower,
-  repaymentRatio = 1,
-  exposureRatio = 0
-}) => {
+/**
+ * 3️⃣ CREDIT LEVEL UPDATE
+ */
+const updateCreditLevel = (customer) => {
+  const score = Number(customer.creditScore || 500);
 
-  if (!borrower) {
-    return {
-      allowed: false,
-      approvedAmount: 0,
-      reason: "Borrower data missing"
-    };
-  }
-
-  repaymentRatio = Number(repaymentRatio) || 1;
-  exposureRatio = Number(exposureRatio) || 0;
-
-  /* ===========================
-     1️⃣ STARTER OVERRIDE
-  =========================== */
-  if (
-    Number(borrower.totalLoans || 0) === 0 &&
-    Number(borrower.completedLoans || 0) === 0
-  ) {
-    const starterLimit = 1000;
-
-    return {
-      allowed: requestedAmount <= starterLimit,
-      approvedAmount: starterLimit,
-      riskLevel: "NEW_CUSTOMER",
-      defaultProbability: calculateDefaultProbability(creditScore),
-      reason: "Starter loan"
-    };
-  }
-
-  const defaultProbability =
-    calculateDefaultProbability(creditScore);
-
-  /* ===========================
-     2️⃣ RISK CLASSIFICATION
-  =========================== */
-  let riskLevel = "LOW";
-
-  if (
-    defaultProbability > 0.40 ||
-    exposureRatio > 0.60 ||
-    repaymentRatio < 0.65
-  ) {
-    riskLevel = "HIGH";
-  } else if (
-    defaultProbability > 0.30 ||
-    exposureRatio > 0.45 ||
-    repaymentRatio < 0.75
-  ) {
-    riskLevel = "MEDIUM";
-  }
-
-  /* ===========================
-     3️⃣ HARD BLOCK
-  =========================== */
-  if (defaultProbability > 0.45) {
-    return {
-      allowed: false,
-      approvedAmount: 0,
-      riskLevel,
-      defaultProbability,
-      reason: "High default probability"
-    };
-  }
-
-  /* ===========================
-     4️⃣ CREDIT BAND APPROVAL
-  =========================== */
-  let approvedAmount = 0;
-
-  /* ===========================
-   PROGRESSIVE BEHAVIOR OVERRIDE
-=========================== */
-
-if (creditScore < 600) {
-
-  const behaviorEligible =
-    borrower.completedLoans >= 1 &&
-    repaymentRatio >= 1 &&
-    defaultProbability <= 0.45;
-
-  if (behaviorEligible) {
-    return {
-      allowed: requestedAmount <= 2000,
-      approvedAmount: 2000,
-      riskLevel: "PROGRESSIVE",
-      defaultProbability,
-      reason: "Behavior-based upgrade"
-    };
-  }
-
-  return {
-    allowed: false,
-    approvedAmount: 0,
-    riskLevel,
-    defaultProbability,
-    reason: "Low credit score"
-  };
-}
-
-  if (creditScore < 650)
-    approvedAmount = 2000;
-  else if (creditScore < 700)
-    approvedAmount = 5000;
-  else if (creditScore < 750)
-    approvedAmount = 8000;
-  else
-    approvedAmount = 15000;
-
-  /* ===========================
-     5️⃣ RISK BASED REDUCTION
-  =========================== */
-  if (riskLevel === "HIGH") {
-    approvedAmount = approvedAmount * 0.5; // 50% reduction
-  }
-
-  if (riskLevel === "MEDIUM") {
-    approvedAmount = approvedAmount * 0.75; // 25% reduction
-  }
-
-  return {
-    allowed: requestedAmount <= approvedAmount,
-    approvedAmount: Math.round(approvedAmount),
-    riskLevel,
-    defaultProbability
-  };
+  if (score < 600) return "High Risk";
+  if (score < 700) return "Medium Risk";
+  return "Low Risk";
 };
 
+/**
+ * 4️⃣ CREDIT SCORE UPDATE
+ */
+const updateCreditScore = (customer, delta, reason) => {
+  const oldScore = Number(customer.creditScore || 500);
+  const newScore = clamp(oldScore + delta, 300, 900);
+
+  customer.creditScore = newScore;
+  customer.lastScoreUpdate = new Date();
+  customer.lastCreditScoreChange = {
+    delta: newScore - oldScore,
+    reason: reason || "System update",
+    date: new Date(),
+  };
+
+  customer.creditLevel = updateCreditLevel(customer);
+  customer.maxLoanLimit = getMaxLoanAmount(customer);
+
+  return { newScore, delta: newScore - oldScore };
+};
+
+/**
+ * 5️⃣ REPAYMENT PROCESSING LOGIC
+ * Determines the score change based on repayment behavior.
+ */
+const getRepaymentScoreDelta = (loan, customer, paymentAmount, paymentDate) => {
+  const now = paymentDate || new Date();
+  const issueDate = new Date(loan.issueDate);
+  const dueDate = new Date(loan.dueDate);
+
+  // Duration check: if repaid too fast (< 2 days), ignore scoring.
+  const diffDays = (now - issueDate) / (1000 * 60 * 60 * 24);
+  if (diffDays < 2) return 0;
+
+  const isLate = now > dueDate;
+  const isFullRepayment = (loan.balance || 0) <= paymentAmount;
+
+  if (!isLate && isFullRepayment) {
+    const totalRepaid = Number(customer.totalLoansRepaid || customer.completedLoans || 0);
+    return totalRepaid < 3 ? 20 : 10;
+  }
+
+  if (!isLate && !isFullRepayment) {
+    return 3;
+  }
+
+  if (isLate) {
+    const daysLate = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
+    const penalty = Math.min(50, daysLate * 2);
+    return -penalty;
+  }
+
+  return 0;
+};
+
+/**
+ * 6️⃣ SCORE RECOVERY SYSTEM
+ * Increase score if 30 days passed and no late payments.
+ */
+const applyScoreRecovery = async (customer) => {
+  const now = new Date();
+  const lastUpdate = customer.lastScoreUpdate || customer.createdAt;
+  const daysSinceLastUpdate = (now - lastUpdate) / (1000 * 60 * 60 * 24);
+
+  const latePayments = Number(customer.latePayments || 0);
+
+  if (daysSinceLastUpdate >= 30 && latePayments === 0) {
+    updateCreditScore(customer, 5, "Score recovery (30 days good standing)");
+    await customer.save();
+    return true;
+  }
+  return false;
+};
+
+// --- LEGACY ADAPTERS (Used to avoid breaking existing code) ---
+
+const recalculateCreditScore = ({ currentScore, event, daysLate }) => {
+  // Mapping event to delta for backward compatibility
+  let delta = 0;
+  if (event === "ON_TIME") delta = 10;
+  else if (event === "LATE") delta = -Math.min(50, daysLate * 2);
+
+  const newScore = clamp(currentScore + delta, 300, 900);
+  return { newScore, scoreDelta: newScore - currentScore };
+};
+
+const evaluateLoanByCreditScore = ({ creditScore, requestedAmount, borrower }) => {
+  if (!borrower) return { allowed: false, approvedAmount: 0, reason: "Missing borrower data" };
+
+  const limit = getMaxLoanAmount(borrower);
+  return {
+    allowed: requestedAmount <= limit,
+    approvedAmount: limit,
+    reason: requestedAmount > limit ? `Limit exceeded. Max eligible: ${limit}` : "Eligible",
+  };
+};
 
 /* ======================================================
    EXPORTS
-====================================================== */
+===================================================== */
 module.exports = {
+  getRiskMultiplier,
+  getMaxLoanAmount,
+  updateCreditLevel,
+  updateCreditScore,
+  getRepaymentScoreDelta,
+  applyScoreRecovery,
   recalculateCreditScore,
   evaluateLoanByCreditScore,
-  calculateDefaultProbability
+  calculateDefaultProbability: (score) => 1 - (score / 900)
 };
-  

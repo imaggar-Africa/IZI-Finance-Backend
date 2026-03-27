@@ -2,6 +2,9 @@ const cron = require("node-cron");
 const Loan = require("../../models/Loan");
 const { sendSMS } = require("../../utils/sms");
 const { normalizePhone } = require("../../utils/normalizePhone");
+const { applyScoreRecovery } = require("../creditScore");
+const Customer = require("../../models/customer");
+
 
 // ⏰ Runs every day at 6 AM and 6 PM (Kenya/Nairobi time)
 cron.schedule(
@@ -92,5 +95,28 @@ cron.schedule(
     timezone: "Africa/Nairobi", // 🟢 Correct timezone
   }
 );
+
+/* ======================================================
+   ⭐ SCORE RECOVERY CRON
+   Runs every day at Midnight
+====================================================== */
+cron.schedule(
+  "0 0 * * *",
+  async () => {
+    console.log("⏰ Score recovery cron triggered");
+    try {
+      const customers = await Customer.find({ isDeleted: false });
+      for (const customer of customers) {
+        await applyScoreRecovery(customer);
+      }
+    } catch (err) {
+      console.error("Score recovery error:", err);
+    }
+  },
+  {
+    timezone: "Africa/Nairobi",
+  }
+);
+
 
 

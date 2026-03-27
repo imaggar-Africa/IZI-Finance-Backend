@@ -14,7 +14,7 @@ const { getMpesaToken } = require("../utils/mpesaC2BService");
 const AgentCommission = require("../models/AgentCommission");
 const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
-const { recalculateCreditScore } = require("../utils/creditScore");
+const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditScore");
 
 exports.registerC2B = async (req, res) => {
   try {
@@ -305,21 +305,13 @@ exports.confirmationHandler = async (req, res) => {
     }
 
     // ⚡ CREDIT SCORE RECALCULATION
-    const { newScore, scoreDelta } = recalculateCreditScore({
-      currentScore: customer.creditScore || 500,
-      event,
-      daysLate
-    });
+    const scoreDelta = getRepaymentScoreDelta(loan, customer, Amount, new Date());
+    const { newScore } = updateCreditScore(customer, scoreDelta, event === "LATE" ? `Late repayment (${daysLate} days)` : "On-time repayment");
 
-    customer.creditScore = newScore;
-    customer.lastScoreUpdate = new Date();
-    customer.lastCreditScoreChange = {
-      delta: scoreDelta,
-      reason: event === "LATE"
-        ? `Late repayment (${daysLate} days)`
-        : "On-time repayment",
-      date: new Date()
-    };
+    if (event === "LATE") {
+      customer.latePayments = (customer.latePayments || 0) + 1;
+    }
+
 
     let fullyPaid = false;
 
@@ -330,8 +322,10 @@ exports.confirmationHandler = async (req, res) => {
       loan.creditScoreAfter = newScore;
 
       // Update counters
+      customer.totalLoansRepaid = (customer.totalLoansRepaid || 0) + 1;
       customer.completedLoans = (customer.completedLoans || 0) + 1;
       customer.totalLoans = (customer.totalLoans || 0) + 1;
+
 
       if (loan.requestedByAgentId) {
         await handleAgentFullRepaymentCommission(

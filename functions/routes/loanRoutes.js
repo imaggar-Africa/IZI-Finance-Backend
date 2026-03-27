@@ -146,8 +146,15 @@ router.get(
   loanController.getCustomerStatement
 );
 
+router.get(
+  "/eligibility/:borrowerId",
+  protect,
+  loanController.getEligibility
+);
+
 router.post(
   "/send-statement-sms",
+
   protect,
   authorizeRoles("lender"),
   loanController.sendStatementSMS

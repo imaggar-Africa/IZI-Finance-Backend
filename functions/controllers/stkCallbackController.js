@@ -9,7 +9,7 @@ const { sendSMS } = require("../utils/sms");
 const AgentCommission = require('../models/AgentCommission');
 const Profile = require("../models/Profile");
 const AgentModel = require("../models/AgentModel");
-const { recalculateCreditScore } = require("../utils/creditScore");
+const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditScore");
 
 
 
@@ -535,34 +535,26 @@ New Balance: KES ${loan.balance}
       }
 
       /* 3️⃣ Credit score update */
-      const { newScore, scoreDelta } = recalculateCreditScore({
-        currentScore: borrower.creditScore || 500,
-        event,
-        daysLate
-      });
+      const scoreDelta = getRepaymentScoreDelta(loan, borrower, amount, new Date());
+      const { newScore } = updateCreditScore(borrower, scoreDelta, event === "LATE" ? `Late repayment (${daysLate} days)` : "On-time repayment");
 
-      borrower.creditScore = newScore;
-      borrower.lastScoreUpdate = new Date();
-      borrower.lastCreditScoreChange = {
-        delta: scoreDelta,
-        reason: event === "LATE"
-          ? `Late repayment (${daysLate} days)`
-          : "On-time repayment",
-        date: new Date()
-      };
+      if (event === "LATE") {
+        borrower.latePayments = (borrower.latePayments || 0) + 1;
+      }
 
       /* 4️⃣ Save repayment history */
-    loan.repayments.push({
-  loanId: loan._id,                 // ✅ REQUIRED
-  transactionId: transaction._id,
-  borrowerId: borrower._id,
-  amount,
-  date: new Date(),
-  expectedPaymentDate: loan.dueDate, // ✅ REQUIRED
-  wasPaymentLate: event === "LATE",
-  daysLate,
-  creditScoreDelta: scoreDelta || 0
-});
+      loan.repayments.push({
+        loanId: loan._id,
+        transactionId: transaction._id,
+        borrowerId: borrower._id,
+        amount,
+        date: new Date(),
+        expectedPaymentDate: loan.dueDate,
+        wasPaymentLate: event === "LATE",
+        daysLate,
+        creditScoreDelta: scoreDelta
+      });
+
 
 
       /* 5️⃣ Fully paid check */
@@ -607,9 +599,15 @@ New Balance: KES ${loan.balance}
       });
 
       /* 8️⃣ Agent commission (only once) */
-      if (isFullyPaid && loan.requestedByAgentId) {
-        await handleAgentFullRepaymentCommission(loan, transaction);
+      if (isFullyPaid) {
+        borrower.totalLoansRepaid = (borrower.totalLoansRepaid || 0) + 1;
+        borrower.completedLoans = (borrower.completedLoans || 0) + 1;
+
+        if (loan.requestedByAgentId) {
+          await handleAgentFullRepaymentCommission(loan, transaction);
+        }
       }
+
     }
     /* ===================== SAVINGS (LENDER DEPOSIT) ===================== */
     if (transaction.type === "savings") {

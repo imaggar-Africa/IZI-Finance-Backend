@@ -314,8 +314,12 @@ const customerSchema = new mongoose.Schema({
 
   // 🔢 Source metrics
   totalLoans: { type: Number, default: 0 },
+  totalLoansTaken: { type: Number, default: 0 }, // 📝 For new scoring system
   completedLoans: { type: Number, default: 0 },
+  totalLoansRepaid: { type: Number, default: 0 }, // 📝 For new scoring system
   overdueLoans: { type: Number, default: 0 },
+  latePayments: { type: Number, default: 0 }, // 📝 For new scoring system
+
 
   onTimeRate: { type: Number, default: 100 }, // %
   longestDelayDays: { type: Number, default: 0 },
@@ -351,6 +355,12 @@ const customerSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  lastCreditScoreChange: {
+    delta: { type: Number, default: 0 },
+    reason: { type: String, default: "" },
+    date: { type: Date, default: null }
+  },
+
   /* ================= SOCIO-ECONOMIC / LOAN INFO ================= */
 
   educationLevel: {

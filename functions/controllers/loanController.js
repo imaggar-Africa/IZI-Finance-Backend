@@ -10,7 +10,7 @@ const { normalizePhone } = require("../utils/phone");
 const Notification = require("../models/Notification");
 const AgentModel = require("../models/AgentModel");
 const AgentCommission = require("../models/AgentCommission");
-const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
+const { evaluateLoanByCreditScore, getMaxLoanAmount } = require("../utils/loanApprovalRules");
 const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
 const { getB2CCharge } = require("../utils/mpesaCharges");
 const puppeteer = require("puppeteer");
@@ -136,6 +136,34 @@ exports.trackRepayment = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+/**
+ * 🆕 Get Customer Eligibility & Max Loan Amount
+ * Returns the dynamic limit based on credit score and risk multipliers.
+ */
+exports.getEligibility = asyncHandler(async (req, res) => {
+  const { borrowerId } = req.params;
+
+  const borrower = await Customer.findById(borrowerId);
+  if (!borrower) {
+    return res.status(404).json({ success: false, message: "Borrower not found" });
+  }
+
+  const maxAmount = getMaxLoanAmount(borrower);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      borrowerName: borrower.fullName,
+      creditScore: borrower.creditScore || 500,
+      creditLevel: borrower.creditLevel || "High Risk",
+      maxLoanAmount: maxAmount,
+      totalLoansTaken: borrower.totalLoansTaken || 0,
+      latePayments: borrower.latePayments || 0
+    }
+  });
+});
+
 
 /* =====================================================
    2️⃣ ISSUE LOAN (DIRECT LENDER)
@@ -381,6 +409,18 @@ exports.issueLoan = async (req, res) => {
     if (borrower.isDeleted) throw new Error("Borrower account inactive");
     if (!borrower.isVerified) throw new Error("Borrower not verified");
 
+    /* ================= ELIGIBILITY CHECK ================= */
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore: borrower.creditScore || 500,
+      requestedAmount: Number(amount),
+      borrower
+    });
+
+    if (!eligibility.allowed) {
+      throw new Error(`Loan rejected: ${eligibility.reason || "Credit limit exceeded"}`);
+    }
+
+
     /* ================= DUPLICATE CHECK (ONLY ACTIVE) ================= */
     const activeLoan = await Loan.findOne({
       borrowerId,
@@ -475,9 +515,14 @@ exports.issueLoan = async (req, res) => {
       b2cResponse.OriginatorConversationID;
 
     loan.loanRequestStatus = "processing";
-
+ 
+    borrower.totalLoansTaken = (borrower.totalLoansTaken || 0) + 1;
+    borrower.totalLoans = (borrower.totalLoans || 0) + 1;
+ 
     await transaction.save({ session });
     await loan.save({ session });
+    await borrower.save({ session });
+
 
     await session.commitTransaction();
     session.endSession();
@@ -1468,7 +1513,23 @@ exports.requestLoan = async (req, res) => {
       });
     }
 
+    // ✅ Eligibility check
+    const eligibility = evaluateLoanByCreditScore({
+      creditScore: borrower.creditScore || 500,
+      requestedAmount: Number(amount),
+      borrower
+    });
+
+    if (!eligibility.allowed) {
+      return res.status(403).json({
+        success: false,
+        message: `Loan request rejected: ${eligibility.reason || "Credit limit exceeded"}`,
+        maxEligibleAmount: eligibility.approvedAmount
+      });
+    }
+
     // ✅ Calculate repayment details
+
     const totalRepayment = parseFloat(amount) + parseFloat(totalInterest);
     const dailyRepayment = totalRepayment / duration;
 
@@ -2366,30 +2427,28 @@ exports.borrowerRequestLoan = async (req, res) => {
       });
     }
 
-    // 3️⃣ Credit Score & Eligibility Check
-    let repaymentRatio = 1;
-    const lastLoan = await Loan.findOne({
-      borrowerId: borrower._id,
-      status: "fully paid"
-    }).sort({ createdAt: -1 });
-
-    if (lastLoan && lastLoan.totalRepayment > 0) {
-      repaymentRatio = lastLoan.repaidAmount / lastLoan.totalRepayment;
-    }
-
+    // 3️⃣ Eligibility Check
     const eligibility = evaluateLoanByCreditScore({
       creditScore: borrower.creditScore || 500,
-      requestedAmount: amount,
-      borrower,
-      repaymentRatio
+      requestedAmount: Number(amount),
+      borrower
     });
 
     if (!eligibility.allowed) {
-      return res.status(400).json({
-        message: eligibility.reason || `Requested amount KES ${amount} exceeds your current limit.`,
-        approvedAmount: eligibility.approvedAmount
+      return res.status(403).json({
+        success: false,
+        message: `Loan request rejected: ${eligibility.reason || "Credit limit exceeded"}`,
+        maxEligibleAmount: eligibility.approvedAmount
       });
     }
+
+
+    // 4️⃣ Outstanding Loan Check (Ensuring all previous loans are fully paid)
+    const existingLoan = await Loan.findOne({
+      borrowerId,
+      status: { $in: ["pending", "active", "overdue"] },
+      loanRequestStatus: { $nin: ["rejected", "agent_rejected"] }
+    });
 
     const agentId = borrower.assignedAgent || borrower.agentId;
     if (!agentId) {
@@ -2399,14 +2458,8 @@ exports.borrowerRequestLoan = async (req, res) => {
     const agent = await AgentModel.findById(agentId);
     if (!agent) return res.status(404).json({ message: "Assigned agent not found" });
 
-    // 4️⃣ Outstanding Loan Check (Ensuring all previous loans are fully paid)
-    const existingLoan = await Loan.findOne({
-      borrowerId,
-      status: { $in: ["pending", "active", "overdue"] },
-      loanRequestStatus: { $nin: ["rejected", "agent_rejected"] }
-    });
-
     if (existingLoan) {
+
       return res.status(400).json({
         message: "You cannot request a new loan until your current loan is fully paid or your pending request is processed.",
         status: existingLoan.status,
