@@ -500,65 +500,65 @@ function countCustomers(customers, start = null, end = null) {
 /* ================= GET STATS API ================= */
 exports.getStats = async (req, res) => {
   try {
-    const { fromDate, toDate } = req.query;
-
+    const { from, fromDate, toDate } = req.query;
     const lenderId = req.user._id;
 
-const loans = await Loan.find({
-  loanRequestStatus: "approved",
-  lenderId: lenderId,
-  status: { $in: ["active", "fully paid", "overdue"] },
-  isDeleted: { $ne: true },
-  isWrittenOff: { $ne: true }
-}).populate("borrowerId", "fullName phone");
+    /* =========================
+       DATE RANGE LOGIC
+    ========================= */
 
+    let startDate = new Date();
+    let endDate = new Date();
 
-       const customers = await Customer.find({ registeredBy: lenderId});
+    switch (from) {
+      case "7d":
+        startDate.setDate(endDate.getDate() - 7);
+        break;
 
-    const last7 = getRange("7d");
-    const last1m = getRange("1m");
-    const last3m = getRange("3m");
-    const custom = getRange(null, fromDate, toDate);
+      case "1w":
+        startDate.setDate(endDate.getDate() - 7);
+        break;
 
-    const last7Loans = filterLoansByIssueDate(loans, last7.start, last7.end);
-    const last1mLoans = filterLoansByIssueDate(loans, last1m.start, last1m.end);
-    const last3mLoans = filterLoansByIssueDate(loans, last3m.start, last3m.end);
-    const customLoans = custom
-      ? filterLoansByIssueDate(loans, custom.start, custom.end)
-      : [];
+      case "1m":
+        startDate.setMonth(endDate.getMonth() - 1);
+        break;
+
+      case "custom":
+        startDate = new Date(fromDate);
+        endDate = new Date(toDate);
+        break;
+
+      default:
+        // Default → last 24 hours
+        startDate.setHours(endDate.getHours() - 24);
+    }
+
+    /* =========================
+       FETCH LOANS
+    ========================= */
+
+    const loans = await Loan.find({
+      loanRequestStatus: "approved",
+      lenderId: lenderId,
+      status: { $in: ["active", "fully paid", "overdue"] },
+      isDeleted: { $ne: true },
+      isWrittenOff: { $ne: true },
+      createdAt: { $gte: startDate, $lte: endDate }
+    }).populate("borrowerId", "fullName phone");
+
+    const customers = await Customer.find({
+      registeredBy: lenderId,
+      createdAt: { $gte: startDate, $lte: endDate }
+    });
 
     res.status(200).json({
-      overall: {
-        stats: calculateStats(loans),
-        customersAdded: customers.length,
-        loanDetails: loans.map(mapLoanDetail)
+      range: {
+        from: startDate,
+        to: endDate
       },
-
-      last7Days: {
-        stats: calculateStats(loans, last7.start, last7.end),
-        customersAdded: countCustomers(customers, last7.start, last7.end),
-        loanDetails: last7Loans.map(mapLoanDetail)
-      },
-
-      last1Month: {
-        stats: calculateStats(loans, last1m.start, last1m.end),
-        customersAdded: countCustomers(customers, last1m.start, last1m.end),
-        loanDetails: last1mLoans.map(mapLoanDetail)
-      },
-
-      last3Months: {
-        stats: calculateStats(loans, last3m.start, last3m.end),
-          customersAdded: countCustomers(customers, last3m.start, last3m.end),
-        loanDetails: last3mLoans.map(mapLoanDetail)
-      },
-
-      customRange: custom
-        ? {
-            stats: calculateStats(loans, custom.start, custom.end),
-            customersAdded: countCustomers(customers, custom.start, custom.end),
-            loanDetails: customLoans.map(mapLoanDetail)
-          }
-        : null
+      stats: calculateStats(loans),
+      customersAdded: customers.length,
+      loanDetails: loans.map(mapLoanDetail)
     });
 
   } catch (error) {
@@ -566,6 +566,10 @@ const loans = await Loan.find({
     res.status(500).json({ message: "Server error" });
   }
 };
+
+
+
+
 
 exports.downloadStatsPDF = async (req, res) => {
   try {

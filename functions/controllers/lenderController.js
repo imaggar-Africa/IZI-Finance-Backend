@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const Profile = require("../models/Profile");
 const Transaction = require("../models/Transaction");
 const { sendMoneyToBorrower } = require("../utils/mpesa");
 const AgentModel = require("../models/AgentModel");
@@ -831,6 +832,57 @@ exports.editAgent = async (req, res) => {
     console.error("❌ Error editing agent:", error);
     res.status(500).json({
       message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+/* =====================================================
+   📷 UPDATE LENDER SELFIE
+===================================================== */
+exports.updateSelfie = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // 1️⃣ Check if file exists (provided by firebaseSafeUpload)
+    const selfieFile = req.files?.selfie?.[0];
+
+    if (!selfieFile || !selfieFile.url) {
+      return res.status(400).json({
+        success: false,
+        message: "Selfie image is required"
+      });
+    }
+
+    // 2️⃣ Find or Create Profile
+    let profile = await Profile.findOne({ userId });
+
+    if (!profile) {
+      // Fallback: If no profile exists, create one using user data
+      const user = await User.findById(userId);
+      profile = new Profile({
+        userId,
+        fullName: user.name || "Lender",
+        phone: user.phone,
+        idNumber: "PENDING"
+      });
+    }
+
+    // 3️⃣ Update Selfie URL
+    profile.selfie = selfieFile.url;
+    await profile.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Selfie updated successfully",
+      selfieUrl: profile.selfie
+    });
+
+  } catch (error) {
+    console.error("❌ updateSelfie error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating selfie",
       error: error.message
     });
   }

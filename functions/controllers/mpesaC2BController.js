@@ -14,6 +14,7 @@ const { getMpesaToken } = require("../utils/mpesaC2BService");
 const AgentCommission = require("../models/AgentCommission");
 const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
+const { recalculateCreditScore } = require("../utils/creditScore");
 
 exports.registerC2B = async (req, res) => {
   try {
@@ -282,12 +283,55 @@ exports.confirmationHandler = async (req, res) => {
     loan.repaidAmount += Amount;
     loan.balance -= Amount;
 
+    let event = "ON_TIME";
+    let daysLate = 0;
+
+    // Check if late
+    if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
+      event = "LATE";
+      daysLate = Math.ceil(
+        (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
+      );
+
+      // Apply 15% late penalty
+      const penalty = Math.ceil(loan.balance * 0.15);
+      loan.balance += penalty;
+      loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
+
+      await sendSMS(
+        customer.phone,
+        `Dear ${customer.fullName}, your payment to IziFinance was late. A 15% penalty of KES ${penalty} has been applied. New balance: KES ${loan.balance}.`
+      );
+    }
+
+    // ⚡ CREDIT SCORE RECALCULATION
+    const { newScore, scoreDelta } = recalculateCreditScore({
+      currentScore: customer.creditScore || 500,
+      event,
+      daysLate
+    });
+
+    customer.creditScore = newScore;
+    customer.lastScoreUpdate = new Date();
+    customer.lastCreditScoreChange = {
+      delta: scoreDelta,
+      reason: event === "LATE"
+        ? `Late repayment (${daysLate} days)`
+        : "On-time repayment",
+      date: new Date()
+    };
+
     let fullyPaid = false;
 
     if (loan.balance <= 0) {
       loan.balance = 0;
       loan.status = "fully paid";
       fullyPaid = true;
+      loan.creditScoreAfter = newScore;
+
+      // Update counters
+      customer.completedLoans = (customer.completedLoans || 0) + 1;
+      customer.totalLoans = (customer.totalLoans || 0) + 1;
 
       if (loan.requestedByAgentId) {
         await handleAgentFullRepaymentCommission(
@@ -301,10 +345,17 @@ exports.confirmationHandler = async (req, res) => {
     loan.repayments.push({
       amount: Amount,
       date: new Date(),
-      transactionId: MpesaTransactionId
+      transactionId: MpesaTransactionId,
+      loanId: loan._id,
+      borrowerId: customer._id,
+      expectedPaymentDate: loan.dueDate,
+      wasPaymentLate: event === "LATE",
+      daysLate,
+      creditScoreDelta: scoreDelta
     });
 
     await loan.save({ session });
+    await customer.save({ session });
 
     // Update lender
     const lender = await User.findById(loan.lenderId).session(session);
