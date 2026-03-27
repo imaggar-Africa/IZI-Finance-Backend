@@ -200,7 +200,7 @@ exports.sendReminderByBorrowerAndLoan = async (req, res) => {
     const loan = await Loan.findOne({
       _id: loanId,
       borrowerId,
-      status: "active",
+    status: { $in: ["active", "overdue"] },
       loanRequestStatus: "approved",
       balance: { $gt: 0 }
     });
@@ -239,7 +239,7 @@ Please pay on time to avoid penalties.
 
       messageType = "OVERDUE";
 
-      messageText = `⚠️ Late Payment Notice ⚠️
+      messageText = ` Late Payment Notice 
 
 Dear ${borrower.fullName},
 

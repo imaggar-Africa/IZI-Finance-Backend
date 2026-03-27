@@ -54,7 +54,7 @@ exports.sendSMS = async (phoneNumber, message) => {
       message
     });
 
-    console.log("📥 SMS queued ->", normalizedPhone);
+    console.log(`📥 [SMS QUEUED] | To: ${normalizedPhone} | Msg: ${message.substring(0, 40)}...`);
 
     return {
       success: true,

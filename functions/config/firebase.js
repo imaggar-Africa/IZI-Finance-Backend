@@ -38,7 +38,11 @@ const serviceAccount = {
   type: "service_account",
   project_id: process.env.PROJECT_ID.trim(),
   client_email: process.env.CLIENT_EMAIL.trim(),
-  private_key: process.env.FB_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  // More robust parsing for private key to handle quotes and newlines from .env
+  private_key: process.env.FB_PRIVATE_KEY
+    .replace(/\\n/g, "\n")
+    .replace(/^["']|["']$/g, "")
+    .trim(),
 };
 
 if (!admin.apps.length) {

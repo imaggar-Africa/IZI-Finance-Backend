@@ -1,17 +1,8 @@
-// utils/africatalking.js - SIMPLIFIED VERSION
 const OTP = require("../models/OTP");
-const axios = require("axios");
+const { sendSMS } = require("./sms");
 
 function africasTalkingService({ atUsername, atApiKey, atSenderId }) {
-  const AT_USERNAME = (atUsername || "").trim();
-  const AT_API_KEY = (atApiKey || "").trim();
-  const AT_SENDER_ID = atSenderId?.trim() || "AFRICASTKNG";
-
-  console.log(`🔧 Africa's Talking Config:`, {
-    username: AT_USERNAME,
-    apiKeyLength: AT_API_KEY.length,
-    senderId: AT_SENDER_ID
-  });
+  // ... parameters kept for compatibility but sending is handled by smsQueue now
 
   const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -20,90 +11,41 @@ function africasTalkingService({ atUsername, atApiKey, atSenderId }) {
       const otp = generateOTP();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-      // Always save OTP first
+      // Always save OTP to DB first
       await OTP.findOneAndUpdate(
         { phone },
         { otp, expiresAt },
         { upsert: true, new: true }
       );
 
-      console.log(`📌 OTP generated for ${phone}: ${otp}`);
+      console.log(`📌 OTP generated and saved for ${phone}: ${otp}`);
 
-      // If no credentials, just return OTP saved
-      if (!AT_USERNAME || !AT_API_KEY) {
-        console.log("⚠️ Africa's Talking credentials missing");
-        return {
-          success: true,
-          phone,
-          delivered: false,
-          message: "OTP saved but SMS credentials not configured",
-          otp: process.env.NODE_ENV === "development" ? otp : undefined,
-        };
-      }
+      // ⚡ ENQUEUE SMS (using the unified background system)
+      const messageText = `Your Izifinance verification code is: ${otp}. Valid for 5 minutes.`;
 
-      // Try direct connection with better timeout handling
-      const cleanPhone = phone.replace(/^\+/, "");
-      const isSandbox = AT_USERNAME.toLowerCase().includes("sandbox");
-      const baseUrl = isSandbox
-        ? "https://api.sandbox.africastalking.com"
-        : "https://api.africastalking.com";
+      const smsResponse = await sendSMS(phone, messageText);
 
-      const url = `${baseUrl}/version1/messaging`;
-      
-      console.log(`📤 Attempting to send SMS to ${phone} via ${isSandbox ? 'SANDBOX' : 'LIVE'}`);
-
-      const body = new URLSearchParams({
-        username: AT_USERNAME,
-        to: cleanPhone,
-        message: `Your Izifinance verification code is: ${otp}. Valid for 5 minutes.`,
-        from: AT_SENDER_ID,
-      });
-
-      // Use a simpler approach with axios
-      const response = await axios.post(url, body.toString(), {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Accept": "application/json",
-          "apiKey": AT_API_KEY,
-        },
-        timeout: 10000, // 10 seconds
-      });
-
-      const result = response.data?.SMSMessageData?.Recipients?.[0];
-
-      if (result?.status === "Success" || result?.statusCode === "101") {
-        console.log(`✅ SMS sent successfully: ${result.messageId}`);
-        return {
-          success: true,
-          phone,
-          delivered: true,
-          trackingId: result.messageId,
-          status: result.status,
-          cost: result.cost,
-        };
-      }
-
-      // SMS failed but OTP was saved
-      console.log(`⚠️ SMS sending failed: ${result?.status || 'Unknown error'}`);
       return {
-        success: true, // OTP was saved successfully
+        success: true, 
         phone,
-        delivered: false,
-        error: result?.status || "SMS_SENDING_FAILED",
-        providerResponse: result,
+        delivered: smsResponse.success,
+        message: smsResponse.success 
+          ? "OTP queued for delivery" 
+          : "OTP saved but background queuing failed",
+        error: smsResponse.error || null,
         otp: process.env.NODE_ENV === "development" ? otp : undefined,
       };
 
     } catch (error) {
-      console.error("❌ SMS sending error:", error.message);
+      console.error("❌ SMS background sending error:", error.message);
       
-      // Even if SMS fails, OTP is saved
+      // Still return success if DB save worked, but indicate delivery error
       return {
-        success: true, // OTP was saved successfully
+        success: true, 
         phone,
         delivered: false,
-        message: "OTP saved but SMS delivery failed",
-        error: error.code || error.message,
+        message: "OTP saved but SMS background enqueue failed",
+        error: error.message,
         otp: process.env.NODE_ENV === "development" ? otp : undefined,
       };
     }
@@ -149,4 +91,4 @@ function africasTalkingService({ atUsername, atApiKey, atSenderId }) {
   };
 }
 
-module.exports = africasTalkingService;
+module.exports = africasTalkingService;  

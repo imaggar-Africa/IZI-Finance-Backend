@@ -1,6 +1,7 @@
 const Group = require("../models/Group");
 const GroupMember = require("../models/GroupMember");
 const Customer = require("../models/customer");
+const User = require("../models/User");
 const { sendSMS } = require("../utils/sms");
 
 /* =========================
@@ -45,12 +46,15 @@ exports.addMember = async (req, res) => {
       });
     }
 
-    // Normalize to array
+    // Convert borrowerId to array
     const borrowerIds = Array.isArray(borrowerId)
       ? borrowerId
       : [borrowerId];
 
-    // Validate borrowers
+    /* ===============================
+       FIND BORROWERS
+    =============================== */
+
     const borrowers = await Customer.find({
       _id: { $in: borrowerIds }
     });
@@ -63,7 +67,10 @@ exports.addMember = async (req, res) => {
 
     const validIds = borrowers.map(b => b._id.toString());
 
-    // Check existing members
+    /* ===============================
+       CHECK EXISTING MEMBERS
+    =============================== */
+
     const existingMembers = await GroupMember.find({
       groupId,
       borrowerId: { $in: validIds }
@@ -73,29 +80,46 @@ exports.addMember = async (req, res) => {
       m.borrowerId.toString()
     );
 
-    // Filter new IDs
+    /* ===============================
+       FILTER NEW MEMBERS
+    =============================== */
+
     const newIds = validIds.filter(
       id => !existingIds.includes(id)
     );
 
+    /* ===============================
+       GET EXISTING BORROWER NAMES
+    =============================== */
+
+    const existingBorrowers = await Customer.find({
+      _id: { $in: existingIds }
+    }).select("fullName");
+
+    const existingBorrowerNames = existingBorrowers.map(
+      b => b.fullName
+    );
+
     if (!newIds.length) {
       return res.status(400).json({
-        message: "All borrowers already exist in this group"
+        message: "All borrowers already exist in this group",
+        existingBorrowers: existingBorrowerNames
       });
     }
 
-    // Bulk create
+    /* ===============================
+       INSERT NEW MEMBERS
+    =============================== */
+
     const membersToCreate = newIds.map(id => ({
       groupId,
       borrowerId: id
     }));
 
-    const createdMembers = await GroupMember.insertMany(
-      membersToCreate
-    );
+    const createdMembers = await GroupMember.insertMany(membersToCreate);
 
     /* ===============================
-       SEND SMS TO EACH NEW MEMBER
+       GROUP DETAILS
     =============================== */
 
     const group = await Group.findById(groupId)
@@ -107,31 +131,68 @@ exports.addMember = async (req, res) => {
 
     const memberNames = groupMembers
       .filter(m => m.borrowerId)
-      .map(m =>
-        m.borrowerId.fullName?.split(" ")[0]
-      )
+      .map(m => m.borrowerId.fullName)
       .join(", ");
 
-    const adminName = group?.lenderId?.name || "Group Admin";
+    // Get performing user's name
+    const currentUser = await User.findById(req.user._id);
+    const adminName = currentUser?.name;
 
-    // Send SMS one by one
-    for (const borrower of borrowers) {
-      if (newIds.includes(borrower._id.toString())) {
-        const message = `You have been added to the ${group.name} Group.
+    /* ===============================
+       SEND SMS TO NEW MEMBERS
+    =============================== */
+
+    const newBorrowers = borrowers.filter(b =>
+      newIds.includes(b._id.toString())
+    );
+
+    const displayGroupName = group.name.toLowerCase().endsWith("group")
+      ? group.name
+      : `${group.name} Group`;
+
+    const message = `You've been added to ${displayGroupName}.
 
 Admin: ${adminName}
 Total Members: ${groupMembers.length}
 Members: ${memberNames}`;
 
-        await sendSMS(borrower.phone, message);
+    const smsResults = [];
+
+    for (const borrower of newBorrowers) {
+      if (borrower.phone) {
+        try {
+          const smsRes = await sendSMS(borrower.phone, message);
+
+          smsResults.push({
+            name: borrower.fullName,
+            phone: borrower.phone,
+            status: "sent",
+            response: smsRes
+          });
+
+        } catch (smsError) {
+
+          smsResults.push({
+            name: borrower.fullName,
+            phone: borrower.phone,
+            status: "failed",
+            error: smsError.message
+          });
+
+        }
       }
     }
+
+    /* ===============================
+       RESPONSE
+    =============================== */
 
     res.json({
       success: true,
       addedCount: createdMembers.length,
       addedMembers: createdMembers,
-      skipped: existingIds
+      skippedBorrowers: existingBorrowerNames,
+      smsResults
     });
 
   } catch (error) {
@@ -143,9 +204,13 @@ Members: ${memberNames}`;
     }
 
     console.error("❌ addMember error:", error);
-    res.status(500).json({ message: error.message });
+
+    res.status(500).json({
+      message: error.message
+    });
   }
 };
+
 /* =========================
    REMOVE MEMBER
 ========================= */
