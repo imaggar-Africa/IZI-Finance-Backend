@@ -36,5 +36,11 @@ router.get(
   statsController.downloadFullOverallReportPDF
 );
 
+router.get(
+  "/fully-paid-loans-pdf",
+  protect,
+  authorizeRoles("lender", "agent"),
+  statsController.getFullyPaidLoansPDF
+);
 
 module.exports = router;

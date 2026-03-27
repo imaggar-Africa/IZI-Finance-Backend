@@ -119,11 +119,19 @@ exports.addMember = async (req, res) => {
     const createdMembers = await GroupMember.insertMany(membersToCreate);
 
     /* ===============================
-       GROUP DETAILS
+       GROUP OWNER & INVITER
     =============================== */
 
-    const group = await Group.findById(groupId)
-      .populate("lenderId", "name");
+    const group = await Group.findById(groupId);
+    const lender = await User.findById(group.lenderId);
+    const adminName = lender?.name || "Group Owner";
+
+    const inviterName = req.user.name || "System Admin";
+    const inviterRole = req.user.role === "agent" ? "Agent" : "Admin";
+
+    /* ===============================
+       CURRENT MEMBERS
+    =============================== */
 
     const groupMembers = await GroupMember.find({ groupId })
       .populate("borrowerId", "fullName")
@@ -133,10 +141,6 @@ exports.addMember = async (req, res) => {
       .filter(m => m.borrowerId)
       .map(m => m.borrowerId.fullName)
       .join(", ");
-
-    // Get performing user's name
-    const currentUser = await User.findById(req.user._id);
-    const adminName = currentUser?.name;
 
     /* ===============================
        SEND SMS TO NEW MEMBERS
@@ -152,7 +156,7 @@ exports.addMember = async (req, res) => {
 
     const message = `You've been added to ${displayGroupName}.
 
-Admin: ${adminName}
+
 Total Members: ${groupMembers.length}
 Members: ${memberNames}`;
 

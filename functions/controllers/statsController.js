@@ -1019,6 +1019,144 @@ exports.downloadFullOverallReportPDF = async (req, res) => {
   }
 };
 
+exports.getFullyPaidLoansPDF = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const { fromDate, toDate } = req.query;
 
+    const filter = {
+      lenderId,
+      status: "fully paid",
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true }
+    };
 
+    if (fromDate || toDate) {
+      filter.issueDate = {};
+      if (fromDate) filter.issueDate.$gte = new Date(fromDate);
+      if (toDate) filter.issueDate.$lte = new Date(toDate);
+    }
 
+    const loans = await Loan.find(filter).populate("borrowerId", "fullName phone");
+
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 30
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="fully-paid-loans-report.pdf"'
+    );
+
+    doc.pipe(res);
+
+    // 🏷 Logo
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, (doc.page.width - 90) / 2, 20, { width: 90 });
+    }
+
+    doc.y = 100;
+    doc.fontSize(20).font("Helvetica-Bold").text("Fully Paid Loans Report", { align: "center" });
+    doc.fontSize(10).font("Helvetica").text(`Generated on: ${new Date().toDateString()}`, { align: "center" });
+
+    if (fromDate || toDate) {
+      doc.text(`Period: ${fromDate || "Start"} to ${toDate || "Present"}`, { align: "center" });
+    }
+
+    doc.moveDown(1);
+
+    // 📊 Table Setup
+    const colSize = {
+      sn: 30,
+      borrower: 150,
+      phone: 100,
+      principal: 80,
+      interest: 80,
+      total: 80,
+      issued: 80,
+      paid: 80
+    };
+
+    const colPos = {
+      sn: 30,
+      borrower: 60,
+      phone: 210,
+      principal: 310,
+      interest: 390,
+      total: 470,
+      issued: 550,
+      paid: 630
+    };
+
+    let y = doc.y + 10;
+    const rowHeight = 25;
+
+    // Header Background
+    doc.fillColor("#f0f0f0").rect(30, y - 5, doc.page.width - 60, rowHeight).fill();
+    doc.fillColor("#000000").font("Helvetica-Bold").fontSize(9);
+
+    doc.text("#", colPos.sn, y);
+    doc.text("Borrower Name", colPos.borrower, y);
+    doc.text("Phone", colPos.phone, y);
+    doc.text("Principal", colPos.principal, y);
+    doc.text("Interest", colPos.interest, y);
+    doc.text("Total Repayment", colPos.total, y);
+    doc.text("Issue Date", colPos.issued, y);
+    doc.text("Paid Date", colPos.paid, y);
+
+    y += rowHeight;
+    doc.font("Helvetica").fontSize(8);
+
+    // Rows
+    loans.forEach((loan, index) => {
+      if (y > doc.page.height - 60) {
+        doc.addPage({ size: "A4", layout: "landscape", margin: 30 });
+        y = 40;
+        doc.fillColor("#f0f0f0").rect(30, y - 5, doc.page.width - 60, rowHeight).fill();
+        doc.fillColor("#000000").font("Helvetica-Bold");
+        doc.text("#", colPos.sn, y);
+        doc.text("Borrower Name", colPos.borrower, y);
+        doc.text("Phone", colPos.phone, y);
+        doc.text("Principal", colPos.principal, y);
+        doc.text("Interest", colPos.interest, y);
+        doc.text("Total Repayment", colPos.total, y);
+        doc.text("Issue Date", colPos.issued, y);
+        doc.text("Paid Date", colPos.paid, y);
+        y += rowHeight;
+        doc.font("Helvetica");
+      }
+
+      const paidDate = loan.repayments && loan.repayments.length > 0
+        ? new Date(Math.max(...loan.repayments.map(r => new Date(r.date))))
+        : loan.updatedAt;
+
+      doc.text(index + 1, colPos.sn, y);
+      doc.text(loan.borrowerId?.fullName || "N/A", colPos.borrower, y, { width: 140, ellipsis: true });
+      doc.text(loan.borrowerId?.phone || "N/A", colPos.phone, y);
+      doc.text(`KES ${loan.amount.toLocaleString()}`, colPos.principal, y);
+      doc.text(`KES ${loan.interest.toLocaleString()}`, colPos.interest, y);
+      doc.text(`KES ${loan.repaidAmount.toLocaleString()}`, colPos.total, y);
+      doc.text(new Date(loan.issueDate).toLocaleDateString(), colPos.issued, y);
+      doc.text(new Date(paidDate).toLocaleDateString(), colPos.paid, y);
+
+      // Border line
+      doc.moveTo(30, y + rowHeight - 8).lineTo(doc.page.width - 30, y + rowHeight - 8).lineWidth(0.5).strokeColor("#cccccc").stroke();
+      doc.strokeColor("#000000");
+
+      y += rowHeight;
+    });
+
+    if (loans.length === 0) {
+      doc.text("No fully paid loans found for the selected period.", 30, y + 20, { align: "center" });
+    }
+
+    doc.end();
+
+  } catch (error) {
+    console.error("PDF fully paid report error:", error);
+    res.status(500).json({ success: false, message: "Failed to generate report" });
+  }
+};

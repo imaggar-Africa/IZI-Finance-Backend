@@ -14,6 +14,8 @@ const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
 const { getB2CCharge } = require("../utils/mpesaCharges");
 const puppeteer = require("puppeteer");
+const fs = require("fs");
+const path = require("path");
 /* ====================================================
    🔢 LOAN CALCULATION HELPER (USED FOR REPAYMENT BEHAVIOR)
    ❗ DO NOT CHANGE FORMULA
@@ -537,6 +539,13 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       return loanObj;
     });
 
+    const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
+    let logoBase64 = "";
+    if (fs.existsSync(logoFilePath)) {
+      const logoBuffer = fs.readFileSync(logoFilePath);
+      logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
+    }
+
     const html = `
     <html>
     <head>
@@ -545,6 +554,16 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
           font-family: Arial, sans-serif;
           padding: 30px;
         }
+
+        .header-logo {
+          text-align: center;
+          margin-bottom: 10px;
+        }
+
+        .logo-img {
+          max-width: 120px;
+        }
+
 
         .page {
           page-break-after: always;
@@ -603,10 +622,13 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       </style>
     </head>
     <body>
-
+      <div class="header-logo">
+        ${logoBase64 ? `<img src="${logoBase64}" class="logo-img" />` : ""}
+      </div>
     ${formattedLoans
         .map(
           (loan) => `
+
       <div class="page">
         <h1>Loan Statement</h1>
 
@@ -709,6 +731,250 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
     });
   }
 };
+
+exports.generateLoanReceiptPDF = async (req, res) => {
+  let browser;
+
+  try {
+    const { loanId } = req.params;
+
+    const loan = await Loan.findById(loanId).populate("borrowerId");
+
+    if (!loan) {
+      return res.status(404).json({ message: "Loan not found" });
+    }
+
+    const totalPaid = loan.repayments?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0;
+ 
+    const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
+    let logoBase64 = "";
+    if (fs.existsSync(logoFilePath)) {
+      const logoBuffer = fs.readFileSync(logoFilePath);
+      logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
+    }
+ 
+    const html = `
+    <html>
+    <head>
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          padding: 40px;
+          color: #333;
+          line-height: 1.6;
+        }
+ 
+        .header {
+          text-align: center;
+          margin-bottom: 20px;
+        }
+ 
+        .logo {
+          max-width: 150px;
+          margin-bottom: 15px;
+        }
+ 
+        .status-cleared {
+          font-size: 18px;
+          color: #2c3e50;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+
+        .check-icon {
+          color: #27ae60;
+          font-size: 24px;
+          font-weight: bold;
+        }
+
+        hr {
+          border: 0;
+          border-top: 1px solid #eee;
+          margin: 20px 0;
+        }
+
+        .borrower-section {
+          font-size: 20px;
+          font-weight: bold;
+          margin-bottom: 20px;
+        }
+
+        .data-table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 30px;
+          background-color: #fff;
+        }
+
+        .data-table th, .data-table td {
+          border: 1px solid #e0e0e0;
+          padding: 12px 15px;
+          text-align: center;
+          font-size: 14px;
+        }
+
+        .data-table th {
+          background-color: #f8f9fa;
+          font-weight: 600;
+          color: #444;
+        }
+
+        .status-badge {
+          color: #27ae60;
+          font-weight: bold;
+        }
+
+        .section-title {
+          font-size: 18px;
+          font-weight: bold;
+          margin-bottom: 15px;
+        }
+
+        .generation-date {
+          text-align: right;
+          font-size: 12px;
+          color: #7f8c8d;
+          margin-top: -10px;
+          margin-bottom: 20px;
+        }
+
+        .footer {
+          text-align: center;
+          font-size: 13px;
+          color: #7f8c8d;
+          margin-top: 30px;
+        }
+
+        .footer a {
+          color: #0056b3;
+          text-decoration: none;
+          font-weight: bold;
+        }
+
+        .thank-you {
+          margin-top: 15px;
+          font-style: italic;
+          color: #95a5a6;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        ${logoBase64 ? `<img src="${logoBase64}" class="logo" />` : ""}
+        <div class="status-cleared">
+          <span class="check-icon">✔</span> This loan has been successfully cleared.
+        </div>
+      </div>
+
+      <hr>
+
+      <div class="borrower-section">
+        Borrower: ${loan.borrowerId?.fullName || loan.fullName || "User"}
+      </div>
+
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Loan Amount</th>
+            <th>Interest</th>
+            <th>Total Paid</th>
+            <th>Issued</th>
+            <th>Due</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Ksh ${loan.amount?.toLocaleString()}</td>
+            <td>Ksh ${loan.interest?.toLocaleString()}</td>
+            <td>Ksh ${totalPaid?.toLocaleString()}</td>
+            <td>${loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A"}</td>
+            <td>${loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A"}</td>
+            <td class="status-badge">${loan.status === 'fully paid' ? 'Fully Paid' : loan.status}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <div class="section-title">Repayment History</div>
+
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${loan.repayments?.length ? loan.repayments.map(r => `
+            <tr>
+              <td>${new Date(r.date).toLocaleDateString("en-GB")}</td>
+              <td>Ksh ${r.amount?.toLocaleString()}</td>
+              <td>On Time</td>
+            </tr>
+          `).join('') : `
+            <tr>
+              <td colspan="3">No repayment history found</td>
+            </tr>
+          `}
+        </tbody>
+      </table>
+
+      <div class="generation-date">
+        Generated on ${new Date().toLocaleString("en-GB")}
+      </div>
+
+      <hr>
+
+      <div class="footer">
+        <p>Support: <a href="mailto:support@izifinance.com">support@izifinance.com</a></p>
+        <p>Website: <a href="https://www.izifinance.com">www.izifinance.com</a></p>
+        <p class="thank-you">Thank you for choosing iziFinance!</p>
+      </div>
+    </body>
+    </html>
+    `;
+
+    // Launch Puppeteer
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: { top: "20px", bottom: "20px", left: "20px", right: "20px" }
+    });
+
+    await browser.close();
+
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Length": pdfBuffer.length,
+      "Content-Disposition": `inline; filename=loan_receipt_${loanId}.pdf`,
+    });
+
+    return res.end(pdfBuffer);
+
+  } catch (error) {
+    console.error("Loan Receipt PDF generation error:", error);
+    if (browser) await browser.close();
+    return res.status(500).json({
+      message: "Failed to generate loan receipt PDF",
+      error: error.message,
+    });
+  }
+};
+
 
 /* =====================================================
    3️⃣ GET ACTIVE LOANS BY PHONE

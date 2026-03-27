@@ -131,6 +131,13 @@ router.get(
   loanController.getPaymentInstructions
 );
 
+// Download loan receipt PDF
+router.get(
+  "/:loanId/receipt/pdf",
+  protect,
+  loanController.generateLoanReceiptPDF
+);
+
 // routes/reportRoutes.js
 router.get(
   "/customer-statement/:borrowerId",
