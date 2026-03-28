@@ -13,7 +13,7 @@ const AgentCommission = require("../models/AgentCommission");
 const { evaluateLoanByCreditScore, getMaxLoanAmount } = require("../utils/loanApprovalRules");
 const { getMpesaPaybillBalance } = require("../utils/getMpesaPaybillBalance");
 const { getB2CCharge } = require("../utils/mpesaCharges");
-const puppeteer = require("puppeteer");
+const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 /* ====================================================
@@ -545,8 +545,6 @@ exports.issueLoan = async (req, res) => {
 };
 
 exports.generateFullyPaidLoansPDF = async (req, res) => {
-  let browser;
-
   try {
     const { borrowerId } = req.params;
 
@@ -564,10 +562,9 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       return res.status(404).json({ message: "No fully paid loans found" });
     }
 
-    // Preparatory calculations for summary
+    // Preparatory calculations
     const totalLoansCleared = loans.length;
     let totalPrincipalPaid = 0;
-    let totalInterestPaid = 0;
     let totalOverallPaid = 0;
 
     const formattedLoans = loans.map((loan) => {
@@ -585,7 +582,6 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       }
 
       totalPrincipalPaid += loan.amount || 0;
-      totalInterestPaid += loan.interest || 0;
       totalOverallPaid += loanTotalPaid;
 
       loanObj.totalPaid = loanTotalPaid;
@@ -593,197 +589,111 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       return loanObj;
     });
 
+    // Create PDF Document
+    const doc = new PDFDocument({ size: "A4", margin: 40 });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename=fully_paid_report_${borrowerId}.pdf`);
+    doc.pipe(res);
+
+    // --- Header & Logo ---
     const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
-    let logoBase64 = "";
     if (fs.existsSync(logoFilePath)) {
-      const logoBuffer = fs.readFileSync(logoFilePath);
-      logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
+      doc.image(logoFilePath, (doc.page.width - 110) / 2, 30, { width: 110 });
+      doc.y = 110; // Move y below the image explicitly
+    } else {
+      doc.y = 50;
     }
 
-    const html = `
-    <html>
-    <head>
-      <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          padding: 30px;
-          color: #333;
-          line-height: 1.6;
+    doc.fontSize(18).fillColor("#2c3e50").font("Helvetica-Bold").text("Fully Paid Loans Report", { align: "center" });
+    doc.fontSize(10).fillColor("#27ae60").text("CLEARED & SETTLED", { align: "center" });
+    doc.moveDown(0.5);
+    doc.fontSize(8).fillColor("#bdc3c7").font("Helvetica").text(`Generated on ${new Date().toLocaleString("en-GB")}`, { align: "right" });
+    doc.moveDown(1);
+
+    // --- Borrower Section ---
+    doc.fillColor("#2c3e50").fontSize(14).font("Helvetica-Bold").text(borrower.fullName);
+    doc.fontSize(10).fillColor("#7f8c8d").font("Helvetica").text(`Phone: ${borrower.phone} | ID: ${borrower.idNumber}`);
+    doc.text(`Email: ${borrower.email || "N/A"}`);
+    doc.moveDown(1.5);
+
+    // --- Summary Section ---
+    const summaryY = doc.y;
+    doc.rect(40, summaryY, 515, 60).fill("#f8f9fa").stroke("#27ae60");
+    
+    doc.fillColor("#7f8c8d").fontSize(8).font("Helvetica").text("TOTAL CLEARED", 60, summaryY + 15);
+    doc.fillColor("#2c3e50").fontSize(14).font("Helvetica-Bold").text(`${totalLoansCleared} Loans`, 60, summaryY + 28);
+
+    doc.fillColor("#7f8c8d").fontSize(8).font("Helvetica").text("TOTAL PRINCIPAL", 220, summaryY + 15);
+    doc.fillColor("#2c3e50").fontSize(14).font("Helvetica-Bold").text(`KES ${totalPrincipalPaid.toLocaleString()}`, 220, summaryY + 28);
+
+    doc.fillColor("#7f8c8d").fontSize(8).font("Helvetica").text("TOTAL PAID BACK", 380, summaryY + 15);
+    doc.fillColor("#27ae60").fontSize(14).font("Helvetica-Bold").text(`KES ${totalOverallPaid.toLocaleString()}`, 380, summaryY + 28);
+
+    doc.y = summaryY + 85;
+    doc.fontSize(14).fillColor("#2c3e50").font("Helvetica-Bold").text("Detailed Loan History");
+    doc.moveDown(1);
+
+    // --- Detailed History Blocks ---
+    formattedLoans.forEach((loan, idx) => {
+      if (doc.y > 600) doc.addPage();
+
+      const loanStart = doc.y;
+      doc.rect(40, loanStart, 515, 25).fill("#fafbfc");
+      doc.fillColor("#2c3e50").fontSize(10).font("Helvetica-Bold").text(`Loan #${idx + 1} Summary`, 50, loanStart + 8);
+      doc.fillColor("#27ae60").text("✔ FULLY SETTLED", 460, loanStart + 8);
+
+      let currentY = loanStart + 35;
+      doc.fontSize(9);
+      
+      const drawInfoRow = (l1, v1, l2, v2) => {
+        doc.fillColor("#7f8c8d").font("Helvetica").text(l1, 50, currentY);
+        doc.fillColor("#2c3e50").font("Helvetica-Bold").text(v1, 120, currentY);
+        doc.fillColor("#7f8c8d").font("Helvetica").text(l2, 300, currentY);
+        doc.fillColor("#2c3e50").font("Helvetica-Bold").text(v2, 370, currentY);
+        currentY += 15;
+      };
+
+      drawInfoRow("Issue Date:", loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A", "Due Date:", loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A");
+      drawInfoRow("Principal:", `KES ${loan.amount?.toLocaleString()}`, "Interest:", `KES ${loan.interest?.toLocaleString()}`);
+      drawInfoRow("Settlement:", loan.lastPaymentDate ? new Date(loan.lastPaymentDate).toLocaleDateString("en-GB") : "N/A", "Total Paid:", `KES ${loan.totalPaid?.toLocaleString()}`);
+
+      currentY += 10;
+      doc.fontSize(8).fillColor("#95a5a6").font("Helvetica-Bold").text("REPAYMENT HISTORY", 50, currentY, { characterSpacing: 1 });
+      currentY += 15;
+
+      doc.rect(50, currentY, 495, 15).fill("#f8f9fa");
+      doc.fillColor("#95a5a6").fontSize(7).font("Helvetica-Bold").text("DATE", 60, currentY + 4, { width: 100, align: 'left' });
+      doc.text("REFERENCE", 180, currentY + 4, { width: 250, align: 'left' });
+      doc.text("AMOUNT", 450, currentY + 4, { width: 85, align: 'right' });
+      currentY += 15;
+
+      loan.repayments.forEach((r) => {
+        if (currentY > 750) {
+            doc.addPage();
+            currentY = 50;
         }
-        .header { text-align: center; margin-bottom: 30px; }
-        .logo { max-width: 140px; margin-bottom: 10px; }
-        .report-title { font-size: 26px; font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
-        .badge { display: inline-block; background: #27ae60; color: #fff; padding: 6px 18px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-top: 10px; }
-        hr { border: 0; border-top: 1px solid #eee; margin: 25px 0; }
-        
-        .summary-container {
-          background-color: #f8f9fa;
-          border-radius: 12px;
-          padding: 25px;
-          margin-bottom: 35px;
-          border-left: 5px solid #27ae60;
-        }
-        .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; text-align: center; }
-        .summary-item .label { font-size: 11px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
-        .summary-item .value { font-size: 18px; font-weight: bold; color: #2c3e50; }
+        doc.fillColor("#2c3e50").fontSize(8).font("Helvetica").text(new Date(r.date).toLocaleDateString("en-GB"), 60, currentY + 4, { width: 100, align: 'left' });
+        doc.text(r.accountReference || r._id.toString().slice(-8).toUpperCase(), 180, currentY + 4, { width: 250, align: 'left' });
+        doc.font("Helvetica-Bold").text(`KES ${r.amount?.toLocaleString()}`, 450, currentY + 4, { width: 85, align: 'right' });
+        doc.strokeColor("#edf2f7").lineWidth(0.5).moveTo(50, currentY + 15).lineTo(545, currentY + 15).stroke();
+        currentY += 15;
+      });
 
-        .borrower-section { margin-bottom: 30px; }
-        .name { font-size: 22px; font-weight: bold; color: #2c3e50; }
-        .detail { font-size: 14px; color: #7f8c8d; }
-
-        .loan-container {
-          margin-bottom: 35px;
-          border: 1px solid #eef0f2;
-          border-radius: 12px;
-          padding: 20px;
-          page-break-inside: avoid;
-        }
-        .loan-header {
-          display: flex;
-          justify-content: space-between;
-          border-bottom: 2px solid #27ae60;
-          padding-bottom: 10px;
-          margin-bottom: 15px;
-        }
-        .loan-header .title { font-size: 16px; font-weight: bold; color: #2c3e50; }
-        .details-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        .details-table th, .details-table td { padding: 8px; text-align: left; font-size: 13px; border-bottom: 1px solid #f8f9fa; }
-        .details-table th { color: #7f8c8d; width: 25%; }
-        .history-table { width: 100%; border-collapse: collapse; background: #fafbfc; border-radius: 8px; }
-        .history-table th, .history-table td { padding: 10px; text-align: left; font-size: 12px; border-bottom: 1px solid #edf2f7; }
-        .history-table th { color: #95a5a6; font-weight: bold; text-transform: uppercase; font-size: 10px; }
-
-        .footer { text-align: center; font-size: 12px; color: #bdc3c7; margin-top: 50px; }
-        .generation-info { text-align: right; font-size: 11px; color: #bdc3c7; margin-bottom: 20px; }
-      </style>
-    </head>
-    <body>
-      <div class="header">
-        ${logoBase64 ? `<img src="${logoBase64}" class="logo" />` : ""}
-        <div class="report-title">Fully Paid Loans Report</div>
-        <div class="badge">CLEARED & SETTLED</div>
-      </div>
-
-      <div class="generation-info">Generated on ${new Date().toLocaleString("en-GB")}</div>
-
-      <div class="borrower-section">
-        <div class="name">${borrower.fullName}</div>
-        <div class="detail">Phone: ${borrower.phone} | ID: ${borrower.idNumber}</div>
-        <div class="detail">Email: ${borrower.email || "N/A"}</div>
-      </div>
-
-      <div class="summary-container">
-        <div class="summary-grid">
-          <div class="summary-item">
-            <div class="label">Total Cleared</div>
-            <div class="value">${totalLoansCleared} Loans</div>
-          </div>
-          <div class="summary-item">
-            <div class="label">Total Principal</div>
-            <div class="value">KES ${totalPrincipalPaid.toLocaleString()}</div>
-          </div>
-          <div class="summary-item">
-            <div class="label">Total Paid Back</div>
-            <div class="value" style="color: #27ae60;">KES ${totalOverallPaid.toLocaleString()}</div>
-          </div>
-        </div>
-      </div>
-
-      <h3 style="color: #2c3e50; margin-bottom: 25px; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 10px;">Detailed Loan History</h3>
-
-      ${formattedLoans.map((loan, idx) => `
-        <div class="loan-container">
-          <div class="loan-header">
-            <span class="title">Loan #${idx + 1} Summary</span>
-            <span style="color: #27ae60; font-weight: bold; font-size: 13px;">✔ FULLY SETTLED</span>
-          </div>
-
-          <table class="details-table">
-            <tr>
-              <th>Issue Date</th>
-              <td>${loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A"}</td>
-              <th>Due Date</th>
-              <td>${loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A"}</td>
-            </tr>
-            <tr>
-              <th>Principal</th>
-              <td>KES ${loan.amount?.toLocaleString()}</td>
-              <th>Interest</th>
-              <td>KES ${loan.interest?.toLocaleString()}</td>
-            </tr>
-            <tr>
-              <th>Final Settlement</th>
-              <td>${loan.lastPaymentDate ? new Date(loan.lastPaymentDate).toLocaleDateString("en-GB") : "N/A"}</td>
-              <th>Total Paid</th>
-              <td style="font-weight: bold; color: #27ae60;">KES ${loan.totalPaid?.toLocaleString()}</td>
-            </tr>
-          </table>
-
-          <div style="font-size: 11px; font-weight: bold; color: #95a5a6; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Repayment History</div>
-          <table class="history-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Payment Reference</th>
-                <th>Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${loan.repayments?.length ? loan.repayments.map(r => `
-                <tr>
-                  <td>${new Date(r.date).toLocaleDateString("en-GB")}</td>
-                  <td>${r.accountReference || r._id.toString().slice(-8).toUpperCase()}</td>
-                  <td style="font-weight: bold;">KES ${r.amount?.toLocaleString()}</td>
-                </tr>
-              `).join('') : '<tr><td colspan="3" style="text-align: center; color: #bdc3c7;">No repayment history records.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      `).join('')}
-
-      <div class="footer">
-        <p>This is an automated report from iziFinance. All listed loans are verified as fully settled.</p>
-        <p>© ${new Date().getFullYear()} iziFinance | Empowerment Through Access</p>
-      </div>
-    </body>
-    </html>
-    `;
-
-    // Launch Puppeteer with cloud-optimized settings
-    browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
+      doc.y = currentY + 20;
     });
 
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    // --- Footer ---
+    const footerY = Math.max(doc.y + 20, 780);
+    doc.y = footerY;
+    doc.fontSize(8).fillColor("#bdc3c7").font("Helvetica").text("This is an automated report from iziFinance. All listed loans are verified as fully settled.", { align: "center" });
+    doc.text(`© ${new Date().getFullYear()} iziFinance | Empowerment Through Access`, { align: "center" });
 
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      printBackground: true,
-      margin: { top: "40px", bottom: "40px", left: "40px", right: "40px" }
-    });
-
-    await browser.close();
-
-    res.writeHead(200, {
-      "Content-Type": "application/pdf",
-      "Content-Length": pdfBuffer.length,
-      "Content-Disposition": `inline; filename=fully_paid_report_${borrowerId}.pdf`,
-    });
-
-    return res.end(pdfBuffer);
+    doc.end();
 
   } catch (error) {
-    console.error("PDF generation error:", error);
-    if (browser) await browser.close();
-    return res.status(500).json({
+    console.error("Settlement Report PDF generation error (PDFKit):", error);
+    res.status(500).json({
       message: "Failed to generate settlement report",
       error: error.message,
     });
@@ -791,8 +701,6 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
 };
 
 exports.generateLoanReceiptPDF = async (req, res) => {
-  let browser;
-
   try {
     const { loanId } = req.params;
 
@@ -804,235 +712,93 @@ exports.generateLoanReceiptPDF = async (req, res) => {
 
     const totalPaid = loan.repayments?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0;
  
+    const doc = new PDFDocument({ size: "A4", margin: 40 });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename=loan_receipt_${loanId}.pdf`);
+    doc.pipe(res);
+
+    // --- Header & Logo ---
     const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
-    let logoBase64 = "";
     if (fs.existsSync(logoFilePath)) {
-      const logoBuffer = fs.readFileSync(logoFilePath);
-      logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
+      doc.image(logoFilePath, (doc.page.width - 120) / 2, 30, { width: 120 });
+      doc.y = 110; 
+    } else {
+      doc.y = 50;
     }
- 
-    const html = `
-    <html>
-    <head>
-      <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          padding: 40px;
-          color: #333;
-          line-height: 1.6;
+
+    doc.fontSize(16).fillColor("#2c3e50").font("Helvetica-Bold").text("LOAN CLEARANCE RECEIPT", { align: "center" });
+    doc.fontSize(10).fillColor("#27ae60").text("✔ This loan has been successfully cleared.", { align: "center" });
+    doc.moveDown(2);
+
+    // --- Borrower Info ---
+    doc.fillColor("#2c3e50").fontSize(12).font("Helvetica-Bold").text(`Borrower: ${loan.borrowerId?.fullName || loan.fullName || "User"}`);
+    doc.strokeColor("#eee").lineWidth(1).moveTo(40, doc.y + 5).lineTo(555, doc.y + 5).stroke();
+    doc.moveDown(1.5);
+
+    // --- Loan Summary Table ---
+    const summaryTop = doc.y;
+    doc.fillColor("#f8f9fa").rect(40, summaryTop, 515, 20).fill();
+    
+    doc.fontSize(8).fillColor("#444").font("Helvetica-Bold");
+    doc.text("Loan Amount", 40, summaryTop + 6, { width: 90, align: 'center' });
+    doc.text("Interest", 130, summaryTop + 6, { width: 80, align: 'center' });
+    doc.text("Total Paid", 210, summaryTop + 6, { width: 90, align: 'center' });
+    doc.text("Issued", 300, summaryTop + 6, { width: 85, align: 'center' });
+    doc.text("Due", 385, summaryTop + 6, { width: 85, align: 'center' });
+    doc.text("Status", 470, summaryTop + 6, { width: 80, align: 'center' });
+
+    doc.fontSize(9).font("Helvetica").fillColor("#2c3e50");
+    const valY = summaryTop + 25;
+    doc.text(`KES ${loan.amount?.toLocaleString()}`, 40, valY, { width: 90, align: 'center' });
+    doc.text(`KES ${loan.interest?.toLocaleString()}`, 130, valY, { width: 80, align: 'center' });
+    doc.text(`KES ${totalPaid.toLocaleString()}`, 210, valY, { width: 90, align: 'center' });
+    doc.text(loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A", 300, valY, { width: 85, align: 'center' });
+    doc.text(loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A", 385, valY, { width: 85, align: 'center' });
+    doc.fillColor("#27ae60").font("Helvetica-Bold").text(loan.status === 'fully paid' ? 'Paid' : loan.status, 470, valY, { width: 80, align: 'center' });
+
+    doc.moveDown(3);
+
+    // --- Repayment History ---
+    doc.fontSize(12).fillColor("#2c3e50").font("Helvetica-Bold").text("Repayment History");
+    doc.moveDown(0.5);
+
+    const historyTop = doc.y;
+    doc.fillColor("#f8f9fa").rect(40, historyTop, 515, 20).fill();
+    doc.fontSize(8).fillColor("#444").font("Helvetica-Bold");
+    doc.text("DATE", 40, historyTop + 6, { width: 100, align: 'center' });
+    doc.text("AMOUNT PAID", 140, historyTop + 6, { width: 250, align: 'center' });
+    doc.text("STATUS", 440, historyTop + 6, { width: 110, align: 'center' });
+
+    let rowY = historyTop + 20;
+    if (loan.repayments?.length) {
+      loan.repayments.forEach((r) => {
+        if (rowY > 750) {
+            doc.addPage();
+            rowY = 50;
         }
- 
-        .header {
-          text-align: center;
-          margin-bottom: 20px;
-        }
- 
-        .logo {
-          max-width: 150px;
-          margin-bottom: 15px;
-        }
- 
-        .status-cleared {
-          font-size: 18px;
-          color: #2c3e50;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-          margin-bottom: 10px;
-        }
+        doc.fontSize(9).font("Helvetica").fillColor("#2c3e50");
+        doc.text(new Date(r.date).toLocaleDateString("en-GB"), 40, rowY + 6, { width: 100, align: 'center' });
+        doc.text(`KES ${r.amount?.toLocaleString()}`, 140, rowY + 6, { width: 250, align: 'center' });
+        doc.text("On Time", 440, rowY + 6, { width: 110, align: 'center' });
+        doc.strokeColor("#eee").lineWidth(0.5).moveTo(40, rowY + 20).lineTo(555, rowY + 20).stroke();
+        rowY += 20;
+      });
+    } else {
+      doc.fontSize(9).font("Helvetica").fillColor("#bdc3c7").text("No repayment history found", 50, rowY + 6, { align: "center", width: 515 });
+    }
 
-        .check-icon {
-          color: #27ae60;
-          font-size: 24px;
-          font-weight: bold;
-        }
+    // --- Footer ---
+    const footerY = Math.max(rowY + 40, 780);
+    doc.y = footerY;
+    doc.fontSize(8).fillColor("#7f8c8d").font("Helvetica").text("This is an automated report from iziFinance. All details are verified as correct.", { align: "center" });
+    doc.text(`© ${new Date().getFullYear()} iziFinance | Empowerment Through Access`, { align: "center" });
 
-        hr {
-          border: 0;
-          border-top: 1px solid #eee;
-          margin: 20px 0;
-        }
-
-        .borrower-section {
-          font-size: 20px;
-          font-weight: bold;
-          margin-bottom: 20px;
-        }
-
-        .data-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-bottom: 30px;
-          background-color: #fff;
-        }
-
-        .data-table th, .data-table td {
-          border: 1px solid #e0e0e0;
-          padding: 12px 15px;
-          text-align: center;
-          font-size: 14px;
-        }
-
-        .data-table th {
-          background-color: #f8f9fa;
-          font-weight: 600;
-          color: #444;
-        }
-
-        .status-badge {
-          color: #27ae60;
-          font-weight: bold;
-        }
-
-        .section-title {
-          font-size: 18px;
-          font-weight: bold;
-          margin-bottom: 15px;
-        }
-
-        .generation-date {
-          text-align: right;
-          font-size: 12px;
-          color: #7f8c8d;
-          margin-top: -10px;
-          margin-bottom: 20px;
-        }
-
-        .footer {
-          text-align: center;
-          font-size: 13px;
-          color: #7f8c8d;
-          margin-top: 30px;
-        }
-
-        .footer a {
-          color: #0056b3;
-          text-decoration: none;
-          font-weight: bold;
-        }
-
-        .thank-you {
-          margin-top: 15px;
-          font-style: italic;
-          color: #95a5a6;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="header">
-        ${logoBase64 ? `<img src="${logoBase64}" class="logo" />` : ""}
-        <div class="status-cleared">
-          <span class="check-icon">✔</span> This loan has been successfully cleared.
-        </div>
-      </div>
-
-      <hr>
-
-      <div class="borrower-section">
-        Borrower: ${loan.borrowerId?.fullName || loan.fullName || "User"}
-      </div>
-
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Loan Amount</th>
-            <th>Interest</th>
-            <th>Total Paid</th>
-            <th>Issued</th>
-            <th>Due</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Ksh ${loan.amount?.toLocaleString()}</td>
-            <td>Ksh ${loan.interest?.toLocaleString()}</td>
-            <td>Ksh ${totalPaid?.toLocaleString()}</td>
-            <td>${loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A"}</td>
-            <td>${loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A"}</td>
-            <td class="status-badge">${loan.status === 'fully paid' ? 'Fully Paid' : loan.status}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <hr>
-
-      <div class="section-title">Repayment History</div>
-
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Amount</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${loan.repayments?.length ? loan.repayments.map(r => `
-            <tr>
-              <td>${new Date(r.date).toLocaleDateString("en-GB")}</td>
-              <td>Ksh ${r.amount?.toLocaleString()}</td>
-              <td>On Time</td>
-            </tr>
-          `).join('') : `
-            <tr>
-              <td colspan="3">No repayment history found</td>
-            </tr>
-          `}
-        </tbody>
-      </table>
-
-      <div class="generation-date">
-        Generated on ${new Date().toLocaleString("en-GB")}
-      </div>
-
-      <hr>
-
-      <div class="footer">
-        <p>Support: <a href="mailto:support@izifinance.com">support@izifinance.com</a></p>
-        <p>Website: <a href="https://www.izifinance.com">www.izifinance.com</a></p>
-        <p class="thank-you">Thank you for choosing iziFinance!</p>
-      </div>
-    </body>
-    </html>
-    `;
-
-    // Launch Puppeteer with cloud-optimized settings
-    browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    });
-
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
-
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      printBackground: true,
-      margin: { top: "20px", bottom: "20px", left: "20px", right: "20px" }
-    });
-
-    await browser.close();
-
-    res.writeHead(200, {
-      "Content-Type": "application/pdf",
-      "Content-Length": pdfBuffer.length,
-      "Content-Disposition": `inline; filename=loan_receipt_${loanId}.pdf`,
-    });
-
-    return res.end(pdfBuffer);
+    doc.end();
 
   } catch (error) {
-    console.error("Loan Receipt PDF generation error:", error);
-    if (browser) await browser.close();
-    return res.status(500).json({
+    console.error("Loan Receipt PDF generation error (PDFKit):", error);
+    res.status(500).json({
       message: "Failed to generate loan receipt PDF",
       error: error.message,
     });
