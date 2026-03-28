@@ -550,6 +550,11 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
   try {
     const { borrowerId } = req.params;
 
+    const borrower = await Customer.findById(borrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: "Borrower not found" });
+    }
+
     const loans = await Loan.find({
       borrowerId,
       status: "fully paid",
@@ -559,28 +564,32 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       return res.status(404).json({ message: "No fully paid loans found" });
     }
 
+    // Preparatory calculations for summary
+    const totalLoansCleared = loans.length;
+    let totalPrincipalPaid = 0;
+    let totalInterestPaid = 0;
+    let totalOverallPaid = 0;
+
     const formattedLoans = loans.map((loan) => {
       const loanObj = loan.toObject();
-
-      let totalPaid = 0;
+      let loanTotalPaid = 0;
       let lastPaymentDate = null;
 
       if (loanObj.repayments?.length) {
         loanObj.repayments.forEach((payment) => {
-          totalPaid += payment.amount || 0;
-
-          if (
-            !lastPaymentDate ||
-            new Date(payment.date) > new Date(lastPaymentDate)
-          ) {
+          loanTotalPaid += payment.amount || 0;
+          if (!lastPaymentDate || new Date(payment.date) > new Date(lastPaymentDate)) {
             lastPaymentDate = payment.date;
           }
         });
       }
 
-      loanObj.totalPaid = totalPaid;
-      loanObj.lastPaymentDate = lastPaymentDate;
+      totalPrincipalPaid += loan.amount || 0;
+      totalInterestPaid += loan.interest || 0;
+      totalOverallPaid += loanTotalPaid;
 
+      loanObj.totalPaid = loanTotalPaid;
+      loanObj.lastPaymentDate = lastPaymentDate;
       return loanObj;
     });
 
@@ -596,163 +605,169 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
     <head>
       <style>
         body {
-          font-family: Arial, sans-serif;
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
           padding: 30px;
+          color: #333;
+          line-height: 1.6;
         }
-
-        .header-logo {
-          text-align: center;
-          margin-bottom: 10px;
+        .header { text-align: center; margin-bottom: 30px; }
+        .logo { max-width: 140px; margin-bottom: 10px; }
+        .report-title { font-size: 26px; font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+        .badge { display: inline-block; background: #27ae60; color: #fff; padding: 6px 18px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-top: 10px; }
+        hr { border: 0; border-top: 1px solid #eee; margin: 25px 0; }
+        
+        .summary-container {
+          background-color: #f8f9fa;
+          border-radius: 12px;
+          padding: 25px;
+          margin-bottom: 35px;
+          border-left: 5px solid #27ae60;
         }
+        .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; text-align: center; }
+        .summary-item .label { font-size: 11px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+        .summary-item .value { font-size: 18px; font-weight: bold; color: #2c3e50; }
 
-        .logo-img {
-          max-width: 120px;
+        .borrower-section { margin-bottom: 30px; }
+        .name { font-size: 22px; font-weight: bold; color: #2c3e50; }
+        .detail { font-size: 14px; color: #7f8c8d; }
+
+        .loan-container {
+          margin-bottom: 35px;
+          border: 1px solid #eef0f2;
+          border-radius: 12px;
+          padding: 20px;
+          page-break-inside: avoid;
         }
-
-
-        .page {
-          page-break-after: always;
+        .loan-header {
+          display: flex;
+          justify-content: space-between;
+          border-bottom: 2px solid #27ae60;
+          padding-bottom: 10px;
+          margin-bottom: 15px;
         }
+        .loan-header .title { font-size: 16px; font-weight: bold; color: #2c3e50; }
+        .details-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        .details-table th, .details-table td { padding: 8px; text-align: left; font-size: 13px; border-bottom: 1px solid #f8f9fa; }
+        .details-table th { color: #7f8c8d; width: 25%; }
+        .history-table { width: 100%; border-collapse: collapse; background: #fafbfc; border-radius: 8px; }
+        .history-table th, .history-table td { padding: 10px; text-align: left; font-size: 12px; border-bottom: 1px solid #edf2f7; }
+        .history-table th { color: #95a5a6; font-weight: bold; text-transform: uppercase; font-size: 10px; }
 
-        h1 {
-          text-align: center;
-          margin-bottom: 5px;
-        }
-
-        .status-box {
-          text-align: center;
-          margin: 10px 0 20px 0;
-        }
-
-        .badge {
-          display: inline-block;
-          background: #28a745;
-          color: #fff;
-          padding: 10px 20px;
-          border-radius: 20px;
-          font-weight: bold;
-          font-size: 16px;
-        }
-
-        .section-title {
-          font-weight: bold;
-          margin-top: 20px;
-          margin-bottom: 10px;
-          font-size: 16px;
-        }
-
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-bottom: 20px;
-        }
-
-        th, td {
-          border: 1px solid #ccc;
-          padding: 8px;
-          font-size: 12px;
-          text-align: left;
-        }
-
-        th {
-          background-color: #f2f2f2;
-        }
-
-        .footer {
-          font-size: 11px;
-          color: #555;
-          margin-top: 20px;
-          text-align: right;
-        }
+        .footer { text-align: center; font-size: 12px; color: #bdc3c7; margin-top: 50px; }
+        .generation-info { text-align: right; font-size: 11px; color: #bdc3c7; margin-bottom: 20px; }
       </style>
     </head>
     <body>
-      <div class="header-logo">
-        ${logoBase64 ? `<img src="${logoBase64}" class="logo-img" />` : ""}
+      <div class="header">
+        ${logoBase64 ? `<img src="${logoBase64}" class="logo" />` : ""}
+        <div class="report-title">Fully Paid Loans Report</div>
+        <div class="badge">CLEARED & SETTLED</div>
       </div>
-    ${formattedLoans
-        .map(
-          (loan) => `
 
-      <div class="page">
-        <h1>Loan Statement</h1>
+      <div class="generation-info">Generated on ${new Date().toLocaleString("en-GB")}</div>
 
-        <div class="status-box">
-          <div class="badge">✔ Fully Paid</div>
-          <div>This loan has been successfully cleared.</div>
-        </div>
+      <div class="borrower-section">
+        <div class="name">${borrower.fullName}</div>
+        <div class="detail">Phone: ${borrower.phone} | ID: ${borrower.idNumber}</div>
+        <div class="detail">Email: ${borrower.email || "N/A"}</div>
+      </div>
 
-        <div class="section-title">
-          Borrower: ${loan.fullName}
-        </div>
-
-        <table>
-          <tr>
-            <th>Loan Amount</th>
-            <th>Interest</th>
-            <th>Total Paid</th>
-            <th>Issued</th>
-            <th>Due</th>
-            <th>Status</th>
-          </tr>
-          <tr>
-            <td>Ksh ${loan.amount}</td>
-            <td>Ksh ${loan.interest}</td>
-            <td>Ksh ${loan.totalPaid}</td>
-            <td>${new Date(loan.issueDate).toLocaleDateString()}</td>
-            <td>${new Date(loan.dueDate).toLocaleDateString()}</td>
-            <td style="color: green; font-weight: bold;">Fully Paid</td>
-          </tr>
-        </table>
-
-        <div class="section-title">Repayment History</div>
-
-        <table>
-          <tr>
-            <th>Date</th>
-            <th>Amount</th>
-            <th>Status</th>
-          </tr>
-          ${loan.repayments?.length
-              ? loan.repayments
-                .map(
-                  (r) => `
-                    <tr>
-                      <td>${new Date(r.date).toLocaleDateString()}</td>
-                      <td>Ksh ${r.amount}</td>
-                      <td>On Time</td>
-                    </tr>
-                  `
-                )
-                .join("")
-              : `<tr><td colspan="3">No repayments found</td></tr>`
-            }
-        </table>
-
-        <div class="footer">
-          Generated on ${new Date().toLocaleString()}
+      <div class="summary-container">
+        <div class="summary-grid">
+          <div class="summary-item">
+            <div class="label">Total Cleared</div>
+            <div class="value">${totalLoansCleared} Loans</div>
+          </div>
+          <div class="summary-item">
+            <div class="label">Total Principal</div>
+            <div class="value">KES ${totalPrincipalPaid.toLocaleString()}</div>
+          </div>
+          <div class="summary-item">
+            <div class="label">Total Paid Back</div>
+            <div class="value" style="color: #27ae60;">KES ${totalOverallPaid.toLocaleString()}</div>
+          </div>
         </div>
       </div>
-    `
-        )
-        .join("")}
 
+      <h3 style="color: #2c3e50; margin-bottom: 25px; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 10px;">Detailed Loan History</h3>
+
+      ${formattedLoans.map((loan, idx) => `
+        <div class="loan-container">
+          <div class="loan-header">
+            <span class="title">Loan #${idx + 1} Summary</span>
+            <span style="color: #27ae60; font-weight: bold; font-size: 13px;">✔ FULLY SETTLED</span>
+          </div>
+
+          <table class="details-table">
+            <tr>
+              <th>Issue Date</th>
+              <td>${loan.issueDate ? new Date(loan.issueDate).toLocaleDateString("en-GB") : "N/A"}</td>
+              <th>Due Date</th>
+              <td>${loan.dueDate ? new Date(loan.dueDate).toLocaleDateString("en-GB") : "N/A"}</td>
+            </tr>
+            <tr>
+              <th>Principal</th>
+              <td>KES ${loan.amount?.toLocaleString()}</td>
+              <th>Interest</th>
+              <td>KES ${loan.interest?.toLocaleString()}</td>
+            </tr>
+            <tr>
+              <th>Final Settlement</th>
+              <td>${loan.lastPaymentDate ? new Date(loan.lastPaymentDate).toLocaleDateString("en-GB") : "N/A"}</td>
+              <th>Total Paid</th>
+              <td style="font-weight: bold; color: #27ae60;">KES ${loan.totalPaid?.toLocaleString()}</td>
+            </tr>
+          </table>
+
+          <div style="font-size: 11px; font-weight: bold; color: #95a5a6; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Repayment History</div>
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Payment Reference</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${loan.repayments?.length ? loan.repayments.map(r => `
+                <tr>
+                  <td>${new Date(r.date).toLocaleDateString("en-GB")}</td>
+                  <td>${r.accountReference || r._id.toString().slice(-8).toUpperCase()}</td>
+                  <td style="font-weight: bold;">KES ${r.amount?.toLocaleString()}</td>
+                </tr>
+              `).join('') : '<tr><td colspan="3" style="text-align: center; color: #bdc3c7;">No repayment history records.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      `).join('')}
+
+      <div class="footer">
+        <p>This is an automated report from iziFinance. All listed loans are verified as fully settled.</p>
+        <p>© ${new Date().getFullYear()} iziFinance | Empowerment Through Access</p>
+      </div>
     </body>
     </html>
     `;
 
-    // Launch Puppeteer
+    // Launch Puppeteer with cloud-optimized settings
     browser = await puppeteer.launch({
       headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
     });
 
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
+      margin: { top: "40px", bottom: "40px", left: "40px", right: "40px" }
     });
 
     await browser.close();
@@ -760,18 +775,16 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
     res.writeHead(200, {
       "Content-Type": "application/pdf",
       "Content-Length": pdfBuffer.length,
-      "Content-Disposition": "inline; filename=fully_paid_loans.pdf",
+      "Content-Disposition": `inline; filename=fully_paid_report_${borrowerId}.pdf`,
     });
 
     return res.end(pdfBuffer);
 
   } catch (error) {
     console.error("PDF generation error:", error);
-
     if (browser) await browser.close();
-
     return res.status(500).json({
-      message: "Failed to generate PDF",
+      message: "Failed to generate settlement report",
       error: error.message,
     });
   }
@@ -985,14 +998,20 @@ exports.generateLoanReceiptPDF = async (req, res) => {
     </html>
     `;
 
-    // Launch Puppeteer
+    // Launch Puppeteer with cloud-optimized settings
     browser = await puppeteer.launch({
       headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
     });
 
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
