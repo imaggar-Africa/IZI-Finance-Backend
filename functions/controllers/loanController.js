@@ -600,7 +600,7 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
     const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
     if (fs.existsSync(logoFilePath)) {
       doc.image(logoFilePath, (doc.page.width - 110) / 2, 30, { width: 110 });
-      doc.y = 110; // Move y below the image explicitly
+      doc.y = 160; 
     } else {
       doc.y = 50;
     }
@@ -663,9 +663,9 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
       currentY += 15;
 
       doc.rect(50, currentY, 495, 15).fill("#f8f9fa");
-      doc.fillColor("#95a5a6").fontSize(7).font("Helvetica-Bold").text("DATE", 60, currentY + 4, { width: 100, align: 'left' });
-      doc.text("REFERENCE", 180, currentY + 4, { width: 250, align: 'left' });
-      doc.text("AMOUNT", 450, currentY + 4, { width: 85, align: 'right' });
+      doc.fillColor("#95a5a6").fontSize(7).font("Helvetica-Bold").text("DATE", 50, currentY + 4, { width: 100, align: 'center' });
+      doc.text("REFERENCE", 150, currentY + 4, { width: 250, align: 'center' });
+      doc.text("AMOUNT", 400, currentY + 4, { width: 145, align: 'center' });
       currentY += 15;
 
       loan.repayments.forEach((r) => {
@@ -673,9 +673,9 @@ exports.generateFullyPaidLoansPDF = async (req, res) => {
             doc.addPage();
             currentY = 50;
         }
-        doc.fillColor("#2c3e50").fontSize(8).font("Helvetica").text(new Date(r.date).toLocaleDateString("en-GB"), 60, currentY + 4, { width: 100, align: 'left' });
-        doc.text(r.accountReference || r._id.toString().slice(-8).toUpperCase(), 180, currentY + 4, { width: 250, align: 'left' });
-        doc.font("Helvetica-Bold").text(`KES ${r.amount?.toLocaleString()}`, 450, currentY + 4, { width: 85, align: 'right' });
+        doc.fillColor("#2c3e50").fontSize(8).font("Helvetica").text(new Date(r.date).toLocaleDateString("en-GB"), 50, currentY + 4, { width: 100, align: 'center' });
+        doc.text(r.accountReference || r._id.toString().slice(-8).toUpperCase(), 150, currentY + 4, { width: 250, align: 'center' });
+        doc.font("Helvetica-Bold").text(`KES ${r.amount?.toLocaleString()}`, 400, currentY + 4, { width: 145, align: 'center' });
         doc.strokeColor("#edf2f7").lineWidth(0.5).moveTo(50, currentY + 15).lineTo(545, currentY + 15).stroke();
         currentY += 15;
       });
@@ -721,14 +721,14 @@ exports.generateLoanReceiptPDF = async (req, res) => {
     // --- Header & Logo ---
     const logoFilePath = path.join(__dirname, "../assets/izi-logo.png");
     if (fs.existsSync(logoFilePath)) {
-      doc.image(logoFilePath, (doc.page.width - 120) / 2, 30, { width: 120 });
-      doc.y = 110; 
+      doc.image(logoFilePath, (doc.page.width - 150) / 2, 30, { width: 150 });
+      doc.y = 160; 
     } else {
       doc.y = 50;
     }
 
-    doc.fontSize(16).fillColor("#2c3e50").font("Helvetica-Bold").text("LOAN CLEARANCE RECEIPT", { align: "center" });
-    doc.fontSize(10).fillColor("#27ae60").text("✔ This loan has been successfully cleared.", { align: "center" });
+    doc.fontSize(18).fillColor("#2c3e50").font("Helvetica-Bold").text("LOAN CLEARANCE RECEIPT", { align: "center" });
+    doc.fontSize(12).fillColor("#27ae60").text("✔ This loan has been successfully cleared.", { align: "center" });
     doc.moveDown(2);
 
     // --- Borrower Info ---
@@ -760,15 +760,15 @@ exports.generateLoanReceiptPDF = async (req, res) => {
     doc.moveDown(3);
 
     // --- Repayment History ---
-    doc.fontSize(12).fillColor("#2c3e50").font("Helvetica-Bold").text("Repayment History");
+    doc.fontSize(12).fillColor("#2c3e50").font("Helvetica-Bold").text("Repayment History", 40, doc.y);
     doc.moveDown(0.5);
 
     const historyTop = doc.y;
     doc.fillColor("#f8f9fa").rect(40, historyTop, 515, 20).fill();
     doc.fontSize(8).fillColor("#444").font("Helvetica-Bold");
-    doc.text("DATE", 40, historyTop + 6, { width: 100, align: 'center' });
-    doc.text("AMOUNT PAID", 140, historyTop + 6, { width: 250, align: 'center' });
-    doc.text("STATUS", 440, historyTop + 6, { width: 110, align: 'center' });
+    doc.text("DATE", 40, historyTop + 6, { width: 110, align: 'center' });
+    doc.text("AMOUNT PAID", 150, historyTop + 6, { width: 250, align: 'center' });
+    doc.text("STATUS", 400, historyTop + 6, { width: 155, align: 'center' });
 
     let rowY = historyTop + 20;
     if (loan.repayments?.length) {
@@ -778,9 +778,9 @@ exports.generateLoanReceiptPDF = async (req, res) => {
             rowY = 50;
         }
         doc.fontSize(9).font("Helvetica").fillColor("#2c3e50");
-        doc.text(new Date(r.date).toLocaleDateString("en-GB"), 40, rowY + 6, { width: 100, align: 'center' });
-        doc.text(`KES ${r.amount?.toLocaleString()}`, 140, rowY + 6, { width: 250, align: 'center' });
-        doc.text("On Time", 440, rowY + 6, { width: 110, align: 'center' });
+        doc.text(new Date(r.date).toLocaleDateString("en-GB"), 40, rowY + 6, { width: 110, align: 'center' });
+        doc.text(`KES ${r.amount?.toLocaleString()}`, 150, rowY + 6, { width: 250, align: 'center' });
+        doc.text("On Time", 400, rowY + 6, { width: 155, align: 'center' });
         doc.strokeColor("#eee").lineWidth(0.5).moveTo(40, rowY + 20).lineTo(555, rowY + 20).stroke();
         rowY += 20;
       });
