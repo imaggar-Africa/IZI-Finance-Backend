@@ -1,7 +1,9 @@
+const mongoose = require("mongoose");
 const Group = require("../models/Group");
 const GroupMember = require("../models/GroupMember");
 const Customer = require("../models/customer");
 const User = require("../models/User");
+const GroupLoanRequest = require("../models/groupLoanRequestModel");
 const { sendSMS } = require("../utils/sms");
 
 /* =========================
@@ -9,18 +11,36 @@ const { sendSMS } = require("../utils/sms");
 ========================= */
 exports.createGroup = async (req, res) => {
   try {
-    const lenderId = req.user._id;
-    const { name, description, creditLimit } = req.body;
+    const { name, description, lenderId, agentId, group_leader_id } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Group name required" });
     }
 
+    /* ===============================
+       1️⃣ PREPARE GROUP DATA
+    =============================== */
+
+    let finalLenderId = lenderId;
+    let finalAgentId = agentId;
+
+    if (req.user.role === "agent") {
+      finalAgentId = req.user._id;
+      // Also get lenderId from agent's own data if possible
+      const AgentModel = require("../models/AgentModel");
+      const agent = await AgentModel.findById(finalAgentId);
+      if (agent) finalLenderId = agent.lenderId;
+    } else if (req.user.role === "lender" || req.user.role === "admin") {
+      finalLenderId = req.user._id;
+    }
+
     const group = await Group.create({
       name,
       description,
-      lenderId,
-      creditLimit
+      lenderId: finalLenderId,
+      agentId: finalAgentId,
+      group_leader_id,
+      status: req.user.role === "agent" ? "pending" : "active"
     });
 
     res.status(201).json({
@@ -38,180 +58,243 @@ exports.createGroup = async (req, res) => {
 ========================= */
 exports.addMember = async (req, res) => {
   try {
-    const { groupId, borrowerId } = req.body;
+    const groupId = req.params.groupId || req.body.groupId;
+    const { borrowerId } = req.body;
 
     if (!groupId || !borrowerId) {
-      return res.status(400).json({
-        message: "groupId and borrowerId are required"
-      });
-    }
-
-    // Convert borrowerId to array
-    const borrowerIds = Array.isArray(borrowerId)
-      ? borrowerId
-      : [borrowerId];
-
-    /* ===============================
-       FIND BORROWERS
-    =============================== */
-
-    const borrowers = await Customer.find({
-      _id: { $in: borrowerIds }
-    });
-
-    if (!borrowers.length) {
-      return res.status(404).json({
-        message: "No valid borrowers found"
-      });
-    }
-
-    const validIds = borrowers.map(b => b._id.toString());
-
-    /* ===============================
-       CHECK EXISTING MEMBERS
-    =============================== */
-
-    const existingMembers = await GroupMember.find({
-      groupId,
-      borrowerId: { $in: validIds }
-    }).select("borrowerId");
-
-    const existingIds = existingMembers.map(m =>
-      m.borrowerId.toString()
-    );
-
-    /* ===============================
-       FILTER NEW MEMBERS
-    =============================== */
-
-    const newIds = validIds.filter(
-      id => !existingIds.includes(id)
-    );
-
-    /* ===============================
-       GET EXISTING BORROWER NAMES
-    =============================== */
-
-    const existingBorrowers = await Customer.find({
-      _id: { $in: existingIds }
-    }).select("fullName");
-
-    const existingBorrowerNames = existingBorrowers.map(
-      b => b.fullName
-    );
-
-    if (!newIds.length) {
-      return res.status(400).json({
-        message: "All borrowers already exist in this group",
-        existingBorrowers: existingBorrowerNames
-      });
+      return res.status(400).json({ message: "groupId and borrowerId are required" });
     }
 
     /* ===============================
-       INSERT NEW MEMBERS
+       1️⃣ VALIDATE GROUP EXISTS
     =============================== */
-
-    const membersToCreate = newIds.map(id => ({
-      groupId,
-      borrowerId: id
-    }));
-
-    const createdMembers = await GroupMember.insertMany(membersToCreate);
-
-    /* ===============================
-       GROUP OWNER & INVITER
-    =============================== */
-
     const group = await Group.findById(groupId);
-    const lender = await User.findById(group.lenderId);
-    const adminName = lender?.name || "Group Owner";
-
-    const inviterName = req.user.name || "System Admin";
-    const inviterRole = req.user.role === "agent" ? "Agent" : "Admin";
-
-    /* ===============================
-       CURRENT MEMBERS
-    =============================== */
-
-    const groupMembers = await GroupMember.find({ groupId })
-      .populate("borrowerId", "fullName")
-      .limit(10);
-
-    const memberNames = groupMembers
-      .filter(m => m.borrowerId)
-      .map(m => m.borrowerId.fullName)
-      .join(", ");
-
-    /* ===============================
-       SEND SMS TO NEW MEMBERS
-    =============================== */
-
-    const newBorrowers = borrowers.filter(b =>
-      newIds.includes(b._id.toString())
-    );
-
-    const displayGroupName = group.name.toLowerCase().endsWith("group")
-      ? group.name
-      : `${group.name} Group`;
-
-    const message = `You've been added to ${displayGroupName}.
-
-
-Total Members: ${groupMembers.length}
-Members: ${memberNames}`;
-
-    const smsResults = [];
-
-    for (const borrower of newBorrowers) {
-      if (borrower.phone) {
-        try {
-          const smsRes = await sendSMS(borrower.phone, message);
-
-          smsResults.push({
-            name: borrower.fullName,
-            phone: borrower.phone,
-            status: "sent",
-            response: smsRes
-          });
-
-        } catch (smsError) {
-
-          smsResults.push({
-            name: borrower.fullName,
-            phone: borrower.phone,
-            status: "failed",
-            error: smsError.message
-          });
-
-        }
-      }
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
     }
 
-    /* ===============================
-       RESPONSE
-    =============================== */
+    const borrowerIds = Array.isArray(borrowerId) ? borrowerId : [borrowerId];
+    const addedMembers = [];
+    const skippedBorrowers = [];
+
+    for (const id of borrowerIds) {
+      const borrower = await Customer.findById(id);
+      if (!borrower) continue;
+
+      /* ===============================
+         2️⃣ CHECK FOR DUPLICATE
+      =============================== */
+      const exists = await GroupMember.findOne({ groupId, borrowerId: id });
+      if (exists) {
+        skippedBorrowers.push(borrower.fullName);
+        continue;
+      }
+
+      /* ===============================
+         3️⃣ CREATE WITH INITIAL VALUES
+      =============================== */
+      const member = await GroupMember.create({
+        groupId,
+        borrowerId: id,
+        internal_loan_amount: null,
+        daily_repayment_amount: null,
+        total_repaid: 0,
+        remaining_balance: null,
+        status: "active"
+      });
+
+      addedMembers.push(member);
+
+      /* ===============================
+         4️⃣ SEND SMS
+      =============================== */
+      const members = await GroupMember.find({ groupId })
+        .populate("borrowerId", "fullName")
+        .limit(10);
+
+      const memberNames = members
+        .filter(m => m.borrowerId)
+        .map(m => m.borrowerId.fullName)
+        .join(", ");
+
+      const message = `You've been added to ${group.name} Group.\n\nTotal Members: ${members.length}\nMembers: ${memberNames}`;
+
+      await sendSMS(borrower.phone, message);
+    }
+
+    if (addedMembers.length > 0) {
+      await Group.findByIdAndUpdate(groupId, {
+        $inc: { member_count: addedMembers.length }
+      });
+    }
 
     res.json({
       success: true,
-      addedCount: createdMembers.length,
-      addedMembers: createdMembers,
-      skippedBorrowers: existingBorrowerNames,
-      smsResults
+      addedCount: addedMembers.length,
+      addedMembers,
+      skippedCount: skippedBorrowers.length,
+      skippedBorrowers
     });
 
   } catch (error) {
-
     if (error.code === 11000) {
-      return res.status(400).json({
-        message: "Customer already exists in this group"
-      });
+      return res.status(400).json({ message: "Customer already exists in this group" });
+    }
+    console.error("❌ addMember error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   ASSIGN/CHANGE GROUP LEADER
+========================= */
+exports.assignGroupLeader = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { group_leader_id } = req.body;
+
+    if (!group_leader_id) {
+      return res.status(400).json({ message: "group_leader_id is required" });
     }
 
-    console.error("❌ addMember error:", error);
+    // Verify leader exists in Customer collection
+    const leader = await Customer.findById(group_leader_id);
+    if (!leader) {
+      return res.status(404).json({ message: "Borrower not found for leader ID" });
+    }
 
-    res.status(500).json({
-      message: error.message
+    // Optional: Check if leader is already a member of the group
+    const isMember = await GroupMember.findOne({ groupId, borrowerId: group_leader_id });
+    if (!isMember) {
+      return res.status(400).json({ message: "Assigned leader must be a member of the group" });
+    }
+
+    const group = await Group.findByIdAndUpdate(
+      groupId,
+      { $set: { group_leader_id } },
+      { new: true }
+    );
+
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Group leader assigned/changed",
+      group
     });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP MEMBERS
+========================= */
+exports.getGroupMembers = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+
+    const members = await GroupMember.find({ groupId })
+      .populate("borrowerId", "fullName phone status internal_loan_amount daily_repayment_amount remaining_balance total_repaid");
+
+    res.json({
+      success: true,
+      count: members.length,
+      members: members.map(m => ({
+        memberId: m._id,
+        borrowerId: m.borrowerId?._id,
+        fullName: m.borrowerId?.fullName,
+        phone: m.borrowerId?.phone,
+        status: m.status,
+        internalLoan: m.internal_loan_amount,
+        repaymentAmount: m.daily_repayment_amount,
+        remainingBalance: m.remaining_balance,
+        totalRepaid: m.total_repaid
+      }))
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET ALL GROUP MEMBERS (LENDER)
+========================= */
+exports.getAllGroupMembers = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+
+    // Use aggregate to find all members across all groups belonging to this lender
+    const members = await GroupMember.aggregate([
+      {
+        $lookup: {
+          from: "groups",
+          localField: "groupId",
+          foreignField: "_id",
+          as: "group"
+        }
+      },
+      { $unwind: "$group" },
+      { $match: { "group.lenderId": new mongoose.Types.ObjectId(lenderId) } },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "borrowerId",
+          foreignField: "_id",
+          as: "borrower"
+        }
+      },
+      { $unwind: "$borrower" },
+      {
+        $project: {
+          _id: 1,
+          groupId: 1,
+          groupName: "$group.name",
+          borrowerId: 1,
+          fullName: "$borrower.fullName",
+          phone: "$borrower.phone",
+          status: 1,
+          internalLoan: "$internal_loan_amount",
+          repaymentAmount: "$daily_repayment_amount",
+          remainingBalance: "$remaining_balance",
+          totalRepaid: "$total_repaid"
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      count: members.length,
+      members
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUPS BY AGENT ID
+========================= */
+exports.getGroupsByAgentId = async (req, res) => {
+  try {
+    const { agentId } = req.params;
+
+    const groups = await Group.find({ agentId })
+      .populate("group_leader_id", "fullName phone");
+
+    res.json({
+      success: true,
+      count: groups.length,
+      groups
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -224,9 +307,42 @@ exports.removeMember = async (req, res) => {
 
     await GroupMember.deleteOne({ groupId, borrowerId });
 
+    await Group.findByIdAndUpdate(groupId, {
+      $inc: { member_count: -1 }
+    });
+
     res.json({
       success: true,
       message: "Member removed"
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP DETAILS BY LEADER ID
+========================= */
+exports.getGroupByLeader = async (req, res) => {
+  try {
+    const { leaderId } = req.params;
+
+    const group = await Group.findOne({ group_leader_id: leaderId })
+      .populate("agentId", "name phone")
+      .populate("lenderId", "name email");
+
+    if (!group) {
+      return res.status(404).json({ message: "No group found for this leader" });
+    }
+
+    const members = await GroupMember.find({ groupId: group._id })
+      .populate("borrowerId", "fullName phone status");
+
+    res.json({
+      success: true,
+      group,
+      members
     });
 
   } catch (error) {
@@ -242,7 +358,8 @@ exports.getGroupDetails = async (req, res) => {
     const { groupId } = req.params;
 
     const group = await Group.findById(groupId)
-      .populate("leaderId", "fullName");
+      .populate("agentId", "name phone")
+      .populate("lenderId", "name email");
 
     const members = await GroupMember.find({ groupId })
       .populate("borrowerId", "fullName phone");
@@ -278,6 +395,62 @@ exports.getLenderGroups = async (req, res) => {
 };
 
 /* =========================
+   GET PENDING GROUPS (FOR ADMIN/LENDER)
+========================= */
+exports.getPendingGroups = async (req, res) => {
+  try {
+    const query = { status: "pending" };
+
+    // If lender is logged in → show only their pending groups
+    // If admin is logged in → show all (overall)
+    if (req.user.role === "lender") {
+      query.lenderId = req.user._id;
+    }
+
+    const groups = await Group.find(query)
+      .populate("agentId", "name phone")
+      .populate("lenderId", "name email");
+
+    res.json({
+      success: true,
+      count: groups.length,
+      groups
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   APPROVE GROUP
+========================= */
+exports.approveGroup = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+
+    const group = await Group.findByIdAndUpdate(
+      groupId,
+      { $set: { status: "active" } },
+      { new: true }
+    );
+
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Group approved and is now active",
+      group
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
    UPDATE GROUP
 ========================= */
 exports.updateGroup = async (req, res) => {
@@ -288,6 +461,41 @@ exports.updateGroup = async (req, res) => {
     const group = await Group.findByIdAndUpdate(
       groupId,
       { $set: updateData },
+      { new: true }
+    );
+
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    res.json({
+      success: true,
+      group
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   UPDATE GROUP STATUS
+========================= */
+exports.updateGroupStatus = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ["active", "completed", "defaulted"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        message: "Invalid status. Must be one of: active, completed, defaulted" 
+      });
+    }
+
+    const group = await Group.findByIdAndUpdate(
+      groupId,
+      { $set: { status } },
       { new: true }
     );
 
@@ -357,8 +565,9 @@ exports.getGroupAnalytics = async (req, res) => {
           _id: "$groupId",
           groupName: { $first: "$group.name" },
           memberCount: { $sum: 1 },
-          totalContribution: { $first: "$group.totalContribution" },
-          totalOwed: { $first: "$group.totalOwed" }
+          totalFunding: { $first: "$group.total_funding" },
+          totalRepaid: { $sum: "$total_repaid" },
+          totalRemaining: { $sum: "$remaining_balance" }
         }
       },
       { $sort: { memberCount: -1 } }
@@ -368,12 +577,12 @@ exports.getGroupAnalytics = async (req, res) => {
       ? memberStats.reduce((sum, s) => sum + s.memberCount, 0) / totalGroups 
       : 0;
 
-    const topGroupsByContribution = [...memberStats]
-      .sort((a, b) => b.totalContribution - a.totalContribution)
+    const topGroupsByFunding = [...memberStats]
+      .sort((a, b) => b.totalFunding - a.totalFunding)
       .slice(0, 5);
 
     const topGroupsByDebt = [...memberStats]
-      .sort((a, b) => b.totalOwed - a.totalOwed)
+      .sort((a, b) => b.totalRemaining - a.totalRemaining)
       .slice(0, 5);
 
     res.json({
@@ -384,17 +593,141 @@ exports.getGroupAnalytics = async (req, res) => {
         totalMembers: memberStats.reduce((sum, s) => sum + s.memberCount, 0)
       },
       performance: {
-        topGroupsByContribution,
+        topGroupsByFunding,
         topGroupsByDebt
       },
       memberDistribution: memberStats.map(s => ({
         groupName: s.groupName,
-        count: s.memberCount
+        count: s.memberCount,
+        totalRepaid: s.totalRepaid,
+        totalRemaining: s.totalRemaining
       }))
     });
 
   } catch (error) {
     console.error("Group analytics error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   DISBURSE GROUP LOAN
+========================= */
+exports.disburseGroupLoan = async (req, res) => {
+  try {
+    const { group_id, loan_amount, interest_rate, duration_months } = req.body;
+
+    if (!group_id || !loan_amount) {
+      return res.status(400).json({ message: "group_id and loan_amount are required" });
+    }
+
+    // 1️⃣ Find group
+    const group = await Group.findById(group_id);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+
+    // 2️⃣ Calculations (Example: 50,000 * 0.5% = 250 interest per month)
+    const monthlyRate = interest_rate / 100; // Convert 0.5 to 0.005
+    const monthlyInterest = loan_amount * monthlyRate;
+    const totalInterest = monthlyInterest * duration_months;
+    const totalRepayment = loan_amount + totalInterest;
+
+    // Monthly payment to lender (Example: 53,000 / 12 = 4,416.67)
+    const monthlyPayment = totalRepayment / duration_months;
+
+    // 3️⃣ Update Group in DB
+    group.loan_amount = loan_amount;
+    group.interest_rate = interest_rate;
+    group.duration_months = duration_months;
+    group.total_interest = totalInterest;
+    group.total_repayment = totalRepayment;
+    group.remaining_loan_balance = totalRepayment;
+    group.monthly_repayment_to_lender = Number(monthlyPayment.toFixed(2));
+    group.status = "active"; // Ensure group is active
+
+    await group.save();
+
+    res.json({
+      success: true,
+      message: "Loan disbursed and group updated",
+      data: {
+        loan_amount: group.loan_amount,
+        total_interest: group.total_interest,
+        total_repayment: group.total_repayment,
+        monthly_payment: group.monthly_repayment_to_lender
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ disburseGroupLoan error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   REQUEST LOAN FOR GROUP MEMBER (BY LEADER)
+========================= */
+exports.requestGroupMemberLoan = async (req, res) => {
+  try {
+    const { groupId, borrowerId, leaderId, amount } = req.body;
+
+    if (!groupId || !borrowerId || !leaderId || !amount) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // 1. Verify group exists
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+
+    // 2. Verify lender from group
+    const lenderId = group.lenderId;
+
+    // 3. Create Loan Request
+    const Loan = require("../models/Loan");
+    const loanRequest = await Loan.create({
+      lenderId,
+      borrowerId,
+      groupId,
+      requestedByLeaderId: leaderId,
+      amount,
+      loanRequestStatus: "pending",
+      status: "pending"
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Group member loan request submitted",
+      loanRequest
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP LOAN REQUESTS (LENDER)
+========================= */
+exports.getGroupLoanRequests = async (req, res) => {
+  try {
+    const lenderId = req.user._id;
+    const Loan = require("../models/Loan");
+
+    const requests = await Loan.find({ 
+      lenderId, 
+      groupId: { $exists: true } 
+    })
+    .populate("borrowerId", "fullName phone")
+    .populate("groupId", "name")
+    .populate("requestedByLeaderId", "fullName phone")
+    .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: requests.length,
+      requests
+    });
+
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };

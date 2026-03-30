@@ -14,15 +14,32 @@ const groupMemberSchema = new mongoose.Schema(
       required: true
     },
 
-    totalContribution: {
-      type: Number,
-      default: 0
-    },
+      internal_loan_amount: {
+    type: Number
+  },
 
-    joinedAt: {
-      type: Date,
-      default: Date.now
-    }
+  daily_repayment_amount: {
+    type: Number
+  },
+
+  total_repaid: {
+    type: Number,
+    default: 0
+  },
+
+  remaining_balance: {
+    type: Number
+  },
+      status: {
+    type: String,
+    enum: ["active", "delayed", "defaulted"],
+    default: "active"
+  },
+
+  joined_at: {
+    type: Date,
+    default: Date.now
+  }
   },
   { timestamps: true }
 );

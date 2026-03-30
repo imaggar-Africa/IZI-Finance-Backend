@@ -10,40 +10,53 @@ const { sendSMS } = require("../utils/sms");
 ========================= */
 exports.createAgentGroup = async (req, res) => {
   try {
-    const agentId = req.user._id;
-    const { name, description, creditLimit, leaderId } = req.body;
+    const { name, description, lenderId, agentId, group_leader_id } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Group name required" });
     }
 
-    // 🔹 Get agent (to find lender)
-    const agent = await AgentModel.findById(agentId);
-    if (!agent) {
-      return res.status(404).json({ message: "Agent not found" });
+    /* ===============================
+       1️⃣ PREPARE GROUP DATA
+    =============================== */
+
+    // If an Agent creates → set agentId from req.user
+    // If a Lender creates → set lenderId from req.user
+    
+    let finalLenderId = lenderId;
+    let finalAgentId = agentId;
+
+    if (req.user.role === "agent") {
+      finalAgentId = req.user._id;
+      // Also get lenderId from agent's own data
+      const agent = await AgentModel.findById(finalAgentId);
+      if (agent) finalLenderId = agent.lenderId;
+    } else if (req.user.role === "lender" || req.user.role === "admin") {
+      finalLenderId = req.user._id;
     }
 
-    // 🔹 Create group
     const group = await Group.create({
       name,
       description,
-      agentId,
-      leaderId,
-      creditLimit,
-      lenderId: agent.lenderId   // ✅ IMPORTANT
+      lenderId: finalLenderId,
+      agentId: finalAgentId,
+      group_leader_id,
+      status: "pending"
     });
 
     /* ===============================
-       CREATE NOTIFICATION FOR LENDER
-    =============================== */
+       2️⃣ NOTIFICATION
+    ============================== */
 
-    await Notification.create({
-      userId: agent.lenderId,
-      userModel: "User", // lender is User
-      title: "New Group Created",
-      message: `Agent ${agent.name} created a new group "${group.name}".`,
-      type: "general"
-    });
+    if (finalAgentId && finalLenderId) {
+      await Notification.create({
+        userId: finalLenderId,
+        userModel: "User",
+        title: "New Group Created",
+        message: `Agent created a new group "${group.name}".`,
+        type: "general"
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -62,12 +75,22 @@ exports.createAgentGroup = async (req, res) => {
 exports.addMemberByAgent = async (req, res) => {
   try {
     const { groupId, borrowerId } = req.body;
+
+    if (!groupId || !borrowerId) {
+      return res.status(400).json({ message: "groupId and borrowerId are required" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
  
     const borrowerIds = Array.isArray(borrowerId)
       ? borrowerId
       : [borrowerId];
 
     const addedMembers = [];
+    const skippedBorrowers = [];
 
     for (const id of borrowerIds) {
 
@@ -75,11 +98,19 @@ exports.addMemberByAgent = async (req, res) => {
       if (!borrower) continue;
 
       const exists = await GroupMember.findOne({ groupId, borrowerId: id });
-      if (exists) continue;
+      if (exists) {
+        skippedBorrowers.push(borrower.fullName);
+        continue;
+      }
 
       const member = await GroupMember.create({
         groupId,
-        borrowerId: id
+        borrowerId: id,
+        internal_loan_amount: null,
+        daily_repayment_amount: null,
+        total_repaid: 0,
+        remaining_balance: null,
+        status: "active"
       });
 
       addedMembers.push(member);
@@ -107,13 +138,21 @@ Members: ${memberNames}`;
       await sendSMS(borrower.phone, message);
     }
 
+    if (addedMembers.length > 0) {
+      await Group.findByIdAndUpdate(groupId, {
+        $inc: { member_count: addedMembers.length }
+      });
+    }
+
     /* ===============================
        5️⃣ RESPONSE
     =============================== */
     res.json({
-  success: true,
-  members: addedMembers
-});
+      success: true,
+      count: addedMembers.length,
+      members: addedMembers,
+      skipped: skippedBorrowers
+    });
 
   } catch (error) {
     // ✅ Handle DB duplicate safely
@@ -180,6 +219,10 @@ exports.removeMemberByAgent = async (req, res) => {
     }
 
     await member.deleteOne();
+
+    await Group.findByIdAndUpdate(groupId, {
+      $inc: { member_count: -1 }
+    });
 
     return res.json({
       success: true,
