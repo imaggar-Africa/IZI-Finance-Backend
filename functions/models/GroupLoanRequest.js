@@ -12,34 +12,31 @@ const groupLoanRequestSchema = new mongoose.Schema(
       ref: "Customer",
       required: true
     },
-    requestedAmount: {
+    requestedById: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      required: true
+    },
+    amount: {
       type: Number,
       required: true
     },
-    interestAmount: {
+    interest_rate: {
       type: Number,
       required: true
     },
-    totalRepayment: {
+    total_repayment: {
       type: Number,
       required: true
     },
-    durationMonths: {
-      type: Number,
-      required: true
-    },
-    dailyRepayment: {
+    daily_repayment: {
       type: Number,
       required: true
     },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
+      enum: ["pending", "processing", "approved", "rejected", "disbursed"],
       default: "pending"
-    },
-    lenderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User"
     }
   },
   { timestamps: true }

@@ -4,7 +4,7 @@ const transactionSchema = new mongoose.Schema({
   type: { 
     type: String, 
     enum: ["repayment", "savings", "loan issued", "withdrawal",  "customer deposit", "customer payment", "agent withdrawal",// new
-      "customer withdrawal" // new
+      "customer withdrawal","group loan issued", "group member repayment" // new
 
     ],
     required: true 
@@ -25,8 +25,16 @@ checkoutRequestID: { type: String, default: null }, // optional
       type: mongoose.Schema.Types.ObjectId,
       ref: "WithdrawalRequest"
     },
-  loanId: { type: mongoose.Schema.Types.ObjectId, ref: "Loan" }, // only for loan/repayment
-  clientId: { type: String }, // National ID reference
+    loanId: { type: mongoose.Schema.Types.ObjectId, ref: "Loan" }, // only for loan/repayment
+    groupLoanRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "GroupLoanRequest"
+    },
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Group"
+    },
+    clientId: { type: String }, // National ID reference
   phone: { type: String , required: true},    // Mpesa phone used
 merchantRequestID: { type: String, default: null },
 

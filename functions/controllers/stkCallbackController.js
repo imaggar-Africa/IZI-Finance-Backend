@@ -9,6 +9,8 @@ const { sendSMS } = require("../utils/sms");
 const AgentCommission = require('../models/AgentCommission');
 const Profile = require("../models/Profile");
 const AgentModel = require("../models/AgentModel");
+const Group = require("../models/Group");
+const GroupMember = require("../models/GroupMember");
 const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditScore");
 
 
@@ -653,6 +655,45 @@ New Balance: KES ${loan.balance}
     message: `KES ${amount} has been added to your savings.`,
     type: "deposit"
   });
+    }
+
+    /* ===================== GROUP MEMBER REPAYMENT ===================== */
+    if (transaction.type === "group member repayment") {
+      const group = await Group.findById(transaction.groupId);
+      const borrower = await Customer.findById(transaction.userId);
+      const member = await GroupMember.findOne({ groupId: transaction.groupId, borrowerId: transaction.userId });
+
+      if (!group || !borrower || !member) {
+        throw new Error("Group, Borrower, or Member not found");
+      }
+
+      // Update Member state
+      member.total_repaid += amount;
+      member.remaining_balance -= amount;
+      if (member.remaining_balance < 0) member.remaining_balance = 0;
+
+      // Update Group state (since member pays back toward group loan)
+      group.remaining_loan_balance -= amount;
+      if (group.remaining_loan_balance < 0) group.remaining_loan_balance = 0;
+
+      // Credit Lender Wallet
+      const lender = await User.findById(group.lenderId);
+      if (lender) {
+        lender.walletBalance += amount;
+        await lender.save();
+      }
+
+      await member.save();
+      await group.save();
+
+      // Notify Borrower
+      await Notification.create({
+        userId: borrower._id,
+        userModel: "Customer",
+        title: "Group Loan Repayment",
+        message: `KES ${amount} repaid for ${group.name}. Remaining: KES ${member.remaining_balance}`,
+        type: "repayment"
+      });
     }
 
 

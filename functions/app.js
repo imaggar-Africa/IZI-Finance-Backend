@@ -117,16 +117,48 @@ app.get("/", (_req, res) => {
 async function initializeApp(secrets = {}) {
   if (initialized) return;
 
+  // 🔥 IMPORTANT: Populate global.config so utilities like mpesa.js can use it
+  if (!global.config || Object.keys(global.config).length === 0) {
+    console.log("🟡 Initializing global.config from secrets/env...");
+    global.config = {
+      ...secrets,
+      // Fallback for local development when secrets object is empty
+      mpesaEnv: secrets.mpesaEnv || process.env.MPESA_ENV || "sandbox",
+      mpesaConsumerKey: secrets.mpesaConsumerKey || process.env.MPESA_CONSUMER_KEY,
+      mpesaConsumerSecret: secrets.mpesaConsumerSecret || process.env.MPESA_CONSUMER_SECRET,
+      mpesaShortcode: secrets.mpesaShortcode || process.env.MPESA_SHORTCODE,
+      mpesaPasskey: secrets.mpesaPasskey || process.env.MPESA_PASSKEY,
+      mpesaStkCallback: secrets.mpesaStkCallback || process.env.MPESA_STK_CALLBACK_URL,
+      mpesaB2cShortcode: secrets.mpesaB2cShortcode || process.env.MPESA_B2C_SHORTCODE,
+      mpesaB2cInitiator: secrets.mpesaB2cInitiator || process.env.MPESA_B2C_INITIATOR,
+      mpesaB2cCredential: secrets.mpesaB2cCredential || process.env.MPESA_B2C_SECURITY_CREDENTIAL,
+      mpesaB2cResultUrl: secrets.mpesaB2cResultUrl || process.env.MPESA_B2C_RESULT_URL,
+      mpesaB2cTimeoutUrl: secrets.mpesaB2cTimeoutUrl || process.env.MPESA_B2C_TIMEOUT_URL,
+      mpesaReversalUrl: secrets.mpesaReversalUrl || process.env.MPESA_REVERSAL_URL,
+      mpesaReversalResult: secrets.mpesaReversalResult || process.env.MPESA_REVERSAL_RESULT_URL,
+      mpesaReversalTimeout: secrets.mpesaReversalTimeout || process.env.MPESA_REVERSAL_TIMEOUT_URL,
+      jwtAccessSecret: secrets.jwtAccessSecret || process.env.JWT_ACCESS_SECRET,
+      jwtRefreshSecret: secrets.jwtRefreshSecret || process.env.JWT_REFRESH_SECRET,
+      atUsername: secrets.atUsername || process.env.AT_USERNAME,
+      atApiKey: secrets.atApiKey || process.env.AT_API_KEY,
+      atSenderId: secrets.atSenderId || process.env.AT_SENDER_ID,
+      mongoUri: secrets.mongoUri || process.env.MONGO_URI,
+      redisUrl: secrets.redisUrl || process.env.UPSTASH_REDIS_REST_URL,
+      redisToken: secrets.redisToken || process.env.UPSTASH_REDIS_REST_TOKEN,
+    };
+  }
+
+  const config = global.config;
   console.log("Initializing DB and Redis");
 
   try {
-    await connectDB(secrets.mongoUri);
+    await connectDB(config.mongoUri);
   } catch (err) {
     console.error("Mongo connection error:", err);
   }
 
   try {
-    await ensureRedis(secrets.redisUrl, secrets.redisToken);
+    await ensureRedis(config.redisUrl, config.redisToken);
   } catch (err) {
     console.warn("Redis skipped:", err.message);
   }
@@ -135,13 +167,13 @@ async function initializeApp(secrets = {}) {
    * STORE SECRETS
    *************************************************/
 
-  app.locals.jwtAccessSecret = secrets.jwtAccessSecret;
-  app.locals.jwtRefreshSecret = secrets.jwtRefreshSecret;
+  app.locals.jwtAccessSecret = config.jwtAccessSecret;
+  app.locals.jwtRefreshSecret = config.jwtRefreshSecret;
 
   app.locals.otpService = otpServiceFactory({
-    atUsername: secrets.atUsername,
-    atApiKey: secrets.atApiKey,
-    atSenderId: secrets.atSenderId,
+    atUsername: config.atUsername,
+    atApiKey: config.atApiKey,
+    atSenderId: config.atSenderId,
   });
 
   /*************************************************

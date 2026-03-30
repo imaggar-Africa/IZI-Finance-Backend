@@ -9,6 +9,9 @@ const AgentCommission = require("../models/AgentCommission");
 const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
 const WithdrawRequest = require("../models/WithdrawRequest");
+const GroupLoanRequest = require("../models/GroupLoanRequest");
+const GroupMember = require("../models/GroupMember");
+const Group = require("../models/Group");
 const { getB2CCharge } = require("../utils/mpesaCharges");
 
 
@@ -1481,6 +1484,14 @@ exports.b2cCallback = async (req, res) => {
         }
       }
 
+      if (transaction.type === "group loan issued") {
+        const request = await GroupLoanRequest.findById(transaction.groupLoanRequestId).session(session);
+        if (request) {
+          request.status = "pending"; // Reset for retry
+          await request.save({ session });
+        }
+      }
+
       await session.commitTransaction();
       session.endSession();
 
@@ -1584,6 +1595,84 @@ exports.b2cCallback = async (req, res) => {
             console.log(` Commission added to agent wallet: KES ${commissionAmount}`);
           }
         }
+      }
+    }
+
+    /* =========================================================
+       🔥 NEW: GROUP LOAN ISSUED SUCCESS HANDLING
+    ========================================================= */
+    if (transaction.type === "group loan issued") {
+      const request = await GroupLoanRequest.findById(transaction.groupLoanRequestId).session(session);
+      if (!request) throw new Error("Group Loan Request not found");
+
+      const lender = await User.findById(transaction.userId).session(session);
+      if (!lender) throw new Error("Lender not found");
+
+      const amount = Number(transaction.amount);
+      const fee = getB2CCharge(amount);
+      const totalDebit = amount + fee;
+
+      const balanceBefore = lender.walletBalance;
+      if (balanceBefore < totalDebit) {
+        throw new Error("Insufficient wallet balance for group loan + fee");
+      }
+
+      lender.walletBalance -= totalDebit;
+      transaction.mpesaCharge = fee;
+      transaction.balanceBefore = balanceBefore;
+      transaction.balanceAfter = lender.walletBalance;
+
+      request.status = "approved";
+
+      const member = await GroupMember.findOne({ 
+        groupId: request.groupId, 
+        borrowerId: request.borrowerId 
+      }).session(session);
+
+      if (member) {
+        member.internal_loan_amount = amount;
+        member.daily_repayment_amount = request.daily_repayment;
+        member.remaining_balance = request.total_repayment;
+        member.total_repaid = 0;
+        member.status = "active";
+        await member.save({ session });
+      }
+
+      await lender.save({ session });
+      await request.save({ session });
+
+      /* ===============================
+         SMS NOTIFICATIONS
+      =============================== */
+      const group = await Group.findById(request.groupId).session(session);
+      const borrower = await Borrower.findById(request.borrowerId).session(session);
+      const leader = group?.group_leader_id ? await Borrower.findById(group.group_leader_id).session(session) : null;
+
+      if (borrower) {
+        await sendSMS(
+          borrower.phone, 
+          `Dear ${borrower.fullName}, your group loan of KES ${amount} has been successfully disbursed to your M-Pesa. \nDaily Repayment: KES ${request.daily_repayment}. \nTotal: KES ${request.total_repayment}. \nREF: ${transaction.transactionId || "M-PESA"}`
+        );
+      }
+
+      if (leader && leader._id.toString() !== borrower?._id.toString()) {
+        await sendSMS(
+          leader.phone,
+          `Notice: KES ${amount} has been successfully disbursed to group member ${borrower?.fullName} from group ${group?.name || "your group"}.`
+        );
+      }
+
+      if (lender) {
+        const lenderProfile = await Profile.findOne({ userId: lender._id }).session(session);
+        const lenderName = lenderProfile?.fullName || "Lender";
+        
+        // Uncomment if lender wants SMS for every group member disbursement
+        /*
+        await sendSMS(
+          lender.phone,
+          `IZI Finance: Disbursement of KES ${amount} to ${borrower?.fullName} (Group: ${group?.name}) was successful.`
+        );
+        */
       }
     }
 

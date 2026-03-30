@@ -3,7 +3,6 @@ const Group = require("../models/Group");
 const GroupMember = require("../models/GroupMember");
 const Customer = require("../models/customer");
 const User = require("../models/User");
-const GroupLoanRequest = require("../models/groupLoanRequestModel");
 const { sendSMS } = require("../utils/sms");
 
 /* =========================

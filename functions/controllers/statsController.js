@@ -384,6 +384,7 @@ function getRange(type, fromDate, toDate) {
 
 /* ================= CORE STATS CALCULATOR ================= */
 function calculateStats(loans, start = null, end = null) {
+  const effectiveEnd = end || new Date();
   let issuedCount = 0;
   let totalLoanAmount = 0;
   let principalAmount = 0;
@@ -394,10 +395,7 @@ function calculateStats(loans, start = null, end = null) {
   let overdueLoans = 0;
   let paidLoans = 0;
 
-  const today = new Date();
-
   loans.forEach((loan) => {
-
     // ✅ Only approved loans
     if (loan.loanRequestStatus !== "approved") return;
 
@@ -405,10 +403,10 @@ function calculateStats(loans, start = null, end = null) {
     if (!["active", "fully paid", "overdue"].includes(loan.status))
       return;
 
+    const issuedDate = loan.issueDate || loan.createdAt;
     const issuedInRange =
       !start ||
-      !end ||
-      (loan.issueDate >= start && loan.issueDate <= end);
+      (issuedDate >= start && issuedDate <= effectiveEnd);
 
     if (issuedInRange) {
       issuedCount++;
@@ -434,8 +432,7 @@ function calculateStats(loans, start = null, end = null) {
       loan.repayments.forEach((r) => {
         const paymentInRange =
           !start ||
-          !end ||
-          (r.date && r.date >= start && r.date <= end);
+          (r.date && r.date >= start && r.date <= effectiveEnd);
 
         if (paymentInRange) {
           collectedAmount += r.amount || 0;
@@ -500,67 +497,83 @@ function countCustomers(customers, start = null, end = null) {
 /* ================= GET STATS API ================= */
 exports.getStats = async (req, res) => {
   try {
-    const { from, fromDate, toDate } = req.query;
     const lenderId = req.user._id;
 
-    /* =========================
-       DATE RANGE LOGIC
-    ========================= */
+    // Helper to get range start
+    const getRangeStart = (type) => {
+      const d = new Date();
+      if (type === "24h") d.setHours(d.getHours() - 24);
+      else if (type === "7d") d.setDate(d.getDate() - 7);
+      else if (type === "1m") d.setMonth(d.getMonth() - 1);
+      else if (type === "overall") return new Date(0);
+      return d;
+    };
 
-    let startDate = new Date();
-    let endDate = new Date();
-
-    switch (from) {
-      case "7d":
-        startDate.setDate(endDate.getDate() - 7);
-        break;
-
-      case "1w":
-        startDate.setDate(endDate.getDate() - 7);
-        break;
-
-      case "1m":
-        startDate.setMonth(endDate.getMonth() - 1);
-        break;
-
-      case "custom":
-        startDate = new Date(fromDate);
-        endDate = new Date(toDate);
-        break;
-
-      default:
-        // Default → last 24 hours
-        startDate.setHours(endDate.getHours() - 24);
-    }
-
-    /* =========================
-       FETCH LOANS
-    ========================= */
-
-    const loans = await Loan.find({
+    // We fetch ALL approved loans for this lender once
+    const allLoans = await Loan.find({
+      lenderId,
       loanRequestStatus: "approved",
-      lenderId: lenderId,
       status: { $in: ["active", "fully paid", "overdue"] },
       isDeleted: { $ne: true },
       isWrittenOff: { $ne: true },
-      createdAt: { $gte: startDate, $lte: endDate }
     }).populate("borrowerId", "fullName phone");
 
-    const customers = await Customer.find({
+    const allCustomers = await Customer.find({
       registeredBy: lenderId,
-      createdAt: { $gte: startDate, $lte: endDate }
     });
 
+    const buildSegment = (start) => {
+      // 🟢 Filter by activity (Show loans issued OR repaid in this period)
+      const activeInPeriod = allLoans.filter((l) => {
+        const issuedInRange = (l.issueDate || l.createdAt) >= start;
+        const repaidInRange = Array.isArray(l.repayments) && l.repayments.some(r => r.date && r.date >= start);
+        return issuedInRange || repaidInRange;
+      });
+      
+      const filteredCustomers = allCustomers.filter(
+        (c) => c.createdAt >= start,
+      );
+
+      return {
+        stats: calculateStats(allLoans, start), // ⬅️ Calculate stats across ALL loans for collections
+        customersAdded: filteredCustomers.length,
+        loanDetails: activeInPeriod.map(mapLoanDetail),
+      };
+    };
+
+    const { fromDate, toDate } = req.query;
+    let customRange = null;
+
+    if (fromDate && toDate) {
+      const start = new Date(fromDate);
+      const end = new Date(toDate);
+      end.setHours(23, 59, 59, 999);
+
+      const filteredLoans = allLoans.filter(
+        (l) => l.createdAt >= start && l.createdAt <= end,
+      );
+      const filteredCustomers = allCustomers.filter(
+        (c) => c.createdAt >= start && c.createdAt <= end,
+      );
+
+      customRange = {
+        stats: calculateStats(filteredLoans),
+        customersAdded: filteredCustomers.length,
+        loanDetails: filteredLoans.map(mapLoanDetail),
+      };
+    }
+
+    // Format matches DashboardScreen and StatsScreen expectations:
     res.status(200).json({
-      range: {
-        from: startDate,
-        to: endDate
-      },
-      stats: calculateStats(loans),
-      customersAdded: customers.length,
-      loanDetails: loans.map(mapLoanDetail)
+      last24Hours: buildSegment(getRangeStart("24h")),
+      last7Days: buildSegment(getRangeStart("7d")),
+      last1Month: buildSegment(getRangeStart("1m")),
+      overall: buildSegment(getRangeStart("overall")),
+      customRange, // Added custom range support
+      stats: calculateStats(
+        allLoans.filter((l) => l.createdAt >= getRangeStart("24h")),
+      ),
     });
-
   } catch (error) {
     console.error("Stats error:", error);
     res.status(500).json({ message: "Server error" });

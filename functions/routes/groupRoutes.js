@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const groupController = require("../controllers/groupController");
+const groupLoanController = require("../controllers/groupLoanController");
 const { protect } = require("../middleware/authMiddleware");
 
 router.post("/", protect, groupController.createGroup);
@@ -10,6 +11,12 @@ router.put("/:groupId/leader", protect, groupController.assignGroupLeader);
 router.get("/:groupId/members", protect, groupController.getGroupMembers);
 router.get("/agent/:agentId", protect, groupController.getGroupsByAgentId);
 router.get("/all-members", protect, groupController.getAllGroupMembers);
+
+// --- GROUP LOAN REQUESTS ---
+router.post("/loan-request", protect, groupLoanController.createGroupLoanRequest);
+router.get("/loan-requests/lender", protect, groupLoanController.getLenderGroupLoanRequests);
+router.put("/loan-review", protect, groupLoanController.reviewGroupLoanRequest);
+router.post("/initiate-repayment", protect, groupLoanController.initiateMemberRepayment);
 
 router.post("/remove-member", protect, groupController.removeMember);
 router.get("/analytics", protect, groupController.getGroupAnalytics);

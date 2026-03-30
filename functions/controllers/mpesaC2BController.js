@@ -6,6 +6,8 @@ const Customer = require("../models/customer");
 const { sendSMS } = require("../utils/sms");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const Group = require("../models/Group");
+const GroupMember = require("../models/GroupMember");
 const { normalizePhone } = require("../utils/normalizePhone");
 
 // functions/controllers/mpesaC2B.controller.js
@@ -147,20 +149,27 @@ exports.validationHandler = async (req, res) => {
     });
 
     // -------------------------
-    // LOAN NOT FOUND
+    // LOAN NOT FOUND → CHECK GROUP LOAN
     // -------------------------
     if (!loan) {
-      console.warn("⚠️ Loan not found for this customer");
-
-      await sendSMS(
-        customer.phone,
-        `Thank you ${customer.fullName} for making a payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
-      );
-
-      return res.status(200).json({
-        ResultCode: 0, // STILL accept payment
-        ResultDesc: "Loan not found — Payment accepted"
+      const member = await GroupMember.findOne({
+        borrowerId: customer._id,
+        remaining_balance: { $gt: 0 }
       });
+
+      if (!member) {
+        console.warn("⚠️ No individual or group loan found for this customer");
+
+        await sendSMS(
+          customer.phone,
+          `Thank you ${customer.fullName} for making a payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
+        );
+
+        return res.status(200).json({
+          ResultCode: 0, // STILL accept payment
+          ResultDesc: "Loan not found — Payment accepted"
+        });
+      }
     }
 
     // -------------------------
@@ -264,22 +273,79 @@ exports.confirmationHandler = async (req, res) => {
       billRefNumber: BillRefNumber
     }).session(session);
 
-    // 3️⃣ IF LOAN NOT FOUND → SEND SMS TO CUSTOMER
+    // 3️⃣ IF LOAN NOT FOUND → CHECK GROUP LOAN
     if (!loan) {
-      console.warn("⚠️ Loan not found for this ID. Sending SMS to customer.");
+      const member = await GroupMember.findOne({
+        borrowerId: customer._id,
+        remaining_balance: { $gt: 0 }
+      }).session(session);
+
+      if (!member) {
+        console.warn("⚠️ No active loan found for this customer. Sending SMS.");
+
+        await sendSMS(
+          customer.phone,
+          `Thank you ${customer.fullName} for your payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
+        );
+
+        await session.commitTransaction();
+        session.endSession();
+        return res.status(200).json({
+          ResultCode: 0,
+          ResultDesc: "Loan not found – Payment accepted"
+        });
+      }
+
+      // 4️⃣ GROUP LOAN MEMBER FOUND → PROCESS REPAYMENT
+      const group = await Group.findById(member.groupId).session(session);
+      if (!group) throw new Error("Group not found");
+
+      member.total_repaid += Amount;
+      member.remaining_balance -= Amount;
+      if (member.remaining_balance < 0) member.remaining_balance = 0;
+
+      group.remaining_loan_balance -= Amount;
+      if (group.remaining_loan_balance < 0) group.remaining_loan_balance = 0;
+
+      // Credit Lender Wallet
+      const lender = await User.findById(group.lenderId).session(session);
+      if (lender) {
+        lender.walletBalance += Amount;
+        await lender.save({ session });
+      }
+
+      await member.save({ session });
+      await group.save({ session });
+
+      // Record Transaction
+      const transaction = new Transaction({
+        type: "group member repayment",
+        userId: customer._id,
+        userModel: "Customer",
+        groupId: group._id,
+        amount: Amount,
+        transactionId: MpesaTransactionId,
+        status: "successful",
+        accountReference: BillRefNumber,
+        description: `C2B Group Repayment - ${group.name}`
+      });
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
 
       await sendSMS(
         customer.phone,
-        `Thank you ${customer.fullName} for your payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
+        `Dear ${customer.fullName}, your group repayment of KES ${Amount} for ${group.name} was received. Balance: KES ${member.remaining_balance}. Ref: ${MpesaTransactionId}`
       );
 
       return res.status(200).json({
         ResultCode: 0,
-        ResultDesc: "Loan not found – Payment accepted"
+        ResultDesc: "Group payment processed successfully"
       });
     }
 
-    // 4️⃣ LOAN FOUND → PROCESS REPAYMENT
+    // 5️⃣ NORMAL LOAN FOUND → PROCESS REPAYMENT (CONTINUE EXISTING)
     loan.repaidAmount += Amount;
     loan.balance -= Amount;
 
