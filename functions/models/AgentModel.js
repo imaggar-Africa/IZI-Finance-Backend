@@ -114,6 +114,11 @@ blockReason: {
     lastActiveAt: {
       type: Date,
       default: Date.now
+    },
+
+    expoPushToken: {
+      type: String,
+      default: null
     }
   },
   { timestamps: true }

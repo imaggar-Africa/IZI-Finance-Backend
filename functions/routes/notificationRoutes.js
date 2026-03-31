@@ -25,5 +25,16 @@ router.put("/borrower/read", borrowerProtect,  notificationController.markBorrow
 
 router.delete("/borrower/:id", borrowerProtect, notificationController.deleteBorrowerNotification);
 
+// 🆕 Update Expo Push Token (Supports both Lender/Agent and Borrower)
+router.post("/push-token", (req, res, next) => {
+  // Try to use protect first, if it fails because of no token, then it might be a borrower token
+  // But wait, the middlewares usually return 401 if they fail.
+  // We can just check which header is present or try sequentially.
+  // Actually, we can define two routes or one with a combined middleware.
+  next();
+}, protect, notificationController.updatePushToken);
+
+router.post("/borrower/push-token", borrowerProtect, notificationController.updatePushToken);
+
 module.exports = router;
 

@@ -1,4 +1,5 @@
 const Notification = require("../models/Notification");
+const mongoose = require("mongoose");
 
 // Fetch notifications (for the `NotificationsScreen.js` component)
 // 1. Get notifications (only not deleted & unread for user)
@@ -172,6 +173,58 @@ exports.markOneAsRead = async (req, res) => {
       success: false,
       message: "Server error",
       error: error.message
+    });
+  }
+};
+
+/**
+ * Update Expo Push Token for the logged-in user (Lender, Agent, or Borrower)
+ */
+exports.updatePushToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: "Push token is required",
+      });
+    }
+
+    let user = req.user || req.borrower;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "User not authenticated",
+      });
+    }
+
+    // Determine which model to update
+    let modelName = "User";
+    if (req.borrower) {
+      modelName = "Customer";
+    } else if (req.user && req.user.role === "agent") {
+      modelName = "Agent";
+    } else if (req.user && req.user.role === "lender") {
+      modelName = "User";
+    }
+
+    const Model = mongoose.model(modelName);
+    await Model.findByIdAndUpdate(user._id, {
+      $set: { expoPushToken: token },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Push token updated for ${modelName}`,
+    });
+  } catch (error) {
+    console.error("updatePushToken error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update push token",
+      error: error.message,
     });
   }
 };

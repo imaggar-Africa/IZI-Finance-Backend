@@ -47,6 +47,11 @@ kycStatus: {
       default: null
     },
 
+    expoPushToken: {
+      type: String,
+      default: null
+    },
+
     role: {
       type: String,
       default: "lender"

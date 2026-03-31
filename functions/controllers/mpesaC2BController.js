@@ -329,6 +329,25 @@ exports.confirmationHandler = async (req, res) => {
         accountReference: BillRefNumber,
         description: `C2B Group Repayment - ${group.name}`
       });
+
+      // 🔥 Update GroupLoanRequest Repayments Array
+      const GroupLoanRequest = require("../models/GroupLoanRequest");
+      const activeRequest = await GroupLoanRequest.findOne({
+        groupId: group._id,
+        borrowerId: customer._id,
+        status: "approved"
+      }).session(session);
+
+      if (activeRequest) {
+        activeRequest.repayments.push({
+          transactionId: transaction._id,
+          amount: Amount,
+          date: new Date()
+        });
+        await activeRequest.save({ session });
+        transaction.groupLoanRequestId = activeRequest._id;
+      }
+
       await transaction.save({ session });
 
       await session.commitTransaction();

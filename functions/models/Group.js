@@ -4,6 +4,7 @@ const groupSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     description: String,
+    location: String,
 
     lenderId: {
       type: mongoose.Schema.Types.ObjectId,

@@ -241,6 +241,8 @@ const customerSchema = new mongoose.Schema({
 
   savingsBalance: { type: Number, default: 0, min: 0 },
 
+  expoPushToken: { type: String, default: null },
+
   agentId: { type: mongoose.Schema.Types.ObjectId, ref: "Agent" },
 
   /* ================= PROFILE ================= */

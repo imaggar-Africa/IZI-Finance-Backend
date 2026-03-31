@@ -694,6 +694,26 @@ New Balance: KES ${loan.balance}
         message: `KES ${amount} repaid for ${group.name}. Remaining: KES ${member.remaining_balance}`,
         type: "repayment"
       });
+
+      // 🔥 Update GroupLoanRequest Repayments Array
+      const GroupLoanRequest = require("../models/GroupLoanRequest");
+      const activeRequest = await GroupLoanRequest.findOne({
+        groupId: transaction.groupId,
+        borrowerId: transaction.userId,
+        status: "approved" // or "disbursed"
+      });
+
+      if (activeRequest) {
+        activeRequest.repayments.push({
+          transactionId: transaction._id,
+          amount: amount,
+          date: new Date()
+        });
+        await activeRequest.save();
+        
+        // Also link transaction to the request
+        transaction.groupLoanRequestId = activeRequest._id;
+      }
     }
 
 

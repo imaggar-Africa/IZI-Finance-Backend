@@ -23,4 +23,30 @@ router.get("/secrets", (req, res) => {
   });
 });
 
+/**
+ * 📢 Push Notification Test
+ * Send a POST to /debug/test-push with token, title, and message.
+ */
+router.post("/test-push", async (req, res) => {
+  try {
+    const { token, title, message } = req.body;
+    const { sendPushNotification } = require("../utils/expoPush");
+
+    if (!token || !title || !message) {
+      return res.status(400).json({ error: "Missing required fields (token, title, message)" });
+    }
+
+    const tickets = await sendPushNotification(token, title, message, { test: true });
+
+    res.status(200).json({
+      success: true,
+      message: "Push attempt completed",
+      tickets
+    });
+  } catch (error) {
+    console.error("Test Push Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

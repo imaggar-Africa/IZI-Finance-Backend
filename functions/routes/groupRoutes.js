@@ -9,7 +9,10 @@ router.post("/add-member", protect, groupController.addMember);
 router.post("/:groupId/add-member", protect, groupController.addMember);
 router.put("/:groupId/leader", protect, groupController.assignGroupLeader);
 router.get("/:groupId/members", protect, groupController.getGroupMembers);
+router.get("/:groupId/repayments", protect, groupController.getGroupRepayments);
+router.get("/:groupId/group-repayments", protect, groupController.getGroupMonthlyPayments);
 router.get("/agent/:agentId", protect, groupController.getGroupsByAgentId);
+router.get("/agent-groups/:agentId", protect, groupController.getAgentGroups);
 router.get("/all-members", protect, groupController.getAllGroupMembers);
 
 // --- GROUP LOAN REQUESTS ---

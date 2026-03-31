@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { sendPushToUser } = require("../utils/expoPush");
 
 const NotificationSchema = new mongoose.Schema({
   userId: {
@@ -35,6 +36,21 @@ const NotificationSchema = new mongoose.Schema({
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null },
 
+});
+
+// ⚡ Trigger Expo Push Notification on creation
+NotificationSchema.post("save", async function (doc) {
+  try {
+    await sendPushToUser(
+      doc.userId,
+      doc.userModel,
+      doc.title,
+      doc.message,
+      { type: doc.type }
+    );
+  } catch (err) {
+    console.error("Push Error in Notification Model Hook:", err.message);
+  }
 });
 
 module.exports = mongoose.model("Notification", NotificationSchema);

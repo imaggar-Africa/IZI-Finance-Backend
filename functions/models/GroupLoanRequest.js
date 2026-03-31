@@ -37,7 +37,17 @@ const groupLoanRequestSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "processing", "approved", "rejected", "disbursed"],
       default: "pending"
-    }
+    },
+    repayments: [
+      {
+        transactionId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Transaction"
+        },
+        amount: Number,
+        date: { type: Date, default: Date.now }
+      }
+    ]
   },
   { timestamps: true }
 );

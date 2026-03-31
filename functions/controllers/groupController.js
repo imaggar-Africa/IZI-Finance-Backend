@@ -10,7 +10,7 @@ const { sendSMS } = require("../utils/sms");
 ========================= */
 exports.createGroup = async (req, res) => {
   try {
-    const { name, description, lenderId, agentId, group_leader_id } = req.body;
+    const { name, description, lenderId, agentId, group_leader_id, location } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Group name required" });
@@ -39,6 +39,7 @@ exports.createGroup = async (req, res) => {
       lenderId: finalLenderId,
       agentId: finalAgentId,
       group_leader_id,
+      location,
       status: req.user.role === "agent" ? "pending" : "active"
     });
 
@@ -727,6 +728,79 @@ exports.getGroupLoanRequests = async (req, res) => {
     });
 
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET AGENT GROUPS (FOR LOGGED-IN AGENT)
+========================= */
+exports.getAgentGroups = async (req, res) => {
+  try {
+    const agentId = req.params.agentId || req.user._id;
+
+    const groups = await Group.find({ agentId })
+      .populate("group_leader_id", "fullName phone")
+      .populate("lenderId", "name email");
+
+    res.json({
+      success: true,
+      count: groups.length,
+      groups
+    });
+
+  } catch (error) {
+    console.error("❌ getAgentGroups error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP REPAYMENTS
+========================= */
+exports.getGroupRepayments = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const Transaction = require("../models/Transaction");
+
+    const repayments = await Transaction.find({
+      groupId,
+      type: "group member repayment",
+      status: "successful"
+    })
+    .populate("userId", "fullName phone")
+    .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: repayments.length,
+      repayments
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/* =========================
+   GET GROUP MONTHLY REPAYMENTS (HISTORY/AGGREGATED)
+========================= */
+exports.getGroupMonthlyPayments = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const GroupMonthlyPayment = require("../models/groupMonthlyPaymentModel");
+
+    const repayments = await GroupMonthlyPayment.find({ group_id: groupId })
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: repayments.length,
+      repayments
+    });
+
+  } catch (error) {
+    console.error("❌ getGroupMonthlyPayments error:", error);
     res.status(500).json({ message: error.message });
   }
 };

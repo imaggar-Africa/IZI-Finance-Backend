@@ -231,14 +231,23 @@ exports.initiateMemberRepayment = async (req, res) => {
     const phone = normalizePhone(borrower.phone || borrower.phoneNumber);
     if (!phone) throw new Error("Invalid borrower phone number");
 
-    // 3. Create Pending Transaction
+    // 3. Find active loan request to link history
+    const GroupLoanRequest = require("../models/GroupLoanRequest");
+    const activeRequest = await GroupLoanRequest.findOne({
+      groupId,
+      borrowerId,
+      status: "approved"
+    });
+
+    // 4. Create Pending Transaction
     const accountRef = `GRP-PAY-${group._id.toString().slice(-4)}-${borrower.fullName.slice(0, 5)}`;
     
     const transaction = new Transaction({
       type: "group member repayment",
       userId: borrowerId,
       userModel: "Customer",
-      groupId: groupId, // Note: I should add this to the Transaction schema too!
+      groupId: groupId,
+      groupLoanRequestId: activeRequest ? activeRequest._id : null,
       amount: amount,
       phone: phone,
       status: "pending",
