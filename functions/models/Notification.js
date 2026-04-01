@@ -40,16 +40,22 @@ const NotificationSchema = new mongoose.Schema({
 
 // ⚡ Trigger Expo Push Notification on creation
 NotificationSchema.post("save", async function (doc) {
+  console.log(`🔔 Notification Hook fired for [${doc.title}] - User: ${doc.userId} (${doc.userModel})`);
   try {
-    await sendPushToUser(
+    const result = await sendPushToUser(
       doc.userId,
       doc.userModel,
       doc.title,
       doc.message,
       { type: doc.type }
     );
+    if (!result) {
+      console.warn(`⚠️ No Push Token found for User: ${doc.userId}. Push notification skipped.`);
+    } else {
+      console.log(`✅ Push Sent Successfully for [${doc.title}]`);
+    }
   } catch (err) {
-    console.error("Push Error in Notification Model Hook:", err.message);
+    console.error("❌ Push Error in Notification Model Hook:", err.message);
   }
 });
 

@@ -1339,7 +1339,6 @@ exports.requestLoan = async (req, res) => {
       loanRequestStatus: "pending"
     });
 
-    // ✅ Create notifications with phone numbers included
     const notifications = [
       {
         userId: agent._id,
@@ -1359,9 +1358,10 @@ exports.requestLoan = async (req, res) => {
       },
     ];
 
-
-
-    await Notification.insertMany(notifications);
+    // Create and trigger notifications individually for push delivery
+    for (const n of notifications) {
+      await Notification.create(n);
+    }
 
     return res.status(201).json({
       message: "Loan request submitted successfully",
