@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 
-const { registerAgent, changePassword,CustomersForAgent, loginAgent, registerCustomer, getAgentProfile, getCustomersForAgent , } = require("../controllers/agentController");
+const { registerAgent, changePassword,CustomersForAgent, loginAgent, registerCustomer, getAgentProfile, getCustomersForAgent, sendRegistrationOTPs } = require("../controllers/agentController");
 const { protect, agentProtect } = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/rolemiddleware.js");
 // Get upload from app locals
@@ -15,7 +15,7 @@ const firebaseSafeUpload = require("../utils/upload.js");
 router.post(
   "/register/customer",
     protect,
-  authorizeRoles("agent"),
+  authorizeRoles("agent","lender"),
 
   firebaseSafeUpload([
     { name: "frontID", maxCount: 1 },
@@ -24,6 +24,13 @@ router.post(
   ]),
 
   registerCustomer
+);
+
+router.post(
+  "/initiate-registration-otps",
+  protect,
+  authorizeRoles("agent","lender"),
+  sendRegistrationOTPs
 );
 
 router.get(

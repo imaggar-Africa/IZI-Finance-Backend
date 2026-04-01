@@ -14,8 +14,9 @@ const mongoose = require("mongoose");
 const { generateAccountId } = require("../utils/generateAccountId");
 const { evaluateLoanByCreditScore } = require("../utils/loanApprovalRules");
 const { calculateMembership } = require("../utils/membershipRules");
-const Guarantor = require("../models/Guarantor");
 const { normalizePhone } = require("../utils/normalizePhone");
+const { sendSMS } = require("../utils/sms");
+const Guarantor = require("../models/Guarantor");
 
 
 function calculateLoan(principal, repaymentDays, totalPaid) {
@@ -116,7 +117,47 @@ exports.sendOtp = async (req, res) => {
 };
 
 
+/**
+ * 🔐 STEP 1: INITIATE OTPs for Kin & Guarantor (Lender/Agent)
+ */
+exports.sendRegistrationOTPs = async (req, res) => {
+  try {
+    const { borrowerName, nextOfKinName, nextOfKinPhone, guarantorName, guarantorPhone } = req.body;
 
+    if (!nextOfKinPhone || !guarantorPhone || !borrowerName || !nextOfKinName || !guarantorName) {
+      return res.status(400).json({ message: "All names and phone numbers are required" });
+    }
+
+    const kinNorm = normalizePhone(nextOfKinPhone);
+    const guarNorm = normalizePhone(guarantorPhone);
+
+    if (!kinNorm || !guarNorm) {
+      return res.status(400).json({ message: "Invalid phone format" });
+    }
+
+    const kinOTP = Math.floor(1000 + Math.random() * 9000).toString();
+    const guarOTP = Math.floor(1000 + Math.random() * 9000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await OTP.findOneAndUpdate({ phone: kinNorm }, { otp: kinOTP, expiresAt }, { upsert: true });
+    await OTP.findOneAndUpdate({ phone: guarNorm }, { otp: guarOTP, expiresAt }, { upsert: true });
+
+    await sendSMS(
+      kinNorm,
+      `IziFinance Consent Notice\n\nHello ${nextOfKinName}, you have been listed as NEXT OF KIN for ${borrowerName} on IziFinance.\n\nBy sharing this code, you confirm that:\n- You are aware of the borrower’s loan application\n- You agree to be contacted if the borrower becomes unreachable\n- You consent to the use of your basic information for this purpose\n\nYour Verification Code: ${kinOTP}\n\nDo NOT share this code unless you understand and agree.`
+    );
+
+    await sendSMS(
+      guarNorm,
+      `IziFinance Guarantor Consent\n\nHello ${guarantorName}, you have been listed as a GUARANTOR for ${borrowerName} on IziFinance.\n\nBy sharing this code, you confirm that:\n- You know ${borrowerName} and support their loan request\n- You agree to assist in following up with the borrower until full repayment\n- You consent to being contacted regarding the loan status if needed\n\nYour Verification Code: ${guarOTP}\n\nDo NOT share this code unless you understand and accept this role.`
+    );
+
+    return res.json({ success: true, message: "OTPs sent to Kin and Guarantor" });
+  } catch (error) {
+    console.error("❌ SendRegistrationOTPs error:", error);
+    res.status(500).json({ message: "Error sending verification codes" });
+  }
+};
 // **Register Customer**
 
 // change path as needed
@@ -142,6 +183,10 @@ exports.registerCustomer = async (req, res) => {
       monthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
+      guarantorName,
+      guarantorPhone,
+      kinOTP,
+      guarantorOTP,
       preferredMobileMoney,
       savingsGoal,
       loanConsent,
@@ -251,6 +296,22 @@ exports.registerCustomer = async (req, res) => {
       return res.status(409).json({ message: "ID number already registered" });
     }
 
+    /* ================= VERIFY OTPs ================= */
+    const kinNorm = normalizePhone(nextOfKinPhone);
+    const guarNorm = normalizePhone(guarantorPhone);
+
+    const kinOTPRecord = await OTP.findOne({ phone: kinNorm, otp: kinOTP });
+    const guarOTPRecord = await OTP.findOne({ phone: guarNorm, otp: guarantorOTP });
+
+    if (!kinOTPRecord || kinOTPRecord.expiresAt < new Date()) {
+      return res.status(400).json({ message: "Invalid or expired Next of Kin OTP" });
+    }
+
+    if (!guarOTPRecord || guarOTPRecord.expiresAt < new Date()) {
+      return res.status(400).json({ message: "Invalid or expired Guarantor OTP" });
+    }
+    await OTP.deleteMany({ phone: { $in: [kinNorm, guarNorm] } });
+
 
     const livePhoto = await uploadToFirebase(
       req.files?.livePhoto?.[0],
@@ -298,6 +359,10 @@ exports.registerCustomer = async (req, res) => {
       monthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
+      guarantorName,
+      guarantorPhone,
+      kinVerified: true,
+      guarantorVerified: true,
       preferredMobileMoney,
       savingsGoal,
       loanConsent,
@@ -398,39 +463,7 @@ exports.registerCustomer = async (req, res) => {
 
 
 
-// exports.UpdateBorrowerProfile = async (req, res) => {
-//   try {
-//     const { customerId } = req.params;
-//     const profileData = req.body;
 
-//     // Ensure customer exists
-//     const customer = await Borrower.findById(customerId);
-//     if (!customer) {
-//       return res.status(404).json({ message: "Customer not found" });
-//     }
-
-//     // Check if profile already exists
-//     let profile = await CustomerProfile.findOne({ customer: customerId });
-
-//     if (profile) {
-//       // Update profile
-//       profile.set(profileData);
-//       await profile.save();
-//       return res.json({ message: "Customer profile updated", profile });
-//     } else {
-//       // Create new profile
-//       profile = new CustomerProfile({
-//         customer: customerId,
-//         ...profileData
-//       });
-//       await profile.save();
-//       return res.status(201).json({ message: "Customer profile created", profile });
-//     }
-//   } catch (error) {
-//     console.error("Error adding/updating profile:", error);
-//     res.status(500).json({ message: "Server error", error: error.message });
-//   }
-// };
 
 
 // Controller to get all customers
@@ -503,41 +536,6 @@ exports.getAllCustomers = async (req, res) => {
   }
 };
 
-// exports.getCustomerWithProfile = async (req, res) => {
-//   try {
-//     const { id } = req.params; // use `id` instead of `customerId`
-
-//     // 1. Fetch customer core details
-//     const customer = await Borrower.findById(id).lean();
-//     if (!customer) {
-//       return res.status(404).json({ message: "Customer not found" });
-//     }
-
-//     // 2. Fetch profile (linked to customer)
-//     const profile = await CustomerProfile.findOne({ customer: id }).lean();
-
-//     // 3. Fetch loans
-//     const loans = await Loan.find({ borrowerId: id })
-//       .sort({ createdAt: -1 })
-//       .lean();
-
-//     // 4. Fetch transactions
-//     const transactions = await Transaction.find({ borrowerId: id })
-//       .sort({ date: -1 })
-//       .lean();
-
-//     // 5. Return everything in one response
-//     res.status(200).json({
-//       customer,
-//       profile: profile || null,
-//       loans,
-//       transactions,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching customer details with profile:", error);
-//     res.status(500).json({ message: "Server error", error: error.message });
-//   }
-// };
 
 // **Get Borrower's Savings Balance**
 exports.getSavings = async (req, res) => {
@@ -565,31 +563,6 @@ exports.getSavings = async (req, res) => {
   }
 };
 
-// exports.getBorrowerProfile = async (req, res) => {
-//   try {
-//     // Borrower is already attached by borrowerProtect middleware
-//     const borrower = req.borrower;
-
-//     if (!borrower) {
-//       return res.status(404).json({ success: false, message: "Borrower not found" });
-//     }
-
-//     // Fetch loans related to this borrower
-//     const loans = await Loan.find({ borrowerId: borrower._id })
-//       .populate("lenderId")           // Populate full lender document
-//       .populate("requestedByAgentId") // Populate full agent document
-//       .populate("issuedByLenderId");  // Populate full issuedBy lender document
-
-//     res.status(200).json({
-//       success: true,
-//       borrower, // Entire borrower object
-//       loans     // Array of full loan objects
-//     });
-//   } catch (error) {
-//     console.error("Error fetching borrower profile:", error);
-//     res.status(500).json({ success: false, message: "Error fetching borrower profile" });
-//   }
-// };
 exports.getBorrowerProfile = async (req, res) => {
   try {
     // Borrower already attached by borrowerProtect middleware

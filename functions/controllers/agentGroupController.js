@@ -136,6 +136,16 @@ Total Members: ${members.length}
 Members: ${memberNames}`;
 
       await sendSMS(borrower.phone, message);
+
+      // 🔔 Push Notification for Member
+      await Notification.create({
+        userId: borrower._id,
+        userModel: "Customer",
+        title: "Added to Group",
+        message: `You have been added to the ${group.name} Group.`,
+        type: "general"
+      });
+      console.log(`🔔 Push Notification Sent to Member: ${borrower.fullName} for group addition`);
     }
 
     if (addedMembers.length > 0) {
@@ -222,6 +232,15 @@ exports.removeMemberByAgent = async (req, res) => {
 
     await Group.findByIdAndUpdate(groupId, {
       $inc: { member_count: -1 }
+    });
+
+    // 🔔 Push Notification for Member
+    await Notification.create({
+      userId: borrowerId,
+      userModel: "Customer",
+      title: "Removed from Group",
+      message: `You have been removed from the ${group.name} Group.`,
+      type: "general"
     });
 
     return res.json({

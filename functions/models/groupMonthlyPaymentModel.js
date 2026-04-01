@@ -24,6 +24,16 @@ const paymentSchema = new mongoose.Schema({
   shortfall: {
     type: Number
   },
+  
+  month: {
+    type: Number, // 1-12
+    required: true
+  },
+  
+  year: {
+    type: Number, // YYYY
+    required: true
+  },
 
   payment_date: {
     type: Date

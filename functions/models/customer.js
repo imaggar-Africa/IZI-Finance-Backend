@@ -270,6 +270,11 @@ const customerSchema = new mongoose.Schema({
 
   nextOfKinName: String,
   nextOfKinPhone: String,
+  kinVerified: { type: Boolean, default: false },
+
+  guarantorName: String,
+  guarantorPhone: String,
+  guarantorVerified: { type: Boolean, default: false },
 
   preferredMobileMoney: {
     type: String,
@@ -426,6 +431,11 @@ customerSchema.pre("save", function (next) {
   if (this.nextOfKinPhone) {
     const normalizedKin = normalizePhone(this.nextOfKinPhone);
     if (normalizedKin) this.nextOfKinPhone = normalizedKin;
+  }
+
+  if (this.guarantorPhone) {
+    const normalizedGuarantor = normalizePhone(this.guarantorPhone);
+    if (normalizedGuarantor) this.guarantorPhone = normalizedGuarantor;
   }
 
   this.updatedAt = Date.now();

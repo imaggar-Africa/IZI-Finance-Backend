@@ -358,6 +358,16 @@ exports.confirmationHandler = async (req, res) => {
         `Dear ${customer.fullName}, your group repayment of KES ${Amount} for ${group.name} was received. Balance: KES ${member.remaining_balance}. Ref: ${MpesaTransactionId}`
       );
 
+      // 🔔 Add Push Notification for Group Repayment
+      await Notification.create({
+        userId: customer._id,
+        userModel: "Customer",
+        title: "Group Repayment Received",
+        message: `KES ${Amount} repaid for ${group.name}. Balance: KES ${member.remaining_balance}`,
+        type: "repayment"
+      });
+      console.log(`🔔 Push Notification Sent to Member: ${customer.fullName} for C2B group payment`);
+
       return res.status(200).json({
         ResultCode: 0,
         ResultDesc: "Group payment processed successfully"
@@ -436,6 +446,14 @@ exports.confirmationHandler = async (req, res) => {
     await loan.save({ session });
     await customer.save({ session });
 
+    // 📩 Send 'Loan Cleared' Congratulations SMS (C2B)
+    if (fullyPaid) {
+      await sendSMS(
+        customer.phone,
+        `IziFinance – Congratulations!\nWell done ${customer.fullName} 🎉\nYou have fully cleared your loan. \nYour new loan limit has been updated. \nPlease check your IziFinance app to see your new limit.`
+      );
+    }
+
     // Update lender
     const lender = await User.findById(loan.lenderId).session(session);
     if (lender) {
@@ -451,6 +469,15 @@ exports.confirmationHandler = async (req, res) => {
       customer.phone,
       `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${loan.balance}. Ref: ${MpesaTransactionId}`
     );
+
+    // 🔔 Add Push Notification for Repayment
+    await Notification.create({
+      userId: customer._id,
+      userModel: "Customer",
+      title: "Repayment Received",
+      message: `Your payment of KES ${Amount} has been received. Balance: KES ${loan.balance}`,
+      type: "repayment"
+    });
 
     // 6️⃣ SEND SMS TO LENDER
     // if (lender) {

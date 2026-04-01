@@ -39,6 +39,15 @@ const groupMemberSchema = new mongoose.Schema(
   joined_at: {
     type: Date,
     default: Date.now
+  },
+
+  last_repayment_date: {
+    type: Date
+  },
+
+  consecutive_missed_days: {
+    type: Number,
+    default: 0
   }
   },
   { timestamps: true }

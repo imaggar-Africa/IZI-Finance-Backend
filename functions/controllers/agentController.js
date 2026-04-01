@@ -8,15 +8,12 @@ const uploadToFirebase = require("../utils/uploadToFirebase");
 const Loan = require("../models/Loan");
 const { normalizePhone } = require("../utils/normalizePhone");
 const { generateAccountId } = require("../utils/generateAccountId");
+const { sendSMS } = require("../utils/sms");
+const crypto = require("crypto");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents
 // @access  Private (Lender only)
-
-
-
-
-
 
 const registerAgent = async (req, res) => {
   try {
@@ -307,6 +304,57 @@ const getCustomersForAgent  = async (req, res) => {
 };
 
 
+/**
+ * 🔐 STEP 1: INITIATE OTPs for Kin & Guarantor
+ */
+const sendRegistrationOTPs = async (req, res) => {
+  try {
+    const { borrowerName, nextOfKinName, nextOfKinPhone, guarantorName, guarantorPhone } = req.body;
+
+    if (!nextOfKinPhone || !guarantorPhone || !borrowerName || !nextOfKinName || !guarantorName) {
+      return res.status(400).json({ message: "All names and phone numbers are required" });
+    }
+
+    const kinNorm = normalizePhone(nextOfKinPhone);
+    const guarNorm = normalizePhone(guarantorPhone);
+
+    if (!kinNorm || !guarNorm) {
+      return res.status(400).json({ message: "Invalid phone format" });
+    }
+
+    // 1️⃣ Generate OTPs
+    const kinOTP = Math.floor(1000 + Math.random() * 9000).toString();
+    const guarOTP = Math.floor(1000 + Math.random() * 9000).toString();
+
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    // 2️⃣ Save to DB
+    await OTP.findOneAndUpdate({ phone: kinNorm }, { otp: kinOTP, expiresAt }, { upsert: true });
+    await OTP.findOneAndUpdate({ phone: guarNorm }, { otp: guarOTP, expiresAt }, { upsert: true });
+
+    // 3️⃣ Send SMS - Kin
+    await sendSMS(
+      kinNorm,
+      `IziFinance Consent Notice\n\nHello ${nextOfKinName}, you have been listed as NEXT OF KIN for ${borrowerName} on IziFinance.\n\nBy sharing this code, you confirm that:\n- You are aware of the borrower’s loan application\n- You agree to be contacted if the borrower becomes unreachable\n- You consent to the use of your basic information for this purpose\n\nYour Verification Code: ${kinOTP}\n\nDo NOT share this code unless you understand and agree.`
+    );
+
+    // 4️⃣ Send SMS - Guarantor
+    await sendSMS(
+      guarNorm,
+      `IziFinance Guarantor Consent\n\nHello ${guarantorName}, you have been listed as a GUARANTOR for ${borrowerName} on IziFinance.\n\nBy sharing this code, you confirm that:\n- You know ${borrowerName} and support their loan request\n- You agree to assist in following up with the borrower until full repayment\n- You consent to being contacted regarding the loan status if needed\n\nYour Verification Code: ${guarOTP}\n\nDo NOT share this code unless you understand and accept this role.`
+    );
+
+    return res.json({ success: true, message: "OTPs sent to Kin and Guarantor" });
+
+  } catch (error) {
+    console.error("❌ SendRegistrationOTPs Error:", error);
+    res.status(500).json({ message: "Error sending verification codes" });
+  }
+};
+
+/**
+ * 🔐 STEP 2: REGISTER CUSTOMER (With OTP Verification)
+ */
 const registerCustomer = async (req, res) => {
   try {
     console.log("✅ Incoming files:", req.files);
@@ -345,6 +393,10 @@ const registerCustomer = async (req, res) => {
       monthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
+      guarantorName,
+      guarantorPhone,
+      kinOTP,
+      guarantorOTP,
       preferredMobileMoney,
       preferences,
       savingsBalance,
@@ -469,11 +521,27 @@ const registerCustomer = async (req, res) => {
     if (await Borrower.findOne({ phone: normalizedPhone }))
       return res.status(409).json({ message: "Phone already registered" });
 
-    if (await Borrower.findOne({ email }))
-      return res.status(409).json({ message: "Email already registered" });
-
     if (await Borrower.findOne({ idNumber }))
       return res.status(409).json({ message: "ID number already registered" });
+
+    /* ================= VERIFY OTPs ================= */
+
+    const kinNorm = normalizePhone(nextOfKinPhone);
+    const guarNorm = normalizePhone(guarantorPhone);
+
+    const kinOTPRecord = await OTP.findOne({ phone: kinNorm, otp: kinOTP });
+    const guarOTPRecord = await OTP.findOne({ phone: guarNorm, otp: guarantorOTP });
+
+    if (!kinOTPRecord || kinOTPRecord.expiresAt < new Date()) {
+      return res.status(400).json({ message: "Invalid or expired Next of Kin OTP" });
+    }
+
+    if (!guarOTPRecord || guarOTPRecord.expiresAt < new Date()) {
+      return res.status(400).json({ message: "Invalid or expired Guarantor OTP" });
+    }
+
+    // Cleanup OTPs after successful verification check (will be finalized if create succeeds)
+    await OTP.deleteMany({ phone: { $in: [kinNorm, guarNorm] } });
 
     /* ================= FILE UPLOAD ================= */
 
@@ -516,6 +584,10 @@ const registerCustomer = async (req, res) => {
       monthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
+      guarantorName,
+      guarantorPhone,
+      kinVerified: true,
+      guarantorVerified: true,
       preferredMobileMoney,
       savingsGoal,
       loanConsent,
@@ -644,4 +716,7 @@ const getAgentProfile = asyncHandler(async (req, res) => {
 });
 
 
-module.exports = { CustomersForAgent,registerAgent ,changePassword,loginAgent , registerCustomer ,getAgentProfile,getCustomersForAgent };
+module.exports = { CustomersForAgent,registerAgent ,changePassword,loginAgent , registerCustomer, getAgentProfile,
+  getCustomersForAgent,
+  sendRegistrationOTPs
+};

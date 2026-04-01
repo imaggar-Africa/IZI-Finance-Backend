@@ -66,11 +66,8 @@ cron.schedule(
               loan.repayments[loan.repayments.length - 1].date.toDateString();
           }
 
-          const borrowerMessage = `⏰ Reminder: Your loan balance is KES ${
-            loan.balance
-          }. Last repayment: ${lastRepaymentDate}. Please pay before ${loan.dueDate.toDateString()} to avoid penalties. Loan ID: ${
-            loan._id
-          }`;
+          const borrowerName = loan.borrowerId?.fullName || "IziFinance User";
+          const borrowerMessage = `IziFinance Reminder\nHello ${borrowerName}, your loan of KES ${loan.balance} is due on ${loan.dueDate.toDateString()}.\nPlease repay on time to avoid penalties.`;
 
           console.log("📩 Sending reminder SMS to:", borrowerPhone);
 

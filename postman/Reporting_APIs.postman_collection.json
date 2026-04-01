@@ -392,6 +392,84 @@
 			]
 		},
 		{
+			"name": "Customer Onboarding (2-Step OTP)",
+			"item": [
+				{
+					"name": "Step 1: Send Registration OTPs",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"nextOfKinName\": \"Kin Name\",\n    \"nextOfKinPhone\": \"+254700111222\",\n    \"guarantorName\": \"Guar Name\",\n    \"guarantorPhone\": \"+254733444555\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/agents/initiate-registration-otps",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"agents",
+								"initiate-registration-otps"
+							]
+						},
+						"description": "Sends unique IziFinance Consent codes to both the Next of Kin and the Guarantor."
+					},
+					"response": []
+				},
+				{
+					"name": "Step 2: Register Customer (with OTPs)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "fullName", "value": "Jane Borrower", "type": "text" },
+								{ "key": "phone", "value": "+254711223344", "type": "text" },
+								{ "key": "email", "value": "jane@example.com", "type": "text" },
+								{ "key": "idNumber", "value": "ID99887766", "type": "text" },
+								{ "key": "educationLevel", "value": "Secondary", "type": "text" },
+								{ "key": "householdSize", "value": "4", "type": "text" },
+								{ "key": "loanPurpose", "value": "Business Growth", "type": "text" },
+								{ "key": "deviceType", "value": "Android", "type": "text" },
+								{ "key": "referralSource", "value": "direct", "type": "text" },
+								{ "key": "nextOfKinName", "value": "Kin Name", "type": "text" },
+								{ "key": "nextOfKinPhone", "value": "+254700111222", "type": "text" },
+								{ "key": "guarantorName", "value": "Guar Name", "type": "text" },
+								{ "key": "guarantorPhone", "value": "+254733444555", "type": "text" },
+								{ "key": "kinOTP", "value": "1234", "type": "text" },
+								{ "key": "guarantorOTP", "value": "5678", "type": "text" },
+								{ "key": "frontID", "type": "file", "src": [] },
+								{ "key": "backID", "type": "file", "src": [] },
+								{ "key": "livePhoto", "type": "file", "src": [] }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/agents/register/customer",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"agents",
+								"register",
+								"customer"
+							]
+						},
+						"description": "Finalizes registration. Only succeeds if both kinOTP and guarantorOTP are valid."
+					},
+					"response": []
+				}
+			]
+		},
+		{
 			"name": "Reports",
 			"item": [
 				{

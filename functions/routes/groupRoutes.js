@@ -2,6 +2,9 @@ const express = require("express");
 const router = express.Router();
 const groupController = require("../controllers/groupController");
 const groupLoanController = require("../controllers/groupLoanController");
+const groupMonthlyPaymentController = require("../controllers/groupMonthlyPaymentController");
+const groupAlertController = require("../controllers/groupAlertController");
+const groupReportController = require("../controllers/groupReportController");
 const { protect } = require("../middleware/authMiddleware");
 
 router.post("/", protect, groupController.createGroup);
@@ -32,5 +35,21 @@ router.post("/disburse-loan", protect, groupController.disburseGroupLoan);
 router.get("/status/pending", protect, groupController.getPendingGroups);
 router.put("/:groupId/approve", protect, groupController.approveGroup);
 router.get("/", protect, groupController.getLenderGroups);
+
+// --- MONTHLY AGGREGATE REPAYMENTS ---
+// 🏦 AGGREGATION & ALERTS (Cron Job triggers)
+router.post("/process-monthly-repayments", protect, groupMonthlyPaymentController.processMonthlyGroupRepayments);
+router.post("/check-missed-repayments", protect, groupAlertController.checkMissedRepayments);
+router.post("/check-group-health", protect, groupAlertController.checkGroupHealth);
+
+// --- ALERT MANAGEMENT ---
+router.get("/alerts/group/:group_id", protect, groupAlertController.getGroupAlerts);
+router.put("/alerts/resolve/:alert_id", protect, groupAlertController.resolveAlert);
+router.put("/alerts/escalate/:alert_id", protect, groupAlertController.escalateAlert);
+
+// --- GROUP LOAN REPORTS ---
+router.get("/reports/weekly", protect, groupReportController.getWeeklyGroupReport);
+router.get("/reports/monthly", protect, groupReportController.getMonthlyGroupReport);
+router.get("/reports/agent/:agentId", protect, groupReportController.getAgentGroupReport);
 
 module.exports = router;

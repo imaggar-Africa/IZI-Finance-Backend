@@ -175,6 +175,12 @@ const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditSc
 
 //         loan.creditScoreAfter = newScore;
 //         await loan.save({ session });
+//         
+//         // 📩 Send 'Loan Cleared' Congratulations SMS (STK)
+//         await sendSMS(
+//           borrower.phone,
+//           `IziFinance – Congratulations!\nWell done ${borrower.fullName} 🎉\nYou have fully cleared your loan. \nYour new loan limit has been updated. \nPlease check your IziFinance app to see your new limit.`
+//         );
 //       }
 
 //       await borrower.save({ session });
@@ -580,6 +586,14 @@ New Balance: KES ${loan.balance}
       borrower.loanBalance = loan.balance;
       await borrower.save();
 
+      // 📩 Send 'Loan Cleared' Congratulations SMS
+      if (isFullyPaid) {
+        await sendSMS(
+          borrower.phone,
+          `IziFinance – Congratulations!\nWell done ${borrower.fullName} 🎉\nYou have fully cleared your loan. \nYour new loan limit has been updated. \nPlease check your IziFinance app to see your new limit.`
+        );
+      }
+
       transaction.balanceAfter = loan.balance;
 
       /* 7️⃣ Lender notification */
@@ -625,13 +639,23 @@ New Balance: KES ${loan.balance}
 
   await user.save();
 
-  await Notification.create({
-    userId: user._id,
-    userModel: "User",
-    title: "Wallet Deposit Successful",
-    message: `KES ${amount} has been added to your wallet.`,
-    type: "deposit"
-  });
+    await Notification.create({
+      userId: user._id,
+      userModel: "User",
+      title: "Wallet Deposit Successful",
+      message: `KES ${amount} has been added to your wallet.`,
+      type: "deposit"
+    });
+
+    // 📩 Send Requested SMS Format (Lender)
+    const Profile = require("../models/Profile");
+    const profile = await Profile.findOne({ userId: user._id });
+    const userName = profile?.fullName || "IziFinance User";
+    
+    await sendSMS(
+      user.phone,
+      `Dear ${userName}, your savings deposit of KES ${amount} has been processed successfully. New savings balance: KES ${user.walletBalance}. REF: ${transaction.transactionId || transaction._id}. Thank you for saving with izifinance.`
+    );
     }
 
    /* ===================== CUSTOMER SAVINGS DEPOSIT ===================== */
@@ -648,13 +672,19 @@ New Balance: KES ${loan.balance}
 
   await borrower.save();
 
-  await Notification.create({
-    userId: borrower._id,
-    userModel: "Customer",
-    title: "Savings Deposit Successful",
-    message: `KES ${amount} has been added to your savings.`,
-    type: "deposit"
-  });
+    await Notification.create({
+      userId: borrower._id,
+      userModel: "Customer",
+      title: "Savings Deposit Successful",
+      message: `KES ${amount} has been added to your savings.`,
+      type: "deposit"
+    });
+
+    // 📩 Send Requested SMS Format (Customer)
+    await sendSMS(
+      borrower.phone,
+      `Dear ${borrower.fullName}, your savings deposit of KES ${amount} has been processed successfully. New savings balance: KES ${borrower.savingsBalance}. REF: ${transaction.transactionId || transaction._id}. Thank you for saving with izifinance.`
+    );
     }
 
     /* ===================== GROUP MEMBER REPAYMENT ===================== */
@@ -667,21 +697,20 @@ New Balance: KES ${loan.balance}
         throw new Error("Group, Borrower, or Member not found");
       }
 
-      // Update Member state
+      // 📈 Update individual member's account
       member.total_repaid += amount;
       member.remaining_balance -= amount;
+      member.last_repayment_date = new Date();
+      member.consecutive_missed_days = 0;
+      member.status = "active"; // Ensure status is active on success
       if (member.remaining_balance < 0) member.remaining_balance = 0;
 
       // Update Group state (since member pays back toward group loan)
       group.remaining_loan_balance -= amount;
       if (group.remaining_loan_balance < 0) group.remaining_loan_balance = 0;
 
-      // Credit Lender Wallet
-      const lender = await User.findById(group.lenderId);
-      if (lender) {
-        lender.walletBalance += amount;
-        await lender.save();
-      }
+      // 💳 Add to Group Pool (Internal IziFinance collection)
+      group.collected_pool_balance = (group.collected_pool_balance || 0) + amount;
 
       await member.save();
       await group.save();

@@ -1,4 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onInit } = require("firebase-functions/v2/core");
 const { defineSecret } = require("firebase-functions/params");
@@ -186,6 +187,136 @@ exports.apiV2 = onRequest(
     maxInstances: 10,
   },
   app
+);
+
+/*************************************************
+ * 🕒 SCHEDULED TASKS (CRON JOBS)
+ *************************************************/
+
+const { checkMissedRepayments } = require("./controllers/groupAlertController");
+
+exports.hourlyRepaymentCheck = onSchedule(
+  {
+    schedule: "every 1 minutes", // Temporarily changed for testing (was every 1 hours)
+    memory: "512MiB",
+    timeoutSeconds: 540,
+    region: "us-central1",
+    // Ensure secrets are available to the scheduled function
+    secrets: [
+      atUsername, atApiKey, atSenderId,
+      mongoUri, redisUrl, redisToken
+    ]
+  },
+  async (event) => {
+    try {
+      console.log("🕒 Starting Automated Hourly Repayment Check...");
+      
+      // Ensure DB is connected (the initializeApp call is async)
+      // but in Scheduled functions we might need a separate check 
+      // if onInit didn't run.
+      if (!global.config) {
+        global.config = {
+          mongoUri: mongoUri.value(),
+          atUsername: atUsername.value(),
+          atApiKey: atApiKey.value(),
+          atSenderId: atSenderId.value(),
+        };
+        await initializeApp(global.config);
+      }
+
+      // Mock req/res for the controller
+      const mockReq = {};
+      const mockRes = {
+        status: (code) => ({
+          json: (data) => console.log(`Scheduled Task Result (${code}):`, JSON.stringify(data))
+        })
+      };
+
+      await checkMissedRepayments(mockReq, mockRes);
+      console.log("✅ Automated Hourly Check Finished Successfully.");
+    } catch (error) {
+      console.error("❌ Automated Hourly Check Failed:", error);
+    }
+  }
+);
+
+exports.dailyGroupHealthCheck = onSchedule(
+  {
+    schedule: "59 23 * * *", // 11:59 PM every day
+    memory: "512MiB",
+    timeoutSeconds: 540,
+    region: "us-central1",
+    secrets: [atUsername, atApiKey, atSenderId, mongoUri]
+  },
+  async (event) => {
+    try {
+      console.log("🕒 Starting Daily Group Health (Pool) Check at 11:59 PM...");
+      
+      if (!global.config) {
+        global.config = {
+          mongoUri: mongoUri.value(),
+          atUsername: atUsername.value(),
+          atApiKey: atApiKey.value(),
+          atSenderId: atSenderId.value(),
+        };
+        await initializeApp(global.config);
+      }
+
+      const { checkGroupHealth } = require("./controllers/groupAlertController");
+      
+      const mockReq = {};
+      const mockRes = {
+        status: (code) => ({
+          json: (data) => console.log(`Health Check Result (${code}):`, JSON.stringify(data))
+        })
+      };
+
+      await checkGroupHealth(mockReq, mockRes);
+      console.log("✅ Daily Group Health Check Finished.");
+    } catch (error) {
+      console.error("❌ Daily Group Health Check Failed:", error);
+    }
+  }
+);
+
+exports.monthlyGroupRepaymentProcess = onSchedule(
+  {
+    schedule: "0 1 1 * *", // 1:00 AM on the 1st of every month
+    memory: "512MiB",
+    timeoutSeconds: 540,
+    region: "us-central1",
+    secrets: [
+      atUsername, atApiKey, atSenderId,
+      mongoUri, mpesaConsumerKey, mpesaConsumerSecret // needed for B2C
+    ]
+  },
+  async (event) => {
+    try {
+      console.log("🕒 Starting Automated Monthly Payment to Shofco/Lender (1st of month)...");
+      
+      if (!global.config) {
+        global.config = {
+          mongoUri: mongoUri.value(),
+          // include mpesa configs for B2C
+        };
+        await initializeApp(global.config);
+      }
+
+      const { processMonthlyGroupRepayments } = require("./controllers/groupMonthlyPaymentController");
+      
+      const mockReq = { body: {} }; // defaults to previous month
+      const mockRes = {
+        status: (code) => ({
+          json: (data) => console.log(`Monthly Payment Result (${code}):`, JSON.stringify(data))
+        })
+      };
+
+      await processMonthlyGroupRepayments(mockReq, mockRes);
+      console.log("✅ Automated Monthly Payment Process Finished.");
+    } catch (error) {
+      console.error("❌ Automated Monthly Payment Process Failed:", error);
+    }
+  }
 );
 
 console.log("🚀 Deployment timestamp:", new Date().toISOString());

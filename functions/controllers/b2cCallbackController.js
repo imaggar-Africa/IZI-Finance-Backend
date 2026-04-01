@@ -13,6 +13,7 @@ const GroupLoanRequest = require("../models/GroupLoanRequest");
 const GroupMember = require("../models/GroupMember");
 const Group = require("../models/Group");
 const { getB2CCharge } = require("../utils/mpesaCharges");
+const groupMonthlyPaymentModel = require("../models/groupMonthlyPaymentModel");
 
 
 // B2C Callback Handler
@@ -1443,7 +1444,9 @@ exports.b2cCallback = async (req, res) => {
     let transaction = await Transaction.findOne({
       $or: [
         { checkoutRequestID: OriginatorConversationID },
-        { conversationID: ConversationID }
+        { originatorConversationID: OriginatorConversationID },
+        { conversationID: ConversationID },
+        { conversationID: OriginatorConversationID }
       ]
     });
 
@@ -1567,6 +1570,25 @@ exports.b2cCallback = async (req, res) => {
       await lender.save({ session });
       await loan.save({ session });
 
+      // 📩 Send 'Loan Issued' Alert SMS (Individual)
+      const Borrower = require("../models/customer");
+      const borrower = await Borrower.findById(loan.borrowerId).session(session);
+      if (borrower) {
+        const dueDateStr = loan.dueDate ? new Date(loan.dueDate).toLocaleDateString() : "N/A";
+        await sendSMS(
+          borrower.phone,
+          `IziFinance Loan Alert\nHello ${borrower.fullName}, you have received a loan of KES ${loan.amount}.\nRepayment Amount: KES ${loan.totalRepayment}\nDue Date: ${dueDateStr}\n\nThank you for using IziFinance.`
+        );
+
+        // 🔔 Also trigger Push Notification
+        await Notification.create({
+          userId: borrower._id,
+          userModel: "Customer",
+          title: "Loan Received",
+          message: `Your loan of KES ${loan.amount} has been disbursed.`,
+          type: "loan"
+        });
+      }
 
       if (loan.requestedByAgentId) {
         const commissionAmount = Number(loan.amount) * 0.0495;
@@ -1653,6 +1675,15 @@ exports.b2cCallback = async (req, res) => {
           borrower.phone, 
           `Dear ${borrower.fullName}, your group loan of KES ${amount} has been successfully disbursed to your M-Pesa. \nDaily Repayment: KES ${request.daily_repayment}. \nTotal: KES ${request.total_repayment}. \nREF: ${transaction.transactionId || "M-PESA"}`
         );
+
+        // 🔔 Add Push Notification for Borrower
+        await Notification.create({
+          userId: borrower._id,
+          userModel: "Customer",
+          title: "Loan Disbursed",
+          message: `Your group loan of KES ${amount} has been sent to your M-Pesa.`,
+          type: "loan"
+        });
       }
 
       if (leader && leader._id.toString() !== borrower?._id.toString()) {
@@ -1673,6 +1704,53 @@ exports.b2cCallback = async (req, res) => {
           `IZI Finance: Disbursement of KES ${amount} to ${borrower?.fullName} (Group: ${group?.name}) was successful.`
         );
         */
+      }
+    }
+
+    /* =========================================================
+       🔥 NEW: MONTHLY GROUP REPAYMENT B2C CALLBACK
+    ========================================================= */
+    if (transaction.type === "monthly group repayment") {
+      const monthlyPayment = await groupMonthlyPaymentModel.findOne({ 
+        transaction_id: transaction._id 
+      }).session(session);
+
+      if (monthlyPayment) {
+        // We keep 'shortfall' status but we mark the B2C transfer as successful
+        // If it was 'pending', we move it to 'paid' (or keep shortfall if applicable)
+        if (monthlyPayment.status === "pending") {
+          monthlyPayment.status = "paid";
+        }
+        await monthlyPayment.save({ session });
+      }
+
+      const lender = await User.findById(transaction.userId).session(session);
+      if (lender) {
+          const group = await Group.findById(transaction.groupId).session(session);
+          
+          if (group) {
+            // ♻️ RESET POOL ON SUCCESSFUL CALLBACK
+            group.collected_pool_balance = 0;
+            await group.save({ session });
+            console.log(`♻️ Pool reset for group ${group.name} following successful B2C.`);
+          }
+
+          // 📩 Send Confirmation SMS to Lender
+          postCommitTasks.push(async () => {
+            await sendSMS(
+              lender.phone,
+              `Dear Lender, your monthly repayment for group ${group?.name || "Group"} of KES ${transaction.amount} has been successfully sent to your M-Pesa. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
+            );
+
+            // 🔔 Also send Push Notification
+            const { sendPushToUser } = require("../utils/expoPush");
+            await sendPushToUser(
+              lender._id,
+              "User",
+              "Monthly Payment Received",
+              `KES ${transaction.amount} from group ${group?.name} has been disbursed to your M-Pesa.`
+            );
+          });
       }
     }
 

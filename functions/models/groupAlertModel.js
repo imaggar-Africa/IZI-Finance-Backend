@@ -20,7 +20,7 @@ const alertSchema = new mongoose.Schema({
 
   alert_type: {
     type: String,
-    enum: ["member_missed", "member_3day", "group_shortfall"]
+    enum: ["missed_payment", "member_missed", "member_3day", "group_shortfall"]
   },
 
   message: {
@@ -29,8 +29,8 @@ const alertSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["pending", "resolved", "escalated"],
-    default: "pending"
+    enum: ["open", "closed", "pending", "resolved", "escalated"],
+    default: "open"
   },
 
   sent_to: {

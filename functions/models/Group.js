@@ -48,6 +48,7 @@ const groupSchema = new mongoose.Schema(
   total_repayment: { type: Number, default: 0 },
   remaining_loan_balance: { type: Number, default: 0 },
   monthly_repayment_to_lender: { type: Number, default: 0 },
+  collected_pool_balance: { type: Number, default: 0 },
 
   },
   { timestamps: true }

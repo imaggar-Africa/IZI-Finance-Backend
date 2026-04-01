@@ -36,14 +36,7 @@ exports.sendDueDateReminders = async () => {
 
       /* 🔔 BEFORE DUE DATE */
       if (loan.dueDate > today) {
-        messageText = `Dear ${borrower.fullName},
-
-This is a reminder that your loan balance of KES ${loan.balance}
-is due on ${loan.dueDate.toDateString()}.
-
-Please pay on time to avoid penalties.
-
-- IziFinance`;
+        messageText = `IziFinance Reminder\nHello ${borrower.fullName}, your loan of KES ${loan.balance} is due on ${loan.dueDate.toDateString()}.\nPlease repay on time to avoid penalties.`;
       }
 
       /* 🚨 AFTER DUE DATE (LATE PAYMENT NOTICE) */
@@ -51,20 +44,7 @@ Please pay on time to avoid penalties.
         const penalty = Math.round(loan.balance * PENALTY_RATE);
         const totalPayable = loan.balance + penalty;
 
-        messageText = `⚠️ Late Payment Notice ⚠️
-
-Dear ${borrower.fullName},
-
-Your loan was due on ${loan.dueDate.toDateString()} and is now OVERDUE.
-
-Outstanding Balance : KES ${loan.balance}
-Late Payment Penalty (15%) : KES ${penalty}
-
-Total Amount Payable : KES ${totalPayable}
-
-Please make payment immediately to avoid further penalties.
-
-- IziFinance`;
+        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
       }
 
       await sendSMS(borrower.phone, messageText);
@@ -108,14 +88,7 @@ exports.sendManualReminder = async (req, res) => {
       if (loan.dueDate > today) {
         messageType = "PRE_DUE";
 
-        messageText = `Dear ${borrower.fullName},
-
-Your loan balance of KES ${loan.balance}
-is due on ${loan.dueDate.toDateString()}.
-
-Please pay before due date to avoid penalties.
-
-- IziFinance`;
+        messageText = `IziFinance Reminder\nHello ${borrower.fullName}, your loan of KES ${loan.balance} is due on ${loan.dueDate.toDateString()}.\nPlease repay on time to avoid penalties.`;
       }
 
       /* 🚨 AFTER DUE DATE (LATE PAYMENT NOTICE) */
@@ -125,20 +98,7 @@ Please pay before due date to avoid penalties.
 
         messageType = "OVERDUE_LATE_PAYMENT";
 
-        messageText = `⚠️ Late Payment Notice ⚠️
-
-Dear ${borrower.fullName},
-
-Your loan was due on ${loan.dueDate.toDateString()} and is now OVERDUE.
-
-Outstanding Balance : KES ${loan.balance}
-Late Payment Penalty (15%) : KES ${penalty}
-
-Total Amount Payable : KES ${totalPayable}
-
-Please make payment immediately.
-
-- IziFinance`;
+        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
       }
 
       await sendSMS(borrower.phone, messageText);
@@ -239,20 +199,7 @@ Please pay on time to avoid penalties.
 
       messageType = "OVERDUE";
 
-      messageText = ` Late Payment Notice 
-
-Dear ${borrower.fullName},
-
-Your loan was due on ${loan.dueDate.toDateString()} and is now OVERDUE.
-
-Outstanding Balance : KES ${loan.balance}
-Late Payment Penalty (15%) : KES ${penalty}
-
-Total Amount Payable : KES ${totalPayable}
-
-Please make payment immediately.
-
-- IziFinance`;
+      messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
     }
 
     await sendSMS(borrower.phone, messageText);

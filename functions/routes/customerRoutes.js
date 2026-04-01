@@ -36,6 +36,13 @@ router.post(
   customerController.registerCustomer
 );
 
+router.post(
+  "/initiate-registration-otps",
+  protect,
+  authorizeRoles("lender", "agent"),
+  customerController.sendRegistrationOTPs
+);
+
 
 
 

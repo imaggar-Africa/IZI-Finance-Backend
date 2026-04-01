@@ -3,9 +3,8 @@ const mongoose = require("mongoose");
 const transactionSchema = new mongoose.Schema({
   type: { 
     type: String, 
-    enum: ["repayment", "savings", "loan issued", "withdrawal",  "customer deposit", "customer payment", "agent withdrawal",// new
-      "customer withdrawal","group loan issued", "group member repayment" // new
-
+    enum: ["repayment", "savings", "loan issued", "withdrawal", "customer deposit", "customer payment", "agent withdrawal",
+      "customer withdrawal", "group loan issued", "group member repayment", "monthly group repayment"
     ],
     required: true 
   },
