@@ -22,7 +22,7 @@ exports.createAgentGroup = async (req, res) => {
 
     // If an Agent creates → set agentId from req.user
     // If a Lender creates → set lenderId from req.user
-    
+
     let finalLenderId = lenderId;
     let finalAgentId = agentId;
 
@@ -41,7 +41,7 @@ exports.createAgentGroup = async (req, res) => {
       lenderId: finalLenderId,
       agentId: finalAgentId,
       group_leader_id,
-      status: "pending"
+      status: "pending",
     });
 
     /* ===============================
@@ -54,15 +54,14 @@ exports.createAgentGroup = async (req, res) => {
         userModel: "User",
         title: "New Group Created",
         message: `Agent created a new group "${group.name}".`,
-        type: "general"
+        type: "general",
       });
     }
 
     res.status(201).json({
       success: true,
-      group
+      group,
     });
-
   } catch (error) {
     console.error("❌ createAgentGroup error:", error);
     res.status(500).json({ message: error.message });
@@ -77,23 +76,22 @@ exports.addMemberByAgent = async (req, res) => {
     const { groupId, borrowerId } = req.body;
 
     if (!groupId || !borrowerId) {
-      return res.status(400).json({ message: "groupId and borrowerId are required" });
+      return res
+        .status(400)
+        .json({ message: "groupId and borrowerId are required" });
     }
 
     const group = await Group.findById(groupId);
     if (!group) {
       return res.status(404).json({ message: "Group not found" });
     }
- 
-    const borrowerIds = Array.isArray(borrowerId)
-      ? borrowerId
-      : [borrowerId];
+
+    const borrowerIds = Array.isArray(borrowerId) ? borrowerId : [borrowerId];
 
     const addedMembers = [];
     const skippedBorrowers = [];
 
     for (const id of borrowerIds) {
-
       const borrower = await Customer.findById(id);
       if (!borrower) continue;
 
@@ -110,21 +108,20 @@ exports.addMemberByAgent = async (req, res) => {
         daily_repayment_amount: null,
         total_repaid: 0,
         remaining_balance: null,
-        status: "active"
+        status: "active",
       });
 
       addedMembers.push(member);
 
-      const group = await Group.findById(groupId)
-        .populate("lenderId", "name");
+      const group = await Group.findById(groupId).populate("lenderId", "name");
 
       const members = await GroupMember.find({ groupId })
         .populate("borrowerId", "fullName")
         .limit(10);
 
       const memberNames = members
-        .filter(m => m.borrowerId)
-        .map(m => m.borrowerId.fullName?.split(" ")[0])
+        .filter((m) => m.borrowerId)
+        .map((m) => m.borrowerId.fullName?.split(" ")[0])
         .join(", ");
 
       const adminName = group?.lenderId?.name || "Group Admin";
@@ -143,14 +140,16 @@ Members: ${memberNames}`;
         userModel: "Customer",
         title: "Added to Group",
         message: `You have been added to the ${group.name} Group.`,
-        type: "general"
+        type: "general",
       });
-      console.log(`🔔 Push Notification Sent to Member: ${borrower.fullName} for group addition`);
+      console.log(
+        `🔔 Push Notification Sent to Member: ${borrower.fullName} for group addition`,
+      );
     }
 
     if (addedMembers.length > 0) {
       await Group.findByIdAndUpdate(groupId, {
-        $inc: { member_count: addedMembers.length }
+        $inc: { member_count: addedMembers.length },
       });
     }
 
@@ -161,14 +160,13 @@ Members: ${memberNames}`;
       success: true,
       count: addedMembers.length,
       members: addedMembers,
-      skipped: skippedBorrowers
+      skipped: skippedBorrowers,
     });
-
   } catch (error) {
     // ✅ Handle DB duplicate safely
     if (error.code === 11000) {
       return res.status(400).json({
-        message: "Customer already exists in this group"
+        message: "Customer already exists in this group",
       });
     }
 
@@ -187,19 +185,19 @@ exports.removeMemberByAgent = async (req, res) => {
 
     if (!groupId || !borrowerId) {
       return res.status(400).json({
-        message: "groupId and borrowerId are required"
+        message: "groupId and borrowerId are required",
       });
     }
 
     // Check group belongs to agent
     const group = await require("../models/Group").findOne({
       _id: groupId,
-      agentId
+      agentId,
     });
 
     if (!group) {
       return res.status(403).json({
-        message: "Unauthorized or group not found"
+        message: "Unauthorized or group not found",
       });
     }
 
@@ -210,7 +208,7 @@ exports.removeMemberByAgent = async (req, res) => {
 
     if (!member) {
       return res.status(404).json({
-        message: "Member not found in this group"
+        message: "Member not found in this group",
       });
     }
 
@@ -219,19 +217,19 @@ exports.removeMemberByAgent = async (req, res) => {
 
     const activeLoan = await Loan.findOne({
       borrowerId,
-      status: { $in: ["active", "overdue"] }
+      status: { $in: ["active", "overdue"] },
     });
 
     if (activeLoan) {
       return res.status(400).json({
-        message: "Cannot remove borrower with active loan"
+        message: "Cannot remove borrower with active loan",
       });
     }
 
     await member.deleteOne();
 
     await Group.findByIdAndUpdate(groupId, {
-      $inc: { member_count: -1 }
+      $inc: { member_count: -1 },
     });
 
     // 🔔 Push Notification for Member
@@ -240,20 +238,18 @@ exports.removeMemberByAgent = async (req, res) => {
       userModel: "Customer",
       title: "Removed from Group",
       message: `You have been removed from the ${group.name} Group.`,
-      type: "general"
+      type: "general",
     });
 
     return res.json({
       success: true,
-      message: "Member removed successfully"
+      message: "Member removed successfully",
     });
-
   } catch (error) {
     console.error("removeMemberByAgent error:", error);
     res.status(500).json({ message: error.message });
   }
 };
-
 
 /* =========================
    GET AGENT GROUPS
@@ -262,15 +258,16 @@ exports.getAgentGroups = async (req, res) => {
   try {
     const agentId = req.user._id;
 
-    const groups = await Group.find({ agentId })
-      .populate("leaderId", "fullName");
+    const groups = await Group.find({ agentId }).populate(
+      "group_leader_id",
+      "fullName",
+    );
 
     res.json({
       success: true,
       count: groups.length,
-      groups
+      groups,
     });
-
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -283,11 +280,15 @@ exports.getAgentGroupDetails = async (req, res) => {
   try {
     const { groupId } = req.params;
 
-    const group = await Group.findById(groupId)
-      .populate("leaderId", "fullName");
+    const group = await Group.findById(groupId).populate(
+      "group_leader_id",
+      "fullName",
+    );
 
-    const members = await GroupMember.find({ groupId })
-      .populate("borrowerId", "fullName phone");
+    const members = await GroupMember.find({ groupId }).populate(
+      "borrowerId",
+      "fullName phone",
+    );
 
     res.json({
       success: true,
@@ -295,15 +296,14 @@ exports.getAgentGroupDetails = async (req, res) => {
         _id: group._id,
         name: group.name,
         creditLimit: group.creditLimit,
-        leader: group.leaderId
+        leader: group.group_leader_id,
       },
-      members: members.map(m => ({
+      members: members.map((m) => ({
         borrowerId: m.borrowerId._id,
         name: m.borrowerId.fullName,
-        phone: m.borrowerId.phone
-      }))
+        phone: m.borrowerId.phone,
+      })),
     });
-
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
