@@ -833,6 +833,55 @@ exports.getAgentGroups = async (req, res) => {
   }
 };
 
+
+
+
+/* =========================
+   GET MY GROUP (FOR BORROWERS)
+========================= */
+exports.getMyGroup = async (req, res) => {
+  try {
+    const borrowerId = req.user._id;
+
+    // 1. Find if this borrower is a member of any group
+    const membership = await GroupMember.findOne({ borrowerId });
+    if (!membership) {
+      return res.status(200).json({ success: false, message: "You are not a member of any group" });
+    }
+
+    const groupId = membership.groupId;
+
+    // 2. Fetch full group details
+    const group = await Group.findById(groupId)
+      .populate("agentId", "name phone")
+      .populate("lenderId", "name email")
+      .populate("group_leader_id", "fullName phone");
+
+    if (!group) {
+      return res.status(404).json({ success: false, message: "Group not found" });
+    }
+
+    // 3. Fetch all members of this group
+    const members = await GroupMember.find({ groupId })
+      .populate("borrowerId", "fullName phone status");
+
+    // 4. Check if current user is the leader
+    const isLeader = group.group_leader_id && group.group_leader_id._id.toString() === borrowerId.toString();
+
+    res.json({
+      success: true,
+      isLeader,
+      group,
+      members,
+      myMembership: membership
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
 /* =========================
    GET GROUP REPAYMENTS
 ========================= */

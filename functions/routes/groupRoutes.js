@@ -18,6 +18,10 @@ router.get("/agent/:agentId", protect, groupController.getGroupsByAgentId);
 router.get("/agent-groups/:agentId", protect, groupController.getAgentGroups);
 router.get("/all-members", protect, groupController.getAllGroupMembers);
 
+
+router.get("/my-group", protect, groupController.getMyGroup);
+
+
 // --- GROUP LOAN REQUESTS ---
 router.post("/loan-request", protect, groupLoanController.createGroupLoanRequest);
 router.get("/loan-requests/lender", protect, groupLoanController.getLenderGroupLoanRequests);
