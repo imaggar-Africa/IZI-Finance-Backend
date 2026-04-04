@@ -758,8 +758,28 @@ exports.requestGroupMemberLoan = async (req, res) => {
       total_repayment: Math.ceil(totalRepayment),
       daily_repayment: Number(dailyRepayment.toFixed(2)),
       agentReview,
+      agent_status: agentReview ? "approved" : "pending",
       status: "pending"
     });
+
+    // 🔔 Push Notifications
+    if (group.createdByModel === "Agent" && group.createdBy) {
+      await Notification.create({
+        userId: group.createdBy,
+        userModel: "Agent",
+        title: "New Loan Request (Review Required)",
+        message: `A new loan request for ${group.name} is pending your review.`,
+        type: "general",
+      });
+    } else if (group.createdByModel === "User" && group.lenderId) {
+      await Notification.create({
+        userId: group.lenderId,
+        userModel: "User",
+        title: "New Loan Request",
+        message: `A new loan request for ${group.name} was submitted.`,
+        type: "general",
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -839,9 +859,12 @@ exports.getAgentGroups = async (req, res) => {
 /* =========================
    GET MY GROUP (FOR BORROWERS)
 ========================= */
+/* =========================
+   GET MY GROUP (FOR BORROWERS)
+========================= */
 exports.getMyGroup = async (req, res) => {
   try {
-    const borrowerId = req.user._id;
+    const borrowerId = req.borrower._id;
 
     // 1. Find if this borrower is a member of any group
     const membership = await GroupMember.findOne({ borrowerId });

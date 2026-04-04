@@ -47,6 +47,11 @@ const groupLoanRequestSchema = new mongoose.Schema(
       type: Number,
       required: true
     },
+    agent_status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved"
+    },
     status: {
       type: String,
       enum: ["pending", "processing", "approved", "rejected", "disbursed"],

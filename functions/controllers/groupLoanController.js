@@ -57,8 +57,30 @@ exports.createGroupLoanRequest = async (req, res) => {
       total_repayment: Math.ceil(totalRepayment),
       daily_repayment: Number(dailyRepayment.toFixed(2)),
       agentReview: group.createdByModel === "User", // If lender created group, auto-reviewed
+      agent_status: group.createdByModel === "User" ? "approved" : "pending",
       status: "pending"
     });
+
+    // 🔔 Push Notifications
+    if (group.createdByModel === "Agent" && group.createdBy) {
+      // Notify Agent to review
+      await Notification.create({
+        userId: group.createdBy,
+        userModel: "Agent",
+        title: "New Loan Request (Review Required)",
+        message: `A new loan request for ${group.name} is pending your review.`,
+        type: "general",
+      });
+    } else if (group.createdByModel === "User" && group.lenderId) {
+      // Notify Lender directly
+      await Notification.create({
+        userId: group.lenderId,
+        userModel: "User",
+        title: "New Loan Request",
+        message: `A new loan request for ${group.name} was submitted.`,
+        type: "general",
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -80,10 +102,10 @@ exports.getLenderGroupLoanRequests = async (req, res) => {
   try {
     const lenderId = req.user._id;
 
-    // Fetch requests for groups belonging to this lender that have been reviewed (or created by lender)
+    // Fetch requests for groups belonging to this lender that have been reviewed (or approved by agent)
     const requests = await GroupLoanRequest.find({ 
-      createdBy:lenderId,
-      agentReview: true 
+      lenderId: lenderId,
+      agent_status: "approved" 
     })
       .populate("groupId", "name")
       .populate("borrowerId", "fullName phone")
@@ -334,11 +356,11 @@ exports.getAgentGroupLoanRequests = async (req, res) => {
 
 exports.agentReviewGroupLoanRequest = async (req, res) => {
   try {
-    const { requestId } = req.body;
+    const { requestId, status } = req.body;
     const agentId = req.user._id;
 
-    if (!requestId) {
-      return res.status(400).json({ message: "requestId is required" });
+    if (!requestId || !status) {
+      return res.status(400).json({ message: "requestId and status are required" });
     }
 
     // 1. Find the request and populate group
@@ -354,13 +376,43 @@ exports.agentReviewGroupLoanRequest = async (req, res) => {
     }
 
     // 3. Mark as reviewed by agent
-    request.agentReview = true;
+    if (status === "approved") {
+      request.agentReview = true;
+      request.agent_status = "approved";
+
+      // 🔔 Push Notification for Lender (forwarded)
+      if (group.lenderId) {
+        await Notification.create({
+          userId: group.lenderId,
+          userModel: "User",
+          title: "New Loan Request (Agent Approved)",
+          message: `Agent ${req.user.name} approved a loan request for ${group.name}. It is now pending your review.`,
+          type: "general",
+        });
+      }
+
+    } else if (status === "rejected") {
+      request.agentReview = false;
+      request.agent_status = "rejected";
+      request.status = "rejected"; // If agent rejects, the whole request is rejected
+
+      // 🔔 Push Notification for Group Leader (requester)
+      await Notification.create({
+        userId: request.requestedById,
+        userModel: "Customer",
+        title: "Loan Request Rejected by Agent",
+        message: `The loan request for group member in "${group.name}" was rejected by the agent.`,
+        type: "general",
+      });
+    } else {
+      return res.status(400).json({ message: "Invalid status. Use 'approved' or 'rejected'" });
+    }
 
     await request.save();
 
     res.json({
       success: true,
-      message: "Request reviewed and approved by agent",
+      message: status === "approved" ? "Request approved and forwarded to lender" : "Request rejected",
       request
     });
 

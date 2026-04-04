@@ -5,7 +5,7 @@ const groupLoanController = require("../controllers/groupLoanController");
 const groupMonthlyPaymentController = require("../controllers/groupMonthlyPaymentController");
 const groupAlertController = require("../controllers/groupAlertController");
 const groupReportController = require("../controllers/groupReportController");
-const { protect } = require("../middleware/authMiddleware");
+const { protect, borrowerProtect } = require("../middleware/authMiddleware");
 
 router.post("/", protect, groupController.createGroup);
 router.post("/add-member", protect, groupController.addMember);
@@ -19,11 +19,11 @@ router.get("/agent-groups/:agentId", protect, groupController.getAgentGroups);
 router.get("/all-members", protect, groupController.getAllGroupMembers);
 
 
-router.get("/my-group", protect, groupController.getMyGroup);
+router.get("/my-group", borrowerProtect, groupController.getMyGroup);
 
 
 // --- GROUP LOAN REQUESTS ---
-router.post("/loan-request", protect, groupLoanController.createGroupLoanRequest);
+router.post("/loan-request", borrowerProtect, groupLoanController.createGroupLoanRequest);
 router.get("/loan-requests/lender", protect, groupLoanController.getLenderGroupLoanRequests);
 router.get("/loan-requests/agent", protect, groupLoanController.getAgentGroupLoanRequests); // Agent sees requests for their groups
 router.put("/loan-review", protect, groupLoanController.reviewGroupLoanRequest);
@@ -35,6 +35,8 @@ router.post("/remove-member", protect, groupController.removeMember);
 router.get("/analytics", protect, groupController.getGroupAnalytics);
 router.get("/leader/:leaderId", groupController.getGroupByLeader);
 router.get("/:groupId", protect, groupController.getGroupDetails);
+
+router.get("/my-group", borrowerProtect, groupController.getMyGroup);
 router.put("/:groupId", protect, groupController.updateGroup);
 router.put("/:groupId/status", protect, groupController.updateGroupStatus);
 router.delete("/:groupId", protect, groupController.deleteGroup);
