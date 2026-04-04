@@ -12,7 +12,21 @@ const groupLoanRequestSchema = new mongoose.Schema(
       ref: "Customer",
       required: true
     },
+    lenderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    agentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Agent"
+    },
+    agentReview: {
+       type: Boolean,
+       default: false
+    },
     requestedById: {
+
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
       required: true

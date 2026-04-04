@@ -10,7 +10,7 @@ const { sendSMS } = require("../utils/sms");
 ========================= */
 exports.createAgentGroup = async (req, res) => {
   try {
-    const { name, description, lenderId, agentId, group_leader_id } = req.body;
+    const { name, description, lenderId, agentId, group_leader_id, location } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Group name required" });
@@ -40,15 +40,20 @@ exports.createAgentGroup = async (req, res) => {
       description,
       lenderId: finalLenderId,
       agentId: finalAgentId,
+      createdBy: req.user._id,
+      createdByModel: req.user.role === "agent" ? "Agent" : "User",
       group_leader_id,
+      location,
       status: "pending",
     });
+
 
     /* ===============================
        2️⃣ NOTIFICATION
     ============================== */
 
     if (finalAgentId && finalLenderId) {
+      // Notify Lender
       await Notification.create({
         userId: finalLenderId,
         userModel: "User",
@@ -56,7 +61,17 @@ exports.createAgentGroup = async (req, res) => {
         message: `Agent created a new group "${group.name}".`,
         type: "general",
       });
+
+      // Notify Agent
+      await Notification.create({
+        userId: finalAgentId,
+        userModel: "Agent",
+        title: "Group Created Successfully",
+        message: `You created a new group "${group.name}".`,
+        type: "general",
+      });
     }
+
 
     res.status(201).json({
       success: true,
@@ -145,7 +160,19 @@ Members: ${memberNames}`;
       console.log(
         `🔔 Push Notification Sent to Member: ${borrower.fullName} for group addition`,
       );
+
+      // 🔔 Push Notification for Lender (since Agent added a member)
+      if (group.lenderId) {
+        await Notification.create({
+          userId: group.lenderId._id || group.lenderId,
+          userModel: "User",
+          title: "Member Added to Group",
+          message: `Agent added ${borrower.fullName} to the group "${group.name}".`,
+          type: "general",
+        });
+      }
     }
+
 
     if (addedMembers.length > 0) {
       await Group.findByIdAndUpdate(groupId, {

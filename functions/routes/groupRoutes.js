@@ -21,8 +21,11 @@ router.get("/all-members", protect, groupController.getAllGroupMembers);
 // --- GROUP LOAN REQUESTS ---
 router.post("/loan-request", protect, groupLoanController.createGroupLoanRequest);
 router.get("/loan-requests/lender", protect, groupLoanController.getLenderGroupLoanRequests);
+router.get("/loan-requests/agent", protect, groupLoanController.getAgentGroupLoanRequests); // Agent sees requests for their groups
 router.put("/loan-review", protect, groupLoanController.reviewGroupLoanRequest);
+router.put("/loan-review/agent", protect, groupLoanController.agentReviewGroupLoanRequest); // Agent review API
 router.post("/initiate-repayment", protect, groupLoanController.initiateMemberRepayment);
+
 
 router.post("/remove-member", protect, groupController.removeMember);
 router.get("/analytics", protect, groupController.getGroupAnalytics);

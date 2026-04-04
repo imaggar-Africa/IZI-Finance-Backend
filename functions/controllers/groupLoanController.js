@@ -7,7 +7,9 @@ const User = require("../models/User");
 const { initiateB2C, initiateSTKPush } = require("../utils/mpesa");
 const { getB2CCharge } = require("../utils/mpesaCharges");
 const { normalizePhone } = require("../utils/phone");
+const Notification = require("../models/Notification");
 const mongoose = require("mongoose");
+
 
 /* =========================
    CREATE GROUP LOAN REQUEST (LEADER)
@@ -47,19 +49,23 @@ exports.createGroupLoanRequest = async (req, res) => {
     const loanRequest = await GroupLoanRequest.create({
       groupId,
       borrowerId,
+      lenderId: group.lenderId,
+      agentId: group.agentId,
       requestedById: leaderId,
       amount,
       interest_rate: group.interest_rate,
       total_repayment: Math.ceil(totalRepayment),
       daily_repayment: Number(dailyRepayment.toFixed(2)),
+      agentReview: group.createdByModel === "User", // If lender created group, auto-reviewed
       status: "pending"
     });
 
     res.status(201).json({
       success: true,
-      message: "Loan request submitted to lender",
+      message: (group.createdByModel === "User") ? "Loan request submitted to lender" : "Loan request sent to agent for review",
       request: loanRequest
     });
+
 
   } catch (error) {
     console.error("❌ createGroupLoanRequest error:", error);
@@ -74,12 +80,11 @@ exports.getLenderGroupLoanRequests = async (req, res) => {
   try {
     const lenderId = req.user._id;
 
-    // Find all groups belonging to this lender
-    const groups = await Group.find({ lenderId }).select("_id");
-    const groupIds = groups.map(g => g._id);
-
-    // Fetch requests for those groups
-    const requests = await GroupLoanRequest.find({ groupId: { $in: groupIds } })
+    // Fetch requests for groups belonging to this lender that have been reviewed (or created by lender)
+    const requests = await GroupLoanRequest.find({ 
+      createdBy:lenderId,
+      agentReview: true 
+    })
       .populate("groupId", "name")
       .populate("borrowerId", "fullName phone")
       .populate("requestedById", "fullName")
@@ -92,9 +97,11 @@ exports.getLenderGroupLoanRequests = async (req, res) => {
     });
 
   } catch (error) {
+    console.error("❌ getLenderGroupLoanRequests error:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 
 /* =========================
    REVIEW GROUP LOAN REQUEST (LENDER)
@@ -134,8 +141,19 @@ exports.reviewGroupLoanRequest = async (req, res) => {
       await request.save({ session });
       await session.commitTransaction();
       session.endSession();
+
+      // 🔔 Push Notification for Group Leader (requester)
+      await Notification.create({
+        userId: request.requestedById,
+        userModel: "Customer",
+        title: "Group Loan Request Rejected",
+        message: `The loan request for group member in "${group.name}" was rejected.`,
+        type: "general",
+      });
+
       return res.json({ success: true, message: "Request rejected" });
     }
+
 
     // 4. Handle approval (Disbursement)
     if (status === "approved") {
@@ -194,6 +212,8 @@ exports.reviewGroupLoanRequest = async (req, res) => {
         originatorConversationID: b2cResponse.OriginatorConversationID
       });
     }
+
+
 
     throw new Error("Invalid status provided");
 
@@ -276,5 +296,79 @@ exports.initiateMemberRepayment = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
+
+/* =========================
+   GET AGENT GROUP LOAN REQUESTS
+========================= */
+exports.getAgentGroupLoanRequests = async (req, res) => {
+  try {
+    const agentId = req.user._id;
+
+    // 1. Find all groups created by this agent
+    const groups = await Group.find({ createdBy: agentId }).select("_id");
+    const groupIds = groups.map(g => g._id);
+
+    // 2. Fetch requests for those specific groups
+    const requests = await GroupLoanRequest.find({ groupId: { $in: groupIds } })
+      .populate("groupId", "name")
+      .populate("borrowerId", "fullName phone")
+      .populate("requestedById", "fullName")
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: requests.length,
+      requests
+    });
+
+  } catch (error) {
+    console.error("❌ getAgentGroupLoanRequests error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
+/* =========================
+   AGENT REVIEW GROUP LOAN REQUEST
+========================= */
+
+exports.agentReviewGroupLoanRequest = async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    const agentId = req.user._id;
+
+    if (!requestId) {
+      return res.status(400).json({ message: "requestId is required" });
+    }
+
+    // 1. Find the request and populate group
+    const request = await GroupLoanRequest.findById(requestId).populate("groupId");
+    if (!request) return res.status(404).json({ message: "Group loan request not found" });
+
+    const group = request.groupId;
+    if (!group) return res.status(404).json({ message: "Parent group not found" });
+
+    // 2. Verify agent belongs to this group/request (check creator)
+    if (!group.createdBy || group.createdBy.toString() !== agentId.toString()) {
+      return res.status(403).json({ message: "Unauthorized: You are not the creator of this group" });
+    }
+
+    // 3. Mark as reviewed by agent
+    request.agentReview = true;
+
+    await request.save();
+
+    res.json({
+      success: true,
+      message: "Request reviewed and approved by agent",
+      request
+    });
+
+  } catch (error) {
+    console.error("❌ agentReviewGroupLoanRequest error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 
 

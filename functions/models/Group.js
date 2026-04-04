@@ -15,6 +15,15 @@ const groupSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Agent"
     },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: "createdByModel"
+    },
+    createdByModel: {
+      type: String,
+      enum: ["User", "Agent"]
+    },
+
   group_leader_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Customer"

@@ -4,6 +4,7 @@ const GroupMember = require("../models/GroupMember");
 const Customer = require("../models/customer");
 const User = require("../models/User");
 const { sendSMS } = require("../utils/sms");
+const Notification = require("../models/Notification");
 
 /* =========================
    CREATE GROUP
@@ -31,22 +32,51 @@ exports.createGroup = async (req, res) => {
       if (agent) finalLenderId = agent.lenderId;
     } else if (req.user.role === "lender" || req.user.role === "admin") {
       finalLenderId = req.user._id;
+      finalAgentId = null;
     }
+
 
     const group = await Group.create({
       name,
       description,
       lenderId: finalLenderId,
       agentId: finalAgentId,
+      createdBy: req.user._id,
+      createdByModel: req.user.role === "agent" ? "Agent" : "User",
       group_leader_id,
       location,
       status: req.user.role === "agent" ? "pending" : "active"
     });
 
+
+    // 🔔 Push Notifications
+    if (req.user.role === "agent") {
+      // Notify Agent
+      await Notification.create({
+        userId: req.user._id,
+        userModel: "Agent",
+        title: "Group Created Successfully",
+        message: `You have successfully created the group "${group.name}".`,
+        type: "general",
+      });
+
+      // Notify Lender
+      if (finalLenderId) {
+        await Notification.create({
+          userId: finalLenderId,
+          userModel: "User",
+          title: "New Group Created by Agent",
+          message: `Agent created a new group "${group.name}".`,
+          type: "general",
+        });
+      }
+    }
+
     res.status(201).json({
       success: true,
       group
     });
+
 
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -120,7 +150,28 @@ exports.addMember = async (req, res) => {
       const message = `You've been added to ${group.name} Group.\n\nTotal Members: ${members.length}\nMembers: ${memberNames}`;
 
       await sendSMS(borrower.phone, message);
+
+      // 🔔 Push Notification for Member
+      await Notification.create({
+        userId: borrower._id,
+        userModel: "Customer",
+        title: "Added to Group",
+        message: `You've been added to ${group.name} Group.\n\nTotal Members: ${members.length}`,
+        type: "general",
+      });
+
+      // 🔔 Push Notification for Lender (if added by Agent)
+      if (req.user.role === "agent" && group.lenderId) {
+        await Notification.create({
+          userId: group.lenderId,
+          userModel: "User",
+          title: "Member Added to Group",
+          message: `Agent added ${borrower.fullName} to the group "${group.name}".`,
+          type: "general",
+        });
+      }
     }
+
 
     if (addedMembers.length > 0) {
       await Group.findByIdAndUpdate(groupId, {
@@ -674,52 +725,78 @@ exports.requestGroupMemberLoan = async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
-    // 1. Verify group exists
+    // 1. Verify existence
+    const GroupLoanRequest = require("../models/GroupLoanRequest");
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ message: "Group not found" });
 
-    // 2. Verify lender from group
+    // 2. Data from Group
     const lenderId = group.lenderId;
+    const agentId = group.agentId;
 
-    // 3. Create Loan Request
-    const Loan = require("../models/Loan");
-    const loanRequest = await Loan.create({
-      lenderId,
-      borrowerId,
+    // 3. Calculations
+    const monthlyRate = (group.interest_rate || 0) / 100;
+    const durationMonths = group.duration_months || 1;
+    const totalDurationDays = durationMonths * 30;
+    const totalInterest = amount * monthlyRate * durationMonths;
+    const totalRepayment = amount + totalInterest;
+    const dailyRepayment = totalRepayment / totalDurationDays;
+
+    // 4. Agent Review Logic
+    // If lender created group, agentReview is true.
+    // If agent created group, agentReview is false (agent must review).
+    const agentReview = group.createdByModel === "User";
+
+    const loanRequest = await GroupLoanRequest.create({
       groupId,
-      requestedByLeaderId: leaderId,
+      borrowerId,
+      lenderId,
+      agentId,
+      requestedById: leaderId,
       amount,
-      loanRequestStatus: "pending",
+      interest_rate: group.interest_rate,
+      total_repayment: Math.ceil(totalRepayment),
+      daily_repayment: Number(dailyRepayment.toFixed(2)),
+      agentReview,
       status: "pending"
     });
 
     res.status(201).json({
       success: true,
-      message: "Group member loan request submitted",
+      message: agentReview ? "Loan request sent to lender" : "Loan request sent to agent for review",
       loanRequest
     });
 
   } catch (error) {
+    console.error("❌ requestGroupMemberLoan error:", error);
     res.status(500).json({ message: error.message });
   }
 };
 
+
 /* =========================
-   GET GROUP LOAN REQUESTS (LENDER)
+   GET GROUP LOAN REQUESTS (LENDER / AGENT)
 ========================= */
 exports.getGroupLoanRequests = async (req, res) => {
   try {
-    const lenderId = req.user._id;
-    const Loan = require("../models/Loan");
+    const GroupLoanRequest = require("../models/GroupLoanRequest");
+    const query = {};
 
-    const requests = await Loan.find({ 
-      lenderId, 
-      groupId: { $exists: true } 
-    })
-    .populate("borrowerId", "fullName phone")
-    .populate("groupId", "name")
-    .populate("requestedByLeaderId", "fullName phone")
-    .sort({ createdAt: -1 });
+    if (req.user.role === "lender") {
+      query.lenderId = req.user._id;
+      query.agentReview = true; // Lenders only see reviewed requests
+    } else if (req.user.role === "agent") {
+      query.agentId = req.user._id;
+      // Agents see their own group requests (both reviewed and pending review)
+    } else if (req.user.role === "admin") {
+      // Admins see everything
+    }
+
+    const requests = await GroupLoanRequest.find(query)
+      .populate("borrowerId", "fullName phone")
+      .populate("groupId", "name")
+      .populate("requestedById", "fullName phone")
+      .sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -731,6 +808,7 @@ exports.getGroupLoanRequests = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 /* =========================
    GET AGENT GROUPS (FOR LOGGED-IN AGENT)

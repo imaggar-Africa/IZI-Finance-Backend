@@ -1492,8 +1492,27 @@ exports.b2cCallback = async (req, res) => {
         if (request) {
           request.status = "pending"; // Reset for retry
           await request.save({ session });
+
+          // 🔔 Push Notification for Group Leader (Failure)
+          await Notification.create({
+            userId: request.requestedById,
+            userModel: "Customer",
+            title: "Loan Disbursement Failed",
+            message: `Disbursement to a member in group failed. \nReason: ${ResultDesc}`,
+            type: "general"
+          });
+
+          // 🔔 Push Notification for Lender (Failure)
+          await Notification.create({
+            userId: transaction.userId,
+            userModel: "User",
+            title: "Disbursement Failed",
+            message: `A group loan disbursement of KES ${transaction.amount} failed.`,
+            type: "general"
+          });
         }
       }
+
 
       await session.commitTransaction();
       session.endSession();
@@ -1691,20 +1710,31 @@ exports.b2cCallback = async (req, res) => {
           leader.phone,
           `Notice: KES ${amount} has been successfully disbursed to group member ${borrower?.fullName} from group ${group?.name || "your group"}.`
         );
+
+        // 🔔 Add Push Notification for Leader
+        await Notification.create({
+          userId: leader._id,
+          userModel: "Customer",
+          title: "Loan Successfully Disbursed",
+          message: `The loan of KES ${amount} for ${borrower?.fullName} has been successfully disbursed.`,
+          type: "loan"
+        });
       }
 
       if (lender) {
+        // 🔔 Add Push Notification for Lender
+        await Notification.create({
+          userId: lender._id,
+          userModel: "User",
+          title: "Disbursement Complete",
+          message: `Your disbursement of KES ${amount} to group member ${borrower?.fullName} was successful.`,
+          type: "loan"
+        });
+
         const lenderProfile = await Profile.findOne({ userId: lender._id }).session(session);
         const lenderName = lenderProfile?.fullName || "Lender";
-        
-        // Uncomment if lender wants SMS for every group member disbursement
-        /*
-        await sendSMS(
-          lender.phone,
-          `IZI Finance: Disbursement of KES ${amount} to ${borrower?.fullName} (Group: ${group?.name}) was successful.`
-        );
-        */
       }
+
     }
 
     /* =========================================================
