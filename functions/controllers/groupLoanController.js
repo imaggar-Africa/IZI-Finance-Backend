@@ -107,9 +107,10 @@ exports.getLenderGroupLoanRequests = async (req, res) => {
       lenderId: lenderId,
       agent_status: "approved" 
     })
-      .populate("groupId", "name")
+      .populate("groupId", "name interest_rate duration_months description")
       .populate("borrowerId", "fullName phone")
       .populate("requestedById", "fullName")
+      .populate("agentId", "name phone")
       .sort({ createdAt: -1 });
 
     res.json({
@@ -136,28 +137,39 @@ exports.reviewGroupLoanRequest = async (req, res) => {
     const { requestId, status, reason } = req.body;
     const lenderId = req.user._id;
 
+    console.log(`🔍 Reviewing Request: ${requestId} | Status: ${status} | By Lender: ${lenderId}`);
+
     if (!requestId || !status) {
       return res.status(400).json({ message: "requestId and status are required" });
     }
 
     // 1. Find the request
     const request = await GroupLoanRequest.findById(requestId).session(session);
-    if (!request) throw new Error("Request not found");
+    if (!request) {
+      console.log(`❌ Request NOT FOUND: ${requestId}`);
+      throw new Error("Request not found");
+    }
 
     if (request.status !== "pending") {
+      console.log(`❌ Request PROCESSED: Current Status ${request.status}`);
       throw new Error("Request has already been processed");
     }
 
     // 2. Find the group and verify lender
     const group = await Group.findById(request.groupId).session(session);
-    if (!group) throw new Error("Parent group not found");
+    if (!group) {
+      console.log(`❌ Group NOT FOUND: ${request.groupId}`);
+      throw new Error("Parent group not found");
+    }
 
     if (group.lenderId.toString() !== lenderId.toString()) {
+      console.log(`❌ UNAUTHORIZED: Lender ${lenderId} vs Group-Lender ${group.lenderId}`);
       throw new Error("You are not authorized to review this request");
     }
 
     // 3. Handle rejection
     if (status === "rejected") {
+      console.log(`🚫 Rejecting Request: ${requestId}`);
       request.status = "rejected";
       request.rejectionReason = reason || "Lender rejected the request";
       await request.save({ session });
@@ -179,20 +191,31 @@ exports.reviewGroupLoanRequest = async (req, res) => {
 
     // 4. Handle approval (Disbursement)
     if (status === "approved") {
+      console.log(`✅ Approving Request: ${requestId} | Starting B2C...`);
+
       // Find borrower for phone
       const borrower = await Customer.findById(request.borrowerId).session(session);
-      if (!borrower) throw new Error("Borrower not found");
+      if (!borrower) {
+        console.log(`❌ Borrower NOT FOUND: ${request.borrowerId}`);
+        throw new Error("Borrower not found");
+      }
 
       const phone = borrower.phone || borrower.phoneNumber;
-      if (!phone) throw new Error("Borrower has no phone number for disbursement");
+      if (!phone) {
+        console.log(`❌ Borrower No Phone: ${borrower.fullName}`);
+        throw new Error("Borrower has no phone number for disbursement");
+      }
 
       // Verify lender balance
       const amount = request.amount;
       const b2cFee = getB2CCharge(amount);
       const totalDebit = amount + b2cFee;
 
+      console.log(`💰 DISBURSEMENT AUDIT: Amount ${amount} | Fee ${b2cFee} | Total Debit ${totalDebit}`);
+
       const lender = await User.findById(lenderId).session(session);
       if (lender.walletBalance < totalDebit) {
+        console.log(`❌ INSUFFICIENT BALANCE: Wallet ${lender.walletBalance} vs Required ${totalDebit}`);
         throw new Error(`Insufficient wallet balance. Total required: ${totalDebit}`);
       }
 
@@ -201,7 +224,7 @@ exports.reviewGroupLoanRequest = async (req, res) => {
         {
           userId: lenderId,
           userModel: "User",
-          loanId: null, // We'll link this to the group loan request
+          loanId: null, 
           groupLoanRequestId: request._id,
           type: "group loan issued",
           amount: amount,
@@ -210,6 +233,8 @@ exports.reviewGroupLoanRequest = async (req, res) => {
           description: `Group Loan Disbursement for ${borrower.fullName}`
         }
       ], { session });
+
+      console.log(`📝 Transaction Created: ${transaction._id}. Calling Safaricom B2C...`);
 
       // Call B2C
       const b2cResponse = await initiateB2C(phone, amount, transaction._id);
@@ -332,7 +357,7 @@ exports.getAgentGroupLoanRequests = async (req, res) => {
 
     // 2. Fetch requests for those specific groups
     const requests = await GroupLoanRequest.find({ groupId: { $in: groupIds } })
-      .populate("groupId", "name")
+      .populate("groupId", "name interest_rate duration_months description")
       .populate("borrowerId", "fullName phone")
       .populate("requestedById", "fullName")
       .sort({ createdAt: -1 });
@@ -421,6 +446,3 @@ exports.agentReviewGroupLoanRequest = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
-
-
