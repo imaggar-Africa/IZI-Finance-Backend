@@ -57,9 +57,21 @@ function ensureInit() {
   return initPromise;
 }
 
+function isHealthPath(url = "") {
+  const pathOnly = url.split("?")[0];
+  return (
+    pathOnly === "/healthz" ||
+    pathOnly === "/ping" ||
+    pathOnly === "/version" ||
+    pathOnly === "/"
+  );
+}
+
 module.exports = async (req, res) => {
   try {
-    await ensureInit();
+    if (!isHealthPath(req.url)) {
+      await ensureInit();
+    }
     return app(req, res);
   } catch (err) {
     console.error("❌ Vercel handler init error:", err);

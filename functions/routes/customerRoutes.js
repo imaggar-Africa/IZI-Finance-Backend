@@ -4,9 +4,6 @@ const jsonParser = express.json({ limit: "10mb" });
 const customerController = require("../controllers/customerController");
 
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
-const { app } = require("../app");
-
-
 const authorizeRoles = require("../middleware/rolemiddleware");
 const { validateAfricaPhone } = require("../middleware/validateAfricaPhone");
 const busboyMiddleware = require("../middleware/busboyMiddleware");

@@ -89,7 +89,7 @@ function buildConfigFromEnv(env = process.env) {
     clientEmail: clean(env.CLIENT_EMAIL),
     fbPrivateKey: clean(env.FB_PRIVATE_KEY),
     projectId: clean(env.PROJECT_ID),
-    storageBucket: clean(env.STORAGE_BUCKET),
+    storageBucket: clean(env.STORAGE_BUCKET || env.FB_STORAGE_BUCKET),
 
     redisHost: clean(env.REDIS_HOST),
     redisPort: clean(env.REDIS_PORT),

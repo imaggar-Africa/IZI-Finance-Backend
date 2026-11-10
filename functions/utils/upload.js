@@ -1,6 +1,6 @@
 const multer = require("multer");
 const bucket = require("../config/firebase");
-const Busboy = require("busboy");
+const Busboy = require("@fastify/busboy");
 
 const storage = multer.memoryStorage();
 
@@ -37,12 +37,13 @@ function firebaseSafeUpload(fields) {
       if (req.rawBody) {
         console.log("🔄 Parsing from req.rawBody...");
         try {
-          const busboy = new Busboy({ headers: req.headers });
-          
+          const busboy = Busboy({ headers: req.headers });
+
           req.files = {};
           req.body = req.body || {}; // Preserve any existing body data
 
-          busboy.on("file", (fieldname, file, filename, encoding, mimetype) => {
+          busboy.on("file", (fieldname, file, info) => {
+            const { filename, encoding, mimeType: mimetype } = info;
             const chunks = [];
             file.on("data", (chunk) => chunks.push(chunk));
             file.on("end", () => {

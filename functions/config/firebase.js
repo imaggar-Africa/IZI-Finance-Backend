@@ -1,59 +1,60 @@
-// const admin = require("firebase-admin");
-
-// if (!process.env.PROJECT_ID ||
-//     !process.env.CLIENT_EMAIL ||
-//     !process.env.FB_PRIVATE_KEY ||
-//     !process.env.STORAGE_BUCKET) {
-//   throw new Error("❌ Firebase env vars missing");
-// }
-
-// const serviceAccount = {
-//   type: "service_account",
-//   project_id: process.env.PROJECT_ID.trim(),
-//   client_email: process.env.CLIENT_EMAIL.trim(),
-//   private_key: process.env.FB_PRIVATE_KEY.replace(/\\n/g, "\n"),
-// };
-
-// if (!admin.apps.length) {
-//   admin.initializeApp({
-//     credential: admin.credential.cert(serviceAccount),
-//     storageBucket: process.env.STORAGE_BUCKET.trim(),
-//   });
-// }
-
-// module.exports = admin;
-
 const admin = require("firebase-admin");
 
-if (
-  !process.env.PROJECT_ID ||
-  !process.env.CLIENT_EMAIL ||
-  !process.env.FB_PRIVATE_KEY ||
-  !process.env.STORAGE_BUCKET
-) {
-  throw new Error("❌ Firebase env vars missing");
+let bucketInstance = null;
+
+function getStorageBucketName() {
+  return (
+    process.env.STORAGE_BUCKET ||
+    process.env.FB_STORAGE_BUCKET ||
+    ""
+  ).trim();
 }
 
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.PROJECT_ID.trim(),
-  client_email: process.env.CLIENT_EMAIL.trim(),
-  // More robust parsing for private key to handle quotes and newlines from .env
-  private_key: process.env.FB_PRIVATE_KEY
-    .replace(/\\n/g, "\n")
-    .replace(/^["']|["']$/g, "")
-    .trim(),
-};
+function getFirebaseBucket() {
+  if (bucketInstance) return bucketInstance;
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    storageBucket: process.env.STORAGE_BUCKET.trim(),
-  });
+  const projectId = process.env.PROJECT_ID?.trim();
+  const clientEmail = process.env.CLIENT_EMAIL?.trim();
+  const privateKeyRaw = process.env.FB_PRIVATE_KEY;
+  const storageBucket = getStorageBucketName();
+
+  if (!projectId || !clientEmail || !privateKeyRaw || !storageBucket) {
+    throw new Error(
+      "Firebase env vars missing (PROJECT_ID, CLIENT_EMAIL, FB_PRIVATE_KEY, STORAGE_BUCKET or FB_STORAGE_BUCKET)"
+    );
+  }
+
+  const serviceAccount = {
+    type: "service_account",
+    project_id: projectId,
+    client_email: clientEmail,
+    private_key: String(privateKeyRaw)
+      .replace(/\\n/g, "\n")
+      .replace(/^["']|["']$/g, "")
+      .trim(),
+  };
+
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket,
+    });
+  }
+
+  bucketInstance = admin.storage().bucket();
+  bucketInstance.isConfigured = true;
+  return bucketInstance;
 }
 
-// ✅ EXPORT STORAGE BUCKET (NOT admin)
-const bucket = admin.storage().bucket();
-bucket.isConfigured = true;
+module.exports = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const bucket = getFirebaseBucket();
+      const value = bucket[prop];
+      return typeof value === "function" ? value.bind(bucket) : value;
+    },
+  }
+);
 
-module.exports = bucket;
+module.exports.getFirebaseBucket = getFirebaseBucket;
