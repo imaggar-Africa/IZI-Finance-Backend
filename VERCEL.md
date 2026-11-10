@@ -2,6 +2,8 @@
 
 Firebase setup is unchanged (`firebase.json`, `functions/index.js`, `npm run deploy`).
 
+Root `vercel.json` uses a **single** `services.izi-backend` entry (required by Vercel’s Services import UI). Do **not** use “Import single project” on `functions/` or `app/` in the dashboard—deploy from the repo root only.
+
 ## Quick start
 
 1. Install dependencies: `npm install`
