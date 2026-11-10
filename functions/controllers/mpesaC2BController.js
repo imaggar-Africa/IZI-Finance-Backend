@@ -147,6 +147,14 @@ exports.validationHandler = async (req, res) => {
       status: { $in: ["active", "overdue"] },
       billRefNumber: billRefNumber
     });
+    // 👉 Block payments for loans that are still pending approval
+    if (loan && loan.loanRequestStatus === "processing") {
+      console.warn(`⚠️ Loan ${loan._id} is pending. Rejecting C2B validation.`);
+      return res.status(200).json({
+        ResultCode: 1,
+        ResultDesc: "Loan pending – payment not accepted",
+      });
+    }
 
     // -------------------------
     // LOAN NOT FOUND → CHECK GROUP LOAN
@@ -266,12 +274,25 @@ exports.confirmationHandler = async (req, res) => {
       });
     }
 
+    // Disable mongoose validation for customer during C2B to avoid required field errors (e.g. livePhoto, frontID, backID)
+    customer.set('validateBeforeSave', false);
+
     // 2️⃣ FIND LOAN FOR THIS CUSTOMER
     const loan = await Loan.findOne({
       borrowerId: customer._id,
       status: { $in: ["active", "overdue"] },
       billRefNumber: BillRefNumber
     }).session(session);
+    // 👉 Ensure pending loans are not processed
+    if (loan && loan.status === "pending") {
+      console.warn(`⚠️ Loan ${loan._id} is pending. Rejecting C2B confirmation.`);
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(200).json({
+        ResultCode: 1,
+        ResultDesc: "Loan pending – payment not accepted",
+      });
+    }
 
     // 3️⃣ IF LOAN NOT FOUND → CHECK GROUP LOAN
     if (!loan) {
@@ -326,6 +347,7 @@ exports.confirmationHandler = async (req, res) => {
         amount: Amount,
         transactionId: MpesaTransactionId,
         status: "successful",
+        phone: req.body?.MSISDN || customer.phone || "Unknown",
         accountReference: BillRefNumber,
         description: `C2B Group Repayment - ${group.name}`
       });
@@ -374,127 +396,51 @@ exports.confirmationHandler = async (req, res) => {
       });
     }
 
-    // 5️⃣ NORMAL LOAN FOUND → PROCESS REPAYMENT (CONTINUE EXISTING)
-    loan.repaidAmount += Amount;
-    loan.balance -= Amount;
-
-    let event = "ON_TIME";
-    let daysLate = 0;
-
-    // Check if late
-    if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
-      event = "LATE";
-      daysLate = Math.ceil(
-        (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
-      );
-
-      // Apply 15% late penalty
-      const penalty = Math.ceil(loan.balance * 0.15);
-      loan.balance += penalty;
-      loan.penaltyAmount = (loan.penaltyAmount || 0) + penalty;
-
-      await sendSMS(
-        customer.phone,
-        `Dear ${customer.fullName}, your payment to IziFinance was late. A 15% penalty of KES ${penalty} has been applied. New balance: KES ${loan.balance}.`
-      );
-    }
-
-    // ⚡ CREDIT SCORE RECALCULATION
-    const scoreDelta = getRepaymentScoreDelta(loan, customer, Amount, new Date());
-    const { newScore } = updateCreditScore(customer, scoreDelta, event === "LATE" ? `Late repayment (${daysLate} days)` : "On-time repayment");
-
-    if (event === "LATE") {
-      customer.latePayments = (customer.latePayments || 0) + 1;
-    }
-
-
-    let fullyPaid = false;
-
-    if (loan.balance <= 0) {
-      loan.balance = 0;
-      loan.status = "fully paid";
-      fullyPaid = true;
-      loan.creditScoreAfter = newScore;
-
-      // Update counters
-      customer.totalLoansRepaid = (customer.totalLoansRepaid || 0) + 1;
-      customer.completedLoans = (customer.completedLoans || 0) + 1;
-      customer.totalLoans = (customer.totalLoans || 0) + 1;
-
-
-      if (loan.requestedByAgentId) {
-        await handleAgentFullRepaymentCommission(
-          loan,
-          { _id: MpesaTransactionId },
-          session
-        );
-      }
-    }
-
-    loan.repayments.push({
-      amount: Amount,
-      date: new Date(),
-      transactionId: MpesaTransactionId,
-      loanId: loan._id,
-      borrowerId: customer._id,
-      expectedPaymentDate: loan.dueDate,
-      wasPaymentLate: event === "LATE",
-      daysLate,
-      creditScoreDelta: scoreDelta
-    });
-
-    await loan.save({ session });
-    await customer.save({ session });
-
-    // 📩 Send 'Loan Cleared' Congratulations SMS (C2B)
-    if (fullyPaid) {
-      await sendSMS(
-        customer.phone,
-        `IziFinance – Congratulations!\nWell done ${customer.fullName} 🎉\nYou have fully cleared your loan. \nYour new loan limit has been updated. \nPlease check your IziFinance app to see your new limit.`
-      );
-    }
-
-    // Update lender
-    const lender = await User.findById(loan.lenderId).session(session);
-    if (lender) {
-      lender.walletBalance += Amount;
-      await lender.save({ session });
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    // 5️⃣ SEND SUCCESS SMS TO CUSTOMER
-    await sendSMS(
-      customer.phone,
-      `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${loan.balance}. Ref: ${MpesaTransactionId}`
-    );
-
-    // 🔔 Add Push Notification for Repayment
-    await Notification.create({
+    // 5️⃣ NORMAL LOAN FOUND → PROCESS REPAYMENT
+    const transaction = new Transaction({
+      type: "repayment",
       userId: customer._id,
       userModel: "Customer",
-      title: "Repayment Received",
-      message: `Your payment of KES ${Amount} has been received. Balance: KES ${loan.balance}`,
-      type: "repayment"
+      loanId: loan._id,
+      amount: Amount,
+      transactionId: MpesaTransactionId,
+      status: "pending",
+      phone: req.body?.MSISDN || customer.phone || "Unknown",
+      accountReference: BillRefNumber,
+      description: `C2B Loan Repayment via Paybill - Ref: ${BillRefNumber}`
     });
 
-    // 6️⃣ SEND SMS TO LENDER
-    // if (lender) {
-    //   await sendSMS(
-    //     lender.phone,
-    //     `💰 Repayment received from ${customer.fullName}. Amount: KES ${Amount}. New balance: KES ${loan.balance}.`
-    //   );
-    // }
+      const { processRepayment } = require("../utils/repaymentService");
+      await processRepayment(transaction, Amount, MpesaTransactionId, session);
 
-    // 7️⃣ AGENT NOTIFICATION IF FULLY PAID
-    if (fullyPaid && loan.requestedByAgentId) {
-      const agent = await AgentModel.findById(loan.requestedByAgentId);
+      await session.commitTransaction();
+      session.endSession();
+
+      // Fetch the updated loan after committing the transaction
+      const updatedLoan = await Loan.findById(loan._id);
+      if (updatedLoan) {
+        console.log(`ℹ️ [C2B_CONFIRMATION] Loan successfully updated. Loan ID: ${updatedLoan._id}, Previous Balance: ${loan.balance}, New Balance: ${updatedLoan.balance}`);
+      } else {
+        console.warn(`⚠️ [C2B_CONFIRMATION] Fetching updated loan failed for Loan ID: ${loan._id}`);
+      }
+
+      // Send SMS Notification to Customer
       await sendSMS(
-        agent.phone,
-        `🎉 Borrower ${customer.fullName} has fully repaid their loan. Your commission has been recorded.`
+        customer.phone,
+        `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${updatedLoan ? updatedLoan.balance : 'unknown'}. Ref: ${MpesaTransactionId}`
       );
-    }
+
+      // Agent SMS if fully paid (commission already handled in repaymentService)
+      if (updatedLoan.balance <= 0 && updatedLoan.requestedByAgentId) {
+        const agent = await AgentModel.findById(updatedLoan.requestedByAgentId);
+        if (agent) {
+          await sendSMS(
+            agent.phone,
+            `🎉 Borrower ${customer.fullName} has fully repaid their loan. Your commission has been recorded.`
+          );
+        }
+        // No need to call handleAgentFullRepaymentCommission here as it is handled in repaymentService
+      }
 
     return res.status(200).json({
       ResultCode: 0,
@@ -503,6 +449,11 @@ exports.confirmationHandler = async (req, res) => {
 
   } catch (error) {
     console.error("❌ Confirmation Error:", error);
+    console.error("❌ C2B Confirmation Failed details:", {
+      message: error.message,
+      stack: error.stack,
+      requestBody: req.body
+    });
 
     await session.abortTransaction();
     session.endSession();

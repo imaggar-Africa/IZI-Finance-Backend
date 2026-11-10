@@ -1,17 +1,35 @@
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { redis, isRedisEnabled } = require("./redis");
+const redisModule = require("./redis");
 const { defineSecret } = require("firebase-functions/params");
 
-// --- Secure Firebase Secrets ---
+// --- Firebase Secrets (fallback to process.env on Vercel / local) ---
 const JWT_ACCESS_SECRET = defineSecret("JWT_ACCESS_SECRET");
 const JWT_REFRESH_SECRET = defineSecret("JWT_REFRESH_SECRET");
 const JWT_ACCESS_TTL = defineSecret("JWT_ACCESS_TTL");
 const JWT_REFRESH_TTL = defineSecret("JWT_REFRESH_TTL");
 
+function secretOrEnv(secretParam, envName, label) {
+  const fromParam = secretParam.value()?.trim();
+  if (fromParam) return fromParam;
+  const fromEnv = process.env[envName]?.trim();
+  if (fromEnv) return fromEnv;
+  const err = new Error(`${label} is not configured (${envName})`);
+  err.code = "MISSING_SECRET";
+  throw err;
+}
+
+function optionalTtl(secretParam, envName, fallback) {
+  return (
+    secretParam.value()?.trim() ||
+    process.env[envName]?.trim() ||
+    fallback
+  );
+}
+
 // --- Ensure Redis is configured ---
 function assertRedisConfigured() {
-  if (!isRedisEnabled || !redis) {
+  if (!redisModule.isRedisEnabled || !redisModule.redis) {
     const err = new Error("Redis is not configured");
     err.code = "REDIS_DISABLED";
     throw err;
@@ -20,8 +38,8 @@ function assertRedisConfigured() {
 
 // --- Sign short-lived Access Token ---
 function signAccess(payload) {
-  return jwt.sign(payload, JWT_ACCESS_SECRET.value(), {
-    expiresIn: JWT_ACCESS_TTL.value()?.trim() || "30d",
+  return jwt.sign(payload, secretOrEnv(JWT_ACCESS_SECRET, "JWT_ACCESS_SECRET", "JWT access secret"), {
+    expiresIn: optionalTtl(JWT_ACCESS_TTL, "JWT_ACCESS_TTL", "30d"),
   });
 }
 
@@ -29,9 +47,9 @@ function signAccess(payload) {
 function signRefresh({ sub, jti }) {
   return jwt.sign(
     { sub, jti, type: "refresh" },
-    JWT_REFRESH_SECRET.value(),
+    secretOrEnv(JWT_REFRESH_SECRET, "JWT_REFRESH_SECRET", "JWT refresh secret"),
     {
-      expiresIn: JWT_REFRESH_TTL.value()?.trim() || "50d",
+      expiresIn: optionalTtl(JWT_REFRESH_TTL, "JWT_REFRESH_TTL", "50d"),
     }
   );
 }
@@ -52,7 +70,7 @@ async function issueSession(userId, ctx = {}) {
   assertRedisConfigured();
 
   // ✅ FIXED: Upstash Redis uses lowercase hset()
-  await redis.hset(key, {
+  await redisModule.redis.hset(key, {
     userId: String(userId),
     ua: String(ctx.ua || ""),
     ip: String(ctx.ip || ""),
@@ -60,7 +78,7 @@ async function issueSession(userId, ctx = {}) {
   });
 
   // ✅ expire() works fine with Upstash
-  await redis.expire(key, ttlSec);
+  await redisModule.redis.expire(key, ttlSec);
 
   return { refreshToken, jti };
 }
@@ -69,7 +87,10 @@ async function issueSession(userId, ctx = {}) {
 async function rotateRefresh(oldRefreshToken, ctx = {}) {
   let decoded;
   try {
-    decoded = jwt.verify(oldRefreshToken, JWT_REFRESH_SECRET.value());
+    decoded = jwt.verify(
+      oldRefreshToken,
+      secretOrEnv(JWT_REFRESH_SECRET, "JWT_REFRESH_SECRET", "JWT refresh secret")
+    );
   } catch (e) {
     const err = new Error("invalid");
     err.code = "JWT_VERIFY";
@@ -85,7 +106,7 @@ async function rotateRefresh(oldRefreshToken, ctx = {}) {
   const key = `rt:${decoded.jti}`;
   assertRedisConfigured();
 
-  const exists = await redis.exists(key);
+  const exists = await redisModule.redis.exists(key);
   if (!exists) {
     const err = new Error("invalid");
     err.code = "NOT_FOUND";
@@ -93,7 +114,7 @@ async function rotateRefresh(oldRefreshToken, ctx = {}) {
   }
 
   // Revoke old token (single-use)
-  await redis.del(key);
+  await redisModule.redis.del(key);
 
   // Mint new refresh token
   const { refreshToken, jti } = await issueSession(decoded.sub, ctx);
@@ -103,10 +124,13 @@ async function rotateRefresh(oldRefreshToken, ctx = {}) {
 // --- Optional: Revoke a given refresh token (logout) ---
 async function revokeRefresh(refreshToken) {
   try {
-    const { jti } = jwt.verify(refreshToken, JWT_REFRESH_SECRET.value());
+    const { jti } = jwt.verify(
+      refreshToken,
+      secretOrEnv(JWT_REFRESH_SECRET, "JWT_REFRESH_SECRET", "JWT refresh secret")
+    );
     if (!jti) return false;
     assertRedisConfigured();
-    await redis.del(`rt:${jti}`);
+    await redisModule.redis.del(`rt:${jti}`);
     return true;
   } catch {
     return false;

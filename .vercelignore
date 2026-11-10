@@ -1,0 +1,4 @@
+functions/.cache/**
+functions/node_modules/**
+**/.env
+**/.env.*

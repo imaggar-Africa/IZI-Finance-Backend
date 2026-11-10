@@ -141,7 +141,7 @@
 //   referralSource: {
 //     type: String,
 //     enum: ["existing_borrower", "advertisement", "direct"],
-//     required: true
+//     default: null
 //   },
 
 //   accountId: {
@@ -227,13 +227,13 @@ const customerSchema = new mongoose.Schema({
 
   phone: { type: String, required: true, unique: true },
 
-  email: { type: String, required: true, unique: true },
+  email: { type: String, unique: true, sparse: true },
 
   idNumber: { type: String, required: true, unique: true },
 
-  livePhoto: { type: String, required: true },
-  frontID: { type: String, required: true },
-  backID: { type: String, required: true },
+  livePhoto: { type: String, required: false },
+  frontID: { type: String, required: false },
+  backID: { type: String, required: false },
 
   isVerified: { type: Boolean, default: false },
 
@@ -247,10 +247,17 @@ const customerSchema = new mongoose.Schema({
 
   /* ================= PROFILE ================= */
   dateOfBirth: Date,
-  gender: { type: String, enum: ["Male", "Female", "Other"] },
+  gender: {
+    type: String,
+    enum: ["Male", "Female", "Other", "", null],
+    default: null,
+    set: (v) => (v === "" ? null : v)
+  },
   maritalStatus: {
     type: String,
-    enum: ["Single", "Married", "Widowed", "Divorced"]
+    enum: ["Single", "Married", "Widowed", "Divorced", "", null],
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   altPhoneNumber: String,
@@ -265,7 +272,9 @@ const customerSchema = new mongoose.Schema({
 
   monthlyIncomeRange: {
     type: String,
-    enum: ["<KES 5,000", "5k–10k", "10k–20k", "20k+"]
+    enum: ["<KES 5,000", "5k–10k", "10k–20k", "20k+", "", null],
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   nextOfKinName: String,
@@ -278,7 +287,9 @@ const customerSchema = new mongoose.Schema({
 
   preferredMobileMoney: {
     type: String,
-    enum: ["M-Pesa", "Airtel", "Other"]
+    enum: ["M-Pesa", "Airtel", "Other", "", null],
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   savingsGoal: String,
@@ -306,15 +317,18 @@ const customerSchema = new mongoose.Schema({
 
   referralSource: {
     type: String,
-    enum: ["existing_borrower", "advertisement", "direct"],
-    required: true
+    enum: ["existing_borrower", "advertisement", "direct", "", null],
+    // required: true  // made optional to avoid validation errors during C2B flows
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   accountId: {
     type: String,
     unique: true,
     index: true,
-    required: true
+    // required: true // made optional for C2B flows
+    default: null,
   },
 
   /* ================= CREDIT SCORE (DERIVED) ================= */
@@ -349,7 +363,7 @@ const customerSchema = new mongoose.Schema({
 
   creditLevel: {
     type: String,
-    enum: ["Blocked", "High Risk", "Low", "Medium", "Good", "Excellent"],
+    enum: ["Blocked", "High Risk", "Medium Risk", "Low Risk", "Low", "Medium", "Good", "Excellent"],
     default: "High Risk"
   },
 
@@ -372,28 +386,31 @@ const customerSchema = new mongoose.Schema({
 
   educationLevel: {
     type: String,
-    enum: ["None", "Primary", "Secondary", "Diploma", "Graduate", "Postgraduate"],
-    required: true,
-    trim: true
+    enum: ["None", "Primary", "Secondary", "Diploma", "Graduate", "Postgraduate", "", null],
+    required: false,
+    trim: true,
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   householdSize: {
     type: Number,
-    required: true,
+     required: false,
     min: 1,
     max: 20
   },
 
   loanPurpose: {
     type: String,
-    required: true,
-    trim: true
+  required: false,    trim: true
   },
 
   deviceType: {
     type: String,
-    enum: ["Android", "iOS", "Web", "USSD", "Other"],
-    required: true
+    enum: ["Android", "iOS", "Web", "USSD", "Other", "", null],
+    required: false,
+    default: null,
+    set: (v) => (v === "" ? null : v)
   },
 
   /* ================= MANUAL BLOCKING ================= */
@@ -414,6 +431,25 @@ const customerSchema = new mongoose.Schema({
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null }
 
+});
+
+/* ================= PRE-VALIDATE HOOK ================= */
+customerSchema.pre("validate", function (next) {
+  const optionalEnumFields = [
+    "monthlyIncomeRange",
+    "gender",
+    "maritalStatus",
+    "preferredMobileMoney",
+    "referralSource",
+    "educationLevel",
+    "deviceType"
+  ];
+  for (const field of optionalEnumFields) {
+    if (this[field] === "") {
+      this[field] = null;
+    }
+  }
+  next();
 });
 
 /* ================= PRE-SAVE HOOK ================= */

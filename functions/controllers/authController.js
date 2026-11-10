@@ -353,8 +353,9 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    console.log(`🔑 [ForgotPassword OTP] Generated Reset OTP for ${normalizedPhone}: ${otp}`);
 
     const message = `Your password reset code is: ${otp}. Valid for 10 minutes.`;
 

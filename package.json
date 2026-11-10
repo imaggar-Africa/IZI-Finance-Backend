@@ -7,7 +7,13 @@
     "dev": "nodemon server.js",
     "serve": "firebase emulators:start --only functions,hosting",
     "deploy": "firebase deploy --only functions,hosting",
+    "vercel:dev": "vercel dev",
+    "vercel:deploy": "vercel deploy --prod",
+    "check:env": "node scripts/check-env-keys.js",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": "20.x"
   },
   "keywords": [],
   "author": "",
@@ -52,6 +58,7 @@
     "xss": "^1.0.15"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "nodemon": "^3.1.9",
+    "vercel": "^41.0.0"
   }
 }

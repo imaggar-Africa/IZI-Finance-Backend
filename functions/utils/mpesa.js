@@ -47,7 +47,10 @@ function timestamp14() {
 }
 
 function stkPassword(shortcode, passkey, ts) {
-  return Buffer.from(`${shortcode}${passkey}${ts}`).toString("base64");
+  const cleanShortcode = String(shortcode || "").trim();
+  const cleanPasskey = String(passkey || "").trim();
+  const cleanTs = String(ts || "").trim();
+  return Buffer.from(`${cleanShortcode}${cleanPasskey}${cleanTs}`).toString("base64");
 }
 
 /* ---------------- STK PUSH ---------------- */
@@ -112,8 +115,12 @@ async function initiateSTKPush(phoneNumber, amount, accountRef) {
 
     return data;
   } catch (error) {
-    console.error("❌ STK Push failed:", error.response?.data || error.message);
-    throw new Error("STK Push failed");
+    const errorData = error.response?.data;
+    console.error("❌ STK Push failed:", errorData || error.message);
+    if (errorData && errorData.errorMessage) {
+      throw new Error(`STK Push failed: [${errorData.errorCode || 'Error'}] ${errorData.errorMessage}`);
+    }
+    throw new Error(`STK Push failed: ${error.message}`);
   }
 }
 
@@ -159,24 +166,33 @@ async function initiateB2C(phoneNumber, amount) {
   const phone = normalized.replace("+", "");
   const token = await getAccessToken();
 
-  const { data } = await axios.post(
-    `${getBaseURL()}/mpesa/b2c/v1/paymentrequest`,
-    {
-      InitiatorName: config.mpesaB2cInitiator.trim(),
-      SecurityCredential: config.mpesaB2cCredential.trim(),
-      CommandID: "BusinessPayment",
-      Amount: amount,
-      PartyA: config.mpesaB2cShortcode.trim(),
-      PartyB: phone,
-      Remarks: "Loan Disbursement",
-      QueueTimeOutURL: config.mpesaB2cTimeoutUrl.trim(),
-      ResultURL: config.mpesaB2cResultUrl.trim(),
-      Occasion: "Loan Payment",
-    },
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  try {
+    const { data } = await axios.post(
+      `${getBaseURL()}/mpesa/b2c/v1/paymentrequest`,
+      {
+        InitiatorName: config.mpesaB2cInitiator.trim(),
+        SecurityCredential: config.mpesaB2cCredential.trim(),
+        CommandID: "BusinessPayment",
+        Amount: amount,
+        PartyA: config.mpesaB2cShortcode.trim(),
+        PartyB: phone,
+        Remarks: "Loan Disbursement",
+        QueueTimeOutURL: config.mpesaB2cTimeoutUrl.trim(),
+        ResultURL: config.mpesaB2cResultUrl.trim(),
+        Occasion: "Loan Payment",
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
 
-  return data;
+    return data;
+  } catch (error) {
+    const errorData = error.response?.data;
+    console.error("❌ B2C Payment failed:", errorData || error.message);
+    if (errorData && errorData.errorMessage) {
+      throw new Error(`M-Pesa B2C failed: [${errorData.errorCode || 'Error'}] ${errorData.errorMessage}`);
+    }
+    throw new Error(`M-Pesa B2C failed: ${error.message}`);
+  }
 }
 
 /* ---------------- REVERSAL ---------------- */

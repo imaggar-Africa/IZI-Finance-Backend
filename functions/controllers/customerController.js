@@ -1,6 +1,7 @@
 
 const OTP = require("../models/OTP");
 const User = require("../models/User");
+const AgentModel = require("../models/AgentModel");
 const Borrower = require("../models/customer")
 
 const path = require("path");
@@ -139,6 +140,8 @@ exports.sendRegistrationOTPs = async (req, res) => {
     const guarOTP = Math.floor(1000 + Math.random() * 9000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+    console.log(`🔑 [Customer Register OTP] Kin Phone: ${kinNorm} (OTP: ${kinOTP}) | Guarantor Phone: ${guarNorm} (OTP: ${guarOTP})`);
+
     await OTP.findOneAndUpdate({ phone: kinNorm }, { otp: kinOTP, expiresAt }, { upsert: true });
     await OTP.findOneAndUpdate({ phone: guarNorm }, { otp: guarOTP, expiresAt }, { upsert: true });
 
@@ -168,50 +171,103 @@ exports.registerCustomer = async (req, res) => {
     console.log("BODY:", req.body);
     console.log("FILES:", req.files);
 
-    let {
+    /* ================= EXTRACT & MAP BODY FIELDS ================= */
+    const {
       fullName,
       phone,
-      email,
       idNumber,
+      email,
       dateOfBirth,
+      dob,
       gender,
       maritalStatus,
-      altPhoneNumber,
-      physicalAddress,
-      gpsLocation,
-      occupation,
-      monthlyIncomeRange,
-      nextOfKinName,
-      nextOfKinPhone,
-      guarantorName,
-      guarantorPhone,
-      kinOTP,
-      guarantorOTP,
-      preferredMobileMoney,
-      savingsGoal,
-      loanConsent,
-      kraPin,
-      agreementAcceptance,
-      preferences,
-      savingsBalance,
-      referralSource,
-      referredByBorrowerId,
-
-      // socio-economic
       educationLevel,
       householdSize,
+      physicalAddress,
+      altPhoneNumber,
+      alternatePhone,
+      occupation,
+      monthlyIncomeRange,
+      incomeRange,
+      savingsGoal,
       loanPurpose,
+      loanConsent,
+      agreementAcceptance,
+      kraPin,
+      preferredMobileMoney,
+      mobileMoney,
+      nextOfKinName,
+      nextOfKinPhone,
+      guarantor,
       deviceType,
-
-      // optional guarantor
-      guarantor
+      gpsLocation,
+      referralSource,
+      referredByBorrowerId
     } = req.body;
+
+    const resolvedDateOfBirth = dateOfBirth || dob;
+    const resolvedAltPhoneNumber = altPhoneNumber || alternatePhone;
+    const resolvedMonthlyIncomeRange = monthlyIncomeRange || incomeRange;
+    const resolvedPreferredMobileMoney = preferredMobileMoney || mobileMoney;
+
+    const loanConsentBool = loanConsent === "true" || loanConsent === true;
+    const agreementAcceptanceBool = agreementAcceptance === "true" || agreementAcceptance === true;
+
+    /* ================= PARSE GPS LOCATION ================= */
+    let parsedGpsLocation = undefined;
+    if (gpsLocation) {
+      try {
+        parsedGpsLocation = typeof gpsLocation === "string" ? JSON.parse(gpsLocation) : gpsLocation;
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid gpsLocation format (must be JSON)" });
+      }
+    }
+
+    /* ================= PARSE GUARANTOR ================= */
+    let parsedGuarantor = undefined;
+    let normalizedGuarantorPhone = undefined;
+    if (guarantor) {
+      try {
+        parsedGuarantor = typeof guarantor === "string" ? JSON.parse(guarantor) : guarantor;
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid guarantor format (must be JSON)" });
+      }
+
+      if (!parsedGuarantor.fullName || !parsedGuarantor.phone || !parsedGuarantor.relationship || !parsedGuarantor.idNumber) {
+        return res.status(400).json({
+          message: "guarantor object must contain: fullName, phone, relationship, idNumber"
+        });
+      }
+
+      const rawGuarantorPhone = String(
+        Array.isArray(parsedGuarantor.phone) ? parsedGuarantor.phone[0] : parsedGuarantor.phone
+      ).trim();
+
+      normalizedGuarantorPhone = normalizePhone(rawGuarantorPhone);
+
+      if (!normalizedGuarantorPhone) {
+        return res.status(400).json({
+          message:
+            "Invalid guarantor phone. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+        });
+      }
+    }
+
+    /* ================= FILE VALIDATION ================= */
+    if (
+      !req.files?.frontID?.[0] ||
+      !req.files?.backID?.[0] ||
+      !req.files?.livePhoto?.[0]
+    ) {
+      return res.status(400).json({
+        message: "Front ID, Back ID and Live Photo files are required"
+      });
+    }
 
     /* ================= REQUIRED FIELDS ================= */
     if (
       !fullName ||
       !phone ||
-      !email ||
       !idNumber ||
       !educationLevel ||
       !householdSize ||
@@ -220,7 +276,7 @@ exports.registerCustomer = async (req, res) => {
     ) {
       return res.status(400).json({
         message:
-          "fullName, phone, email, idNumber, educationLevel, householdSize, loanPurpose, deviceType are required"
+          "fullName, phone, idNumber, educationLevel, householdSize, loanPurpose, deviceType are required"
       });
     }
 
@@ -230,10 +286,11 @@ exports.registerCustomer = async (req, res) => {
         ? fullName.join(" ").trim()
         : String(fullName).trim();
 
-    const cleanEmail =
-      Array.isArray(email)
+    const cleanEmail = email
+      ? (Array.isArray(email)
         ? email[0].toLowerCase().trim()
-        : String(email).toLowerCase().trim();
+        : String(email).toLowerCase().trim())
+      : null;
 
     const cleanIdNumber =
       Array.isArray(idNumber)
@@ -283,12 +340,32 @@ exports.registerCustomer = async (req, res) => {
       return res.status(400).json({ message: "Invalid deviceType" });
     }
 
+    /* ================= REFERRAL VALIDATION ================= */
+    if (!referralSource) {
+      return res.status(400).json({ message: "referralSource is required" });
+    }
+
+    if (referralSource === "existing_borrower") {
+      if (!referredByBorrowerId) {
+        return res.status(400).json({
+          message: "referredByBorrowerId is required when referralSource is existing_borrower"
+        });
+      }
+
+      const referredBorrower = await Borrower.findById(referredByBorrowerId);
+      if (!referredBorrower) {
+        return res.status(404).json({
+          message: "Referred borrower not found"
+        });
+      }
+    }
+
     /* ================= DUPLICATE CHECK ================= */
     if (await Borrower.findOne({ phone: normalizedPhone })) {
       return res.status(409).json({ message: "Phone already registered" });
     }
 
-    if (await Borrower.findOne({ email: cleanEmail })) {
+    if (cleanEmail && (await Borrower.findOne({ email: cleanEmail }))) {
       return res.status(409).json({ message: "Email already registered" });
     }
 
@@ -296,23 +373,7 @@ exports.registerCustomer = async (req, res) => {
       return res.status(409).json({ message: "ID number already registered" });
     }
 
-    /* ================= VERIFY OTPs ================= */
-    const kinNorm = normalizePhone(nextOfKinPhone);
-    const guarNorm = normalizePhone(guarantorPhone);
-
-    const kinOTPRecord = await OTP.findOne({ phone: kinNorm, otp: kinOTP });
-    const guarOTPRecord = await OTP.findOne({ phone: guarNorm, otp: guarantorOTP });
-
-    if (!kinOTPRecord || kinOTPRecord.expiresAt < new Date()) {
-      return res.status(400).json({ message: "Invalid or expired Next of Kin OTP" });
-    }
-
-    if (!guarOTPRecord || guarOTPRecord.expiresAt < new Date()) {
-      return res.status(400).json({ message: "Invalid or expired Guarantor OTP" });
-    }
-    await OTP.deleteMany({ phone: { $in: [kinNorm, guarNorm] } });
-
-
+    /* ================= FILE UPLOAD ================= */
     const livePhoto = await uploadToFirebase(
       req.files?.livePhoto?.[0],
       "livePhoto",
@@ -331,7 +392,6 @@ exports.registerCustomer = async (req, res) => {
       "borrowers"
     );
 
-
     const accountId = await generateAccountId();
 
     /* ================= CREATE BORROWER ================= */
@@ -349,28 +409,28 @@ exports.registerCustomer = async (req, res) => {
       frontID,
       backID,
 
-      dateOfBirth,
+      dateOfBirth: resolvedDateOfBirth,
       gender,
       maritalStatus,
-      altPhoneNumber,
+      altPhoneNumber: resolvedAltPhoneNumber,
       physicalAddress,
-      gpsLocation,
+      gpsLocation: parsedGpsLocation,
       occupation,
-      monthlyIncomeRange,
+      monthlyIncomeRange: resolvedMonthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
-      guarantorName,
-      guarantorPhone,
-      kinVerified: true,
-      guarantorVerified: true,
-      preferredMobileMoney,
+      guarantorName: parsedGuarantor ? String(parsedGuarantor.fullName).trim() : null,
+      guarantorPhone: normalizedGuarantorPhone || null,
+      kinVerified: false,
+      guarantorVerified: false,
+      preferredMobileMoney: resolvedPreferredMobileMoney,
       savingsGoal,
-      loanConsent,
+      loanConsent: loanConsentBool,
       kraPin,
-      agreementAcceptance,
+      agreementAcceptance: agreementAcceptanceBool,
 
-      preferences: preferences || {},
-      savingsBalance: savingsBalance || 0,
+      preferences: {},
+      savingsBalance: 0,
 
       referralSource,
       referredByBorrowerId:
@@ -390,50 +450,24 @@ exports.registerCustomer = async (req, res) => {
       creditLevel: "High Risk"
     });
 
-    /* ================= OPTIONAL GUARANTOR ================= */
+    /* ================= CREATE GUARANTOR DOCUMENT ================= */
     let guarantorDoc = null;
 
-    if (guarantor) {
-      let g;
-      try {
-        g = typeof guarantor === "string" ? JSON.parse(guarantor) : guarantor;
-      } catch {
-        return res.status(400).json({
-          message: "Invalid guarantor format (must be JSON)"
-        });
-      }
-
-      if (!g.fullName || !g.phone || !g.relationship || !g.idNumber) {
-        return res.status(400).json({
-          message: "All guarantor fields are required"
-        });
-      }
-
-      const rawGuarantorPhone = String(
-        Array.isArray(g.phone) ? g.phone[0] : g.phone
-      ).trim();
-
-      const gPhone = normalizePhone(rawGuarantorPhone);
-
-      if (!gPhone) {
-        return res.status(400).json({
-          message:
-            "Invalid guarantor phone. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
-        });
-      }
-
+    if (parsedGuarantor) {
       guarantorDoc = await Guarantor.create({
         borrowerId: borrower._id,
-        fullName: String(g.fullName).trim(),
-        phone: gPhone,
-        relationship: String(g.relationship).trim(),
-        idNumber: String(g.idNumber).trim(),
+        fullName: String(parsedGuarantor.fullName).trim(),
+        phone: normalizedGuarantorPhone,
+        relationship: String(parsedGuarantor.relationship).trim(),
+        idNumber: String(parsedGuarantor.idNumber).trim(),
         consent: false,
         isVerified: false
       });
 
-      const { sendVerificationCode } = req.app.locals.otpService;
-      await sendVerificationCode(gPhone);
+      const otpService = req.app.locals.otpService;
+      if (otpService && typeof otpService.sendVerificationCode === "function") {
+        await otpService.sendVerificationCode(normalizedGuarantorPhone);
+      }
     }
 
     /* ================= RESPONSE ================= */
@@ -469,7 +503,25 @@ exports.registerCustomer = async (req, res) => {
 // Controller to get all customers
 exports.getAllCustomers = async (req, res) => {
   try {
-    const customers = await Borrower.find({ isDeleted: false })
+    let query = { isDeleted: false };
+
+    if (req.user.role === "lender") {
+      const lenderId = req.user._id;
+      const agents = await AgentModel.find({ lenderId }).select("_id");
+      const agentIds = agents.map(a => a._id);
+
+      query.$or = [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ];
+    } else if (req.user.role === "agent") {
+      query.$or = [
+        { registeredBy: req.user._id, registeredByModel: "Agent" },
+        { agentId: req.user._id }
+      ];
+    }
+
+    const customers = await Borrower.find(query)
       .sort({ createdAt: -1 });
 
     if (!customers.length) {
@@ -708,9 +760,28 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
     }).distinct("borrowerId");
 
     // 2️⃣ Get borrowers without active loans
-    const customersWithoutActiveLoans = await Borrower.find({
-      _id: { $nin: activeLoanBorrowerIds }
-    });
+    let query = {
+      _id: { $nin: activeLoanBorrowerIds },
+      isDeleted: false
+    };
+
+    if (req.user.role === "lender") {
+      const lenderId = req.user._id;
+      const agents = await AgentModel.find({ lenderId }).select("_id");
+      const agentIds = agents.map(a => a._id);
+
+      query.$or = [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ];
+    } else if (req.user.role === "agent") {
+      query.$or = [
+        { registeredBy: req.user._id, registeredByModel: "Agent" },
+        { agentId: req.user._id }
+      ];
+    }
+
+    const customersWithoutActiveLoans = await Borrower.find(query);
 
     // 3️⃣ Attach Loan Details + Borrower Type
     const customersWithLoanDetails = await Promise.all(
@@ -774,7 +845,25 @@ exports.getCustomersWithoutActiveLoans = async (req, res) => {
 
 exports.getBorrowerSummary = async (req, res) => {
   try {
-    const borrowers = await Borrower.find();
+    let query = { isDeleted: false };
+
+    if (req.user.role === "lender") {
+      const lenderId = req.user._id;
+      const agents = await AgentModel.find({ lenderId }).select("_id");
+      const agentIds = agents.map(a => a._id);
+
+      query.$or = [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ];
+    } else if (req.user.role === "agent") {
+      query.$or = [
+        { registeredBy: req.user._id, registeredByModel: "Agent" },
+        { agentId: req.user._id }
+      ];
+    }
+
+    const borrowers = await Borrower.find(query);
 
     const summaries = await Promise.all(
       borrowers.map(async (b) => {

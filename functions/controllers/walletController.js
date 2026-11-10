@@ -23,16 +23,18 @@ exports.sendBalanceSMS = async (req, res) => {
     }
 
     // Get the balance
-    let balance;
+    let balance = 0;
     if (user.role === "borrower") {
       const borrower = await Borrower.findOne({ userId: user._id });
-      balance = borrower.savingsBalance;
+      balance = borrower ? (borrower.savingsBalance || 0) : 0;
     } else if (user.role === "lender") {
-      balance = user.walletBalance;
+      balance = user.walletBalance || 0;
     }
 
+    const formattedBalance = Number(balance).toFixed(2);
+
     // Send SMS
-    const message = `Your current balance is Ksh ${balance}.`;
+    const message = `Your current balance is Ksh ${formattedBalance}.`;
     await sendSMS(user.phone, message);
 
     res.status(200).json({ message: "Balance sent via SMS" });
@@ -131,21 +133,25 @@ exports.withdraw = async (req, res) => {
       return res.status(400).json({ message: "Invalid amount" });
     }
 
-    if (user.walletBalance < withdrawalAmount) {
+    const mpesaCharge = getB2CCharge(withdrawalAmount);
+    const totalDebit = withdrawalAmount + mpesaCharge;
+
+    if (user.walletBalance < totalDebit) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         message: "Insufficient balance",
         currentBalance: user.walletBalance,
+        requiredAmount: totalDebit,
         requestedAmount: withdrawalAmount
       });
     }
 
     // ✅ DON'T DEDUCT BALANCE IMMEDIATELY - just validate
     const balanceBefore = user.walletBalance;
-    const expectedBalanceAfter = balanceBefore - withdrawalAmount;
+    const expectedBalanceAfter = balanceBefore - totalDebit;
 
-    console.log(`💰 Balance validation: ${balanceBefore} -> ${expectedBalanceAfter} (will deduct on M-Pesa success)`);
+    console.log(`💰 Balance validation: ${balanceBefore} -> ${expectedBalanceAfter} (will deduct on M-Pesa success, Fee: ${mpesaCharge})`);
 
     // Create a pending withdrawal transaction WITHOUT deducting balance
     const withdrawalTransaction = await Transaction.create(
@@ -154,6 +160,7 @@ exports.withdraw = async (req, res) => {
         type: "withdrawal",
         userModel: "User",
         amount: withdrawalAmount,
+        mpesaCharge: mpesaCharge,
         status: "pending",
         phone: user.phone,
         balanceBefore: balanceBefore,
@@ -797,10 +804,56 @@ exports.reviewAgentWithdrawRequest = async (req, res) => {
       throw new Error("Insufficient wallet balance for approval");
     }
 
+    const lender = request.lenderId;
+    if (!lender) {
+      throw new Error("Lender not found in withdrawal request");
+    }
+
+    const mpesaCharge = getB2CCharge(request.amount);
+    const totalDebit = request.amount + mpesaCharge;
+
+    if (lender.walletBalance == null) {
+      throw new Error("Lender wallet balance not found");
+    }
+
+    if (lender.walletBalance < totalDebit) {
+      throw new Error(`Insufficient lender wallet balance (available KES ${lender.walletBalance}, required KES ${totalDebit})`);
+    }
+
+    const lenderBalanceBefore = lender.walletBalance;
+    const lenderBalanceAfter = lenderBalanceBefore - totalDebit;
+
+    lender.walletBalance = lenderBalanceAfter;
+    await lender.save({ session });
+
     request.status = "approved";
     await request.save({ session });
 
     const reference = `${agent.name}-${agent.phone}-AGENT-${Date.now()}`;
+
+    // Record transaction for the lender
+    await Transaction.create(
+      [{
+        userId: lender._id,
+        userModel: "User",
+        withdrawalRequestId: request._id,
+        type: "withdrawal",
+        amount: request.amount,
+        mpesaCharge: mpesaCharge,
+        status: "successful",
+        phone: lender.phone || agent.phone,
+        accountReference: reference,
+        balanceBefore: lenderBalanceBefore,
+        balanceAfter: lenderBalanceAfter,
+      }],
+      { session }
+    );
+
+    const agentBalanceBefore = agent.walletBalance;
+    const agentBalanceAfter = agentBalanceBefore - request.amount;
+
+    agent.walletBalance = agentBalanceAfter;
+    await agent.save({ session });
 
     const [transaction] = await Transaction.create(
       [{
@@ -812,8 +865,8 @@ exports.reviewAgentWithdrawRequest = async (req, res) => {
         status: "pending",
         phone: agent.phone,
         accountReference: reference,
-        balanceBefore: agent.walletBalance,
-        balanceAfter: agent.walletBalance - request.amount,
+        balanceBefore: agentBalanceBefore,
+        balanceAfter: agentBalanceAfter,
       }],
       { session }
     );

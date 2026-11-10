@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const jsonParser = express.json({ limit: "10mb" });
 
 const loanController = require("../controllers/loanController");
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
@@ -8,17 +9,18 @@ const loanRestriction = require("../middleware/loanRestriction");
 
 2
 // Issue loan
-router.post("/issue", protect, loanRestriction, loanController.issueLoan);
+router.post("/issue", protect, jsonParser, loanRestriction, loanController.issueLoan);
 
 // Outstanding loans (borrower)
 router.post(
   "/outstanding/loan-details",
   borrowerProtect,
+  jsonParser,
   loanController.getActiveLoansByPhone
 );
 
 // Repayment
-router.post("/repay", borrowerProtect, loanController.trackRepayment);
+router.post("/repay", borrowerProtect, jsonParser, loanController.trackRepayment);
 
 // Fully paid
 router.get("/fully-paid", protect, loanController.getFullyPaidLoans);
@@ -41,14 +43,8 @@ router.get(
 
 router.get(
   "/borrowers/active-overdue",
-  loanController.getBorrowersWithLoans
-);
-
-router.get(
-  "/outstanding/:borrowerId",
   protect,
-  authorizeRoles("lender", "agent"),
-  loanController.getLoansByBorrower
+  loanController.getBorrowersWithLoans
 );
 
 router.get("/outstanding/all",
@@ -57,6 +53,13 @@ router.get("/outstanding/all",
   loanController.getOutstandingLoans
 )
 
+router.get(
+  "/outstanding/:borrowerId",
+  protect,
+  authorizeRoles("lender", "agent"),
+  loanController.getLoansByBorrower
+);
+
 
 
 // Agent → request loan
@@ -64,6 +67,7 @@ router.post(
   "/request-loan",
   protect,
   authorizeRoles("agent"),
+  jsonParser,
   loanController.requestLoan
 );
 
@@ -80,6 +84,7 @@ router.post(
   protect,
   loanRestriction,
   authorizeRoles("lender"),
+  jsonParser,
   loanController.reviewLoanRequest
 );
 
@@ -105,6 +110,7 @@ router.get(
 router.post(
   "/borrower/request",
   borrowerProtect,
+  jsonParser,
   loanController.borrowerRequestLoan
 );
 
@@ -121,6 +127,7 @@ router.post(
   "/agent/borrower-action",
   protect,
   authorizeRoles("agent"),
+  jsonParser,
   loanController.agentActionOnBorrowerRequest
 );
 
@@ -157,6 +164,7 @@ router.post(
 
   protect,
   authorizeRoles("lender"),
+  jsonParser,
   loanController.sendStatementSMS
 );
 

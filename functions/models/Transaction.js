@@ -4,7 +4,8 @@ const transactionSchema = new mongoose.Schema({
   type: { 
     type: String, 
     enum: ["repayment", "savings", "loan issued", "withdrawal", "customer deposit", "customer payment", "agent withdrawal",
-      "customer withdrawal", "group loan issued", "group member repayment", "monthly group repayment"
+      "customer withdrawal", "group loan issued", "group member repayment", "monthly group repayment",
+      "penalty", "monthly_penalty"
     ],
     required: true 
   },
@@ -54,11 +55,27 @@ originatorConversationID: {
 
 
   amount: { type: Number, required: true },
+  description: { type: String, default: null },
   mpesaCharge: { type: Number, default: 0 },
   balanceBefore: { type: Number, default: 0 },
   balanceAfter: { type: Number, default: 0 },
 
-  status: { type: String, enum: ["pending", "successful","reversed" ,"failed"], default: "pending" },
+  status: { 
+    type: String, 
+    enum: ["pending", "successful", "reversed", "failed", "Pending", "Processing", "Paid", "Reconciliation Required"], 
+    default: "Pending" 
+  },
+
+  reconciliationAttempts: { type: Number, default: 0 },
+  reconciliationError: { type: String },
+  reconciliationLog: [
+    {
+      attempt: { type: Number, required: true },
+      status: { type: String, required: true },
+      message: { type: String },
+      timestamp: { type: Date, default: Date.now }
+    }
+  ],
 
   mpesaPayload: { type: mongoose.Schema.Types.Mixed }, // store raw Daraja payload
   createdAt: { type: Date, default: Date.now }

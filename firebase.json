@@ -1,6 +1,10 @@
 {
   "functions": {
     "source": "functions",
-    "nodeVersion": "20"
+    "nodeVersion": "20",
+    "ignore": [
+      "node_modules",
+      ".env"
+    ]
   }
 }

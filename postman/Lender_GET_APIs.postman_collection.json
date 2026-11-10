@@ -1,0 +1,1170 @@
+{
+	"info": {
+		"_postman_id": "8b5e2b4d-1e9a-4c8d-bf82-a0e7f8d6c5bc",
+		"name": "IZI Finance - Lender GET APIs Collection",
+		"description": "Comprehensive Postman collection for all Lender GET APIs in the IZI Finance Backend",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Lender Core & Agents",
+			"item": [
+				{
+					"name": "Get Lender's Customers",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/lender/customers",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"lender",
+								"customers"
+							]
+						},
+						"description": "Fetch customers registered by the lender or their agents."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Lender's Agents",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/lender/agents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"lender",
+								"agents"
+							]
+						},
+						"description": "Get all agents registered by the lender, along with metrics."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Customers for Agent",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/agent/customers/:agentId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"agent",
+								"customers",
+								":agentId"
+							],
+							"variable": [
+								{
+									"key": "agentId",
+									"value": "{{agentId}}"
+								}
+							]
+						},
+						"description": "Get all customers belonging to a specific agent."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Customers & Profiles",
+			"item": [
+				{
+					"name": "Get All Customers (Filtered)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/customers/findAll",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"customers",
+								"findAll"
+							]
+						},
+						"description": "Get all customers filtered by logged-in user context."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Eligible Customers (Without Active Loans)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/customers/eligible-loan",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"customers",
+								"eligible-loan"
+							]
+						},
+						"description": "Get customers eligible for new loans (no active loan exists)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Customers Summary",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/customers/summary",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"customers",
+								"summary"
+							]
+						},
+						"description": "Get borrower summaries (Credit score, active balances, etc.)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Logged-in Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/profile",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"profile"
+							]
+						},
+						"description": "Get profile details of the logged-in user."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Customer Profile by Phone",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/profile/customer/:phone",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"profile",
+								"customer",
+								":phone"
+							],
+							"variable": [
+								{
+									"key": "phone",
+									"value": "{{customerPhone}}"
+								}
+							]
+						},
+						"description": "Get customer profile details using their phone number."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Borrower Guarantors",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/guarantors/borrower/:borrowerId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"guarantors",
+								"borrower",
+								":borrowerId"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get list of guarantors for a specific borrower."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Borrower Next of Kin",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/next-of-kin/:borrowerId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"next-of-kin",
+								":borrowerId"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get Next of Kin details for a specific borrower."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Loans & Payments",
+			"item": [
+				{
+					"name": "Get Active Loan Requests",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/loan-requests",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"loan-requests"
+							]
+						},
+						"description": "Get all pending loan requests for the lender."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Outstanding Loans",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/outstanding/all",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"outstanding",
+								"all"
+							]
+						},
+						"description": "Get all unpaid/outstanding loans in the system."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Fully Paid Loans",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/fully-paid",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"fully-paid"
+							]
+						},
+						"description": "Get all fully settled loans."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Borrowers with Active/Overdue Loans",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/borrowers/active-overdue",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"borrowers",
+								"active-overdue"
+							]
+						},
+						"description": "Get borrowers who have active or overdue loans."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Outstanding Loans by Borrower",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/outstanding/:borrowerId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"outstanding",
+								":borrowerId"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get outstanding loans for a specific borrower."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Fully Paid Loans by Customer",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/borrower/:borrowerId/fully-paid",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"borrower",
+								":borrowerId",
+								"fully-paid"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get fully paid loans for a specific customer."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Fully Paid Loans PDF",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/borrower/:borrowerId/fully-paid/pdf",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"borrower",
+								":borrowerId",
+								"fully-paid",
+								"pdf"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Download fully paid loans report PDF for a specific customer."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Payment Instructions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/pay/:loanId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"pay",
+								":loanId"
+							],
+							"variable": [
+								{
+									"key": "loanId",
+									"value": "{{loanId}}"
+								}
+							]
+						},
+						"description": "Get payment link or QR code details for a loan."
+					},
+					"response": []
+				},
+				{
+					"name": "Download Loan Receipt PDF",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/:loanId/receipt/pdf",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								":loanId",
+								"receipt",
+								"pdf"
+							],
+							"variable": [
+								{
+									"key": "loanId",
+									"value": "{{loanId}}"
+								}
+							]
+						},
+						"description": "Get loan receipt PDF."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Customer Statement",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/customer-statement/:borrowerId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"customer-statement",
+								":borrowerId"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get complete loan account statement for a customer."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Customer Eligibility",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/loans/eligibility/:borrowerId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"loans",
+								"eligibility",
+								":borrowerId"
+							],
+							"variable": [
+								{
+									"key": "borrowerId",
+									"value": "{{borrowerId}}"
+								}
+							]
+						},
+						"description": "Get credit limit and borrowing eligibility for a customer."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Groups",
+			"item": [
+				{
+					"name": "Get All Lender Groups",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups"
+							]
+						},
+						"description": "Get all groups belonging to the lender."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Loan Requests",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/loan-requests/lender",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"loan-requests",
+								"lender"
+							]
+						},
+						"description": "Get group loan requests pending lender review."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Pending Groups for Approval",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/status/pending",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"status",
+								"pending"
+							]
+						},
+						"description": "Get groups that are pending verification/approval by lender."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Group Members",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/all-members",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"all-members"
+							]
+						},
+						"description": "Get a list of all group members across all groups."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Details",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/:groupId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								":groupId"
+							],
+							"variable": [
+								{
+									"key": "groupId",
+									"value": "{{groupId}}"
+								}
+							]
+						},
+						"description": "Get details of a specific group."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Members List",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/:groupId/members",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								":groupId",
+								"members"
+							],
+							"variable": [
+								{
+									"key": "groupId",
+									"value": "{{groupId}}"
+								}
+							]
+						},
+						"description": "Get members inside a specific group."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Repayments History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/:groupId/repayments",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								":groupId",
+								"repayments"
+							],
+							"variable": [
+								{
+									"key": "groupId",
+									"value": "{{groupId}}"
+								}
+							]
+						},
+						"description": "Get repayments done by members of a group."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Monthly Aggregates",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/:groupId/group-repayments",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								":groupId",
+								"group-repayments"
+							],
+							"variable": [
+								{
+									"key": "groupId",
+									"value": "{{groupId}}"
+								}
+							]
+						},
+						"description": "Get aggregated monthly repayment stats for a group."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Groups by Agent",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/agent/:agentId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"agent",
+								":agentId"
+							],
+							"variable": [
+								{
+									"key": "agentId",
+									"value": "{{agentId}}"
+								}
+							]
+						},
+						"description": "Get groups belonging to a specific agent."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Alerts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/alerts/group/:groupId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"alerts",
+								"group",
+								":groupId"
+							],
+							"variable": [
+								{
+									"key": "groupId",
+									"value": "{{groupId}}"
+								}
+							]
+						},
+						"description": "Get missed payment/health alerts for a group."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Weekly Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/reports/weekly",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"reports",
+								"weekly"
+							]
+						},
+						"description": "Get weekly group activities report."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Group Monthly Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/groups/reports/monthly",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"groups",
+								"reports",
+								"monthly"
+							]
+						},
+						"description": "Get monthly group activities report."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Reports & Analytics",
+			"item": [
+				{
+					"name": "Get Dashboard Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"stats"
+							]
+						},
+						"description": "Get high-level dashboard summaries & statistics."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Loans Summary Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stats/summary",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"stats",
+								"summary"
+							]
+						},
+						"description": "Get stats summaries for all loans."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Portfolio At Risk (PAR) Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stats/par",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"stats",
+								"par"
+							]
+						},
+						"description": "Get Portfolio At Risk analytics."
+					},
+					"response": []
+				},
+				{
+					"name": "Download Stats PDF",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stats/pdf",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"stats",
+								"pdf"
+							]
+						},
+						"description": "Get stats report as a downloadable PDF."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Dashboard Summary Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/summary",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"summary"
+							]
+						},
+						"description": "Get overall dashboard report details."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Loans Volumetric Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/loans",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"loans"
+							]
+						},
+						"description": "Get detailed loan volume reports."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Repayments Performance Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/repayments",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"repayments"
+							]
+						},
+						"description": "Get repayment performance report."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Profit & Yield Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/profit",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"profit"
+							]
+						},
+						"description": "Get interest/profit yields report."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Borrowers Segmentation Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/borrowers",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"borrowers"
+							]
+						},
+						"description": "Get borrower demographics & performance segmentation."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Agent Performance Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/agents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"agents"
+							]
+						},
+						"description": "Get agent portfolio quality & leaderboards."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Audit Logs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/audit-logs",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"audit-logs"
+							]
+						},
+						"description": "Get audit logs report."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Wallet & Transactions",
+			"item": [
+				{
+					"name": "Get Recent Transactions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/transactions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"transactions"
+							]
+						},
+						"description": "Get lender's transaction history."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Pending Agent Withdrawals",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/wallet/agent-withdrawal",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"wallet",
+								"agent-withdrawal"
+							]
+						},
+						"description": "Get all agent withdrawal requests awaiting lender review."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Unread Notifications",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"notifications"
+							]
+						},
+						"description": "Get unread lender notifications."
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{token}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:9001",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "YOUR_LENDER_ACCESS_TOKEN",
+			"type": "string"
+		},
+		{
+			"key": "borrowerId",
+			"value": "borrower_id_here",
+			"type": "string"
+		},
+		{
+			"key": "agentId",
+			"value": "agent_id_here",
+			"type": "string"
+		},
+		{
+			"key": "groupId",
+			"value": "group_id_here",
+			"type": "string"
+		},
+		{
+			"key": "loanId",
+			"value": "loan_id_here",
+			"type": "string"
+		},
+		{
+			"key": "customerPhone",
+			"value": "+254712345678",
+			"type": "string"
+		}
+	]
+}

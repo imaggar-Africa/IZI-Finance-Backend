@@ -1,0 +1,42 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "installCommand": "npm install && npm install --prefix functions",
+  "buildCommand": "",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/((?!api/cron).*)",
+      "destination": "/api"
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "memory": 3008,
+      "includeFiles": "functions/**"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/loan-reminder",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/reconciliation",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/group-health",
+      "schedule": "0 0 1 * *"
+    },
+    {
+      "path": "/api/cron/monthly-group-repayment",
+      "schedule": "0 1 1 * *"
+    },
+    {
+      "path": "/api/cron/credit-score-recovery",
+      "schedule": "0 0 1 * *"
+    }
+  ]
+}

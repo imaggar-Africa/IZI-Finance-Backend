@@ -32,16 +32,18 @@ const { sendSMS } = require("../utils/sms");
       }
   
       // Get the balance
-      let balance;
+      let balance = 0;
       if (user.role === "borrower") {
         const borrower = await Borrower.findOne({ userId: user._id });
-        balance = borrower.savingsBalance;
+        balance = borrower ? (borrower.savingsBalance || 0) : 0;
       } else if (user.role === "lender") {
-        balance = user.walletBalance;
+        balance = user.walletBalance || 0;
       }
   
+      const formattedBalance = Number(balance).toFixed(2);
+
       // Send SMS
-      const message = `Your current balance is Ksh ${balance}.`;
+      const message = `Your current balance is Ksh ${formattedBalance}.`;
       await sendSMS(user.phone, message);
   
       res.status(200).json({ message: "Balance sent via SMS" });
@@ -108,7 +110,7 @@ const { sendSMS } = require("../utils/sms");
               response = "CON Enter the borrower's phone number:";
               break;
             case "2": // Check Balance
-              response = `END Your balance is Ksh ${user.walletBalance}`;
+              response = `END Your balance is Ksh ${Number(user.walletBalance || 0).toFixed(2)}`;
               break;
             case "3": // Deposit Funds
               response = "CON Enter the amount to deposit:";

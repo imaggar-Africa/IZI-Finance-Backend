@@ -219,6 +219,12 @@ exports.reviewGroupLoanRequest = async (req, res) => {
         throw new Error(`Insufficient wallet balance. Total required: ${totalDebit}`);
       }
 
+      const balanceBefore = lender.walletBalance;
+
+      // 🔥 Deduct principal + fee immediately
+      lender.walletBalance -= totalDebit;
+      await lender.save({ session });
+
       // Create Pending Transaction
       const [transaction] = await Transaction.create([
         {
@@ -228,9 +234,12 @@ exports.reviewGroupLoanRequest = async (req, res) => {
           groupLoanRequestId: request._id,
           type: "group loan issued",
           amount: amount,
+          mpesaCharge: b2cFee,
           status: "pending",
           phone: phone,
-          description: `Group Loan Disbursement for ${borrower.fullName}`
+          description: `Group Loan Disbursement for ${borrower.fullName}`,
+          balanceBefore: balanceBefore,
+          balanceAfter: lender.walletBalance
         }
       ], { session });
 

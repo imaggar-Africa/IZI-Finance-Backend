@@ -1,6 +1,7 @@
 const Customer = require("../models/customer");
 const Loan = require("../models/Loan");
 const { sendSMS } = require("../utils/sms");
+const { applyOverduePenaltyIfNeeded, applyMonthlyPenaltyIfNeeded } = require("../utils/cron/loanCron");
 
 const PENALTY_RATE = 0.15;
 
@@ -15,13 +16,13 @@ exports.sendDueDateReminders = async () => {
     today.setHours(0, 0, 0, 0);
 
     const loans = await Loan.find({
-      status: "active",
+      status: { $in: ["active", "overdue"] },
       loanRequestStatus: "approved",
       balance: { $gt: 0 }
-    });
+    }).populate("borrowerId lenderId");
 
     for (const loan of loans) {
-      const borrower = await Customer.findById(loan.borrowerId);
+      const borrower = loan.borrowerId;
       if (!borrower?.phone) continue;
 
       // 🛑 Avoid sending same reminder twice a day
@@ -32,6 +33,10 @@ exports.sendDueDateReminders = async () => {
         continue;
       }
 
+      // Check and apply penalties first so balance is accurate
+      await applyOverduePenaltyIfNeeded(loan);
+      await applyMonthlyPenaltyIfNeeded(loan);
+
       let messageText = "";
 
       /* 🔔 BEFORE DUE DATE */
@@ -41,10 +46,7 @@ exports.sendDueDateReminders = async () => {
 
       /* 🚨 AFTER DUE DATE (LATE PAYMENT NOTICE) */
       else {
-        const penalty = Math.round(loan.balance * PENALTY_RATE);
-        const totalPayable = loan.balance + penalty;
-
-        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
+        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nAmount Due: KES ${loan.balance}.\n\nPlease pay immediately.`;
       }
 
       await sendSMS(borrower.phone, messageText);
@@ -69,17 +71,21 @@ exports.sendManualReminder = async (req, res) => {
     today.setHours(0, 0, 0, 0);
 
     const loans = await Loan.find({
-      status: "active",
+      status: { $in: ["active", "overdue"] },
       loanRequestStatus: "approved",
       balance: { $gt: 0 }
-    });
+    }).populate("borrowerId lenderId");
 
     let sent = 0;
     const messages = [];
 
     for (const loan of loans) {
-      const borrower = await Customer.findById(loan.borrowerId);
+      const borrower = loan.borrowerId;
       if (!borrower?.phone) continue;
+
+      // Check and apply penalties first so balance is accurate
+      await applyOverduePenaltyIfNeeded(loan);
+      await applyMonthlyPenaltyIfNeeded(loan);
 
       let messageType = "";
       let messageText = "";
@@ -93,12 +99,9 @@ exports.sendManualReminder = async (req, res) => {
 
       /* 🚨 AFTER DUE DATE (LATE PAYMENT NOTICE) */
       else {
-        const penalty = Math.round(loan.balance * PENALTY_RATE);
-        const totalPayable = loan.balance + penalty;
-
         messageType = "OVERDUE_LATE_PAYMENT";
 
-        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
+        messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nAmount Due: KES ${loan.balance}.\n\nPlease pay immediately.`;
       }
 
       await sendSMS(borrower.phone, messageText);
@@ -147,23 +150,14 @@ exports.sendReminderByBorrowerAndLoan = async (req, res) => {
       });
     }
 
-    /* ================= BORROWER ================= */
-    const borrower = await Customer.findById(borrowerId);
-    if (!borrower || !borrower.phone) {
-      return res.status(404).json({
-        success: false,
-        message: "Borrower not found or phone missing"
-      });
-    }
-
     /* ================= LOAN ================= */
     const loan = await Loan.findOne({
       _id: loanId,
       borrowerId,
-    status: { $in: ["active", "overdue"] },
+      status: { $in: ["active", "overdue"] },
       loanRequestStatus: "approved",
       balance: { $gt: 0 }
-    });
+    }).populate("borrowerId lenderId");
 
     if (!loan) {
       return res.status(404).json({
@@ -171,6 +165,18 @@ exports.sendReminderByBorrowerAndLoan = async (req, res) => {
         message: "Active loan not found for this borrower"
       });
     }
+
+    const borrower = loan.borrowerId;
+    if (!borrower || !borrower.phone) {
+      return res.status(404).json({
+        success: false,
+        message: "Borrower not found or phone missing"
+      });
+    }
+
+    // Check and apply penalties first so balance is accurate
+    await applyOverduePenaltyIfNeeded(loan);
+    await applyMonthlyPenaltyIfNeeded(loan);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -194,12 +200,9 @@ Please pay on time to avoid penalties.
 
     /* 🚨 AFTER DUE DATE */
     else {
-      const penalty = Math.round(loan.balance * PENALTY_RATE);
-      const totalPayable = loan.balance + penalty;
-
       messageType = "OVERDUE";
 
-      messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nA penalty of 15% (KES ${penalty}) has been added.\nNew Amount Due: KES ${totalPayable}\n\nPlease pay immediately.`;
+      messageText = `IziFinance Late Payment Notice\nHello ${borrower.fullName}, your loan is overdue.\nAmount Due: KES ${loan.balance}.\n\nPlease pay immediately.`;
     }
 
     await sendSMS(borrower.phone, messageText);
@@ -215,7 +218,7 @@ Please pay on time to avoid penalties.
         balance: loan.balance,
         dueDate: loan.dueDate,
         type: messageType,
-         smsMessage: messageText 
+        smsMessage: messageText 
       }
     });
 

@@ -4,6 +4,8 @@ const OTP = require("../models/OTP");
 exports.send = async (phone, role) => {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
+  console.log(`🔑 [africatalkingOtp] Generated OTP for ${phone} (${role || 'default'}): ${otp}`);
+
   // 🔁 Remove old OTP for same phone + role
   await OTP.deleteMany({ phone, purpose: role });
 

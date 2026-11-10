@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const jsonParser = express.json({ limit: "10mb" });
 const customerController = require("../controllers/customerController");
 
 const { protect, borrowerProtect } = require("../middleware/authMiddleware");
@@ -40,6 +41,7 @@ router.post(
   "/initiate-registration-otps",
   protect,
   authorizeRoles("lender", "agent"),
+  jsonParser,
   customerController.sendRegistrationOTPs
 );
 
@@ -84,6 +86,7 @@ router.patch(
   "/:customerId/toggle-block",
   protect,
   authorizeRoles("lender"),
+  jsonParser,
   customerController.toggleBlockCustomer
 );
 

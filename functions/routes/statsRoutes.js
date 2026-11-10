@@ -10,16 +10,17 @@ router.get('/', protect ,authorizeRoles("lender","agent"),statsController.getSta
 
 router.get(
   "/summary",
-  // protect,            // ✅ optional – JWT auth
-  // restrictTo("admin"), // ✅ optional – role based access
+  protect,
+  authorizeRoles("lender", "agent"),
   statsController.getLoanSummary
-)
+);
 router.get(
   "/par",
-  // protect,               // ✅ optional JWT auth
-  // restrictTo("admin"),   // ✅ optional role check
+  protect,
+  authorizeRoles("lender", "agent"),
   statsController.getPAR
-)
+);
+
 
 
 

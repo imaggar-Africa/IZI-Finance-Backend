@@ -677,7 +677,9 @@ exports.updateBorrowerProfile = async (req, res) => {
         !restrictedBorrowerFields.includes(key) &&
         !key.startsWith("guarantor")
       ) {
-        borrowerUpdateData[key] = req.body[key];
+        const value = req.body[key];
+        borrowerUpdateData[key] =
+          value === "null" || value === "" ? null : value;
       }
     });
 

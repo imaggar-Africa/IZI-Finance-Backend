@@ -10,6 +10,7 @@ const { normalizePhone } = require("../utils/normalizePhone");
 const { generateAccountId } = require("../utils/generateAccountId");
 const { sendSMS } = require("../utils/sms");
 const crypto = require("crypto");
+const Guarantor = require("../models/Guarantor");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents
@@ -328,6 +329,8 @@ const sendRegistrationOTPs = async (req, res) => {
 
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
 
+    console.log(`🔑 [Agent Register OTP] Kin Phone: ${kinNorm} (OTP: ${kinOTP}) | Guarantor Phone: ${guarNorm} (OTP: ${guarOTP})`);
+
     // 2️⃣ Save to DB
     await OTP.findOneAndUpdate({ phone: kinNorm }, { otp: kinOTP, expiresAt }, { upsert: true });
     await OTP.findOneAndUpdate({ phone: guarNorm }, { otp: guarOTP, expiresAt }, { upsert: true });
@@ -360,68 +363,112 @@ const registerCustomer = async (req, res) => {
     console.log("✅ Incoming files:", req.files);
     console.log("✅ Incoming body:", req.body);
 
-    /* ================= PARSE & NORMALIZE ================= */
-
-    const gpsLocation =
-      req.body.gpsLocation_lat && req.body.gpsLocation_lng
-        ? {
-            lat: Number(req.body.gpsLocation_lat),
-            lng: Number(req.body.gpsLocation_lng),
-          }
-        : undefined;
-
-    const savingsGoal = req.body.savingsGoal
-      ? Number(req.body.savingsGoal)
-      : 0;
-
-    const loanConsent = req.body.loanConsent === "true";
-    const agreementAcceptance = req.body.agreementAcceptance === "true";
-
-    /* ================= EXTRACT BODY ================= */
-
-    let {
-      idNumber,
-      fullName,
-      phone,
-      email,
-      dateOfBirth,
-      gender,
-      maritalStatus,
-      altPhoneNumber,
-      physicalAddress,
-      occupation,
-      monthlyIncomeRange,
-      nextOfKinName,
-      nextOfKinPhone,
-      guarantorName,
-      guarantorPhone,
-      kinOTP,
-      guarantorOTP,
-      preferredMobileMoney,
-      preferences,
-      savingsBalance,
-      kraPin,
-      educationLevel,
-      householdSize,
-      loanPurpose,
-      deviceType,
-      referralSource,
-      referredByBorrowerId
-    } = req.body;
-
     /* ================= ROLE CHECK ================= */
-
     if (!["agent", "lender", "admin"].includes(req.user.role)) {
       return res.status(403).json({
         message: "Access denied: cannot register customer"
       });
     }
 
-    /* ================= TYPE SAFETY ================= */
+    /* ================= EXTRACT & MAP BODY FIELDS ================= */
+    const {
+      fullName,
+      phone,
+      idNumber,
+      email,
+      dateOfBirth,
+      dob,
+      gender,
+      maritalStatus,
+      educationLevel,
+      householdSize,
+      physicalAddress,
+      altPhoneNumber,
+      alternatePhone,
+      occupation,
+      monthlyIncomeRange,
+      incomeRange,
+      savingsGoal,
+      loanPurpose,
+      loanConsent,
+      agreementAcceptance,
+      kraPin,
+      preferredMobileMoney,
+      mobileMoney,
+      nextOfKinName,
+      nextOfKinPhone,
+      guarantor,
+      deviceType,
+      gpsLocation,
+      referralSource,
+      referredByBorrowerId
+    } = req.body;
 
-    fullName = String(fullName || "").trim();
-    email = String(email || "").toLowerCase().trim();
-    idNumber = String(idNumber || "").trim();
+    const resolvedDateOfBirth = dateOfBirth || dob;
+    const resolvedAltPhoneNumber = altPhoneNumber || alternatePhone;
+    const resolvedMonthlyIncomeRange = monthlyIncomeRange || incomeRange;
+    const resolvedPreferredMobileMoney = preferredMobileMoney || mobileMoney;
+
+    const loanConsentBool = loanConsent === "true" || loanConsent === true;
+    const agreementAcceptanceBool = agreementAcceptance === "true" || agreementAcceptance === true;
+
+    /* ================= PARSE GPS LOCATION ================= */
+    let parsedGpsLocation = undefined;
+    if (gpsLocation) {
+      try {
+        parsedGpsLocation = typeof gpsLocation === "string" ? JSON.parse(gpsLocation) : gpsLocation;
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid gpsLocation format (must be JSON)" });
+      }
+    }
+
+    /* ================= PARSE GUARANTOR ================= */
+    let parsedGuarantor = undefined;
+    let normalizedGuarantorPhone = undefined;
+    if (guarantor) {
+      try {
+        parsedGuarantor = typeof guarantor === "string" ? JSON.parse(guarantor) : guarantor;
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid guarantor format (must be JSON)" });
+      }
+
+      if (!parsedGuarantor.fullName || !parsedGuarantor.phone || !parsedGuarantor.relationship || !parsedGuarantor.idNumber) {
+        return res.status(400).json({
+          message: "guarantor object must contain: fullName, phone, relationship, idNumber"
+        });
+      }
+
+      const rawGuarantorPhone = String(
+        Array.isArray(parsedGuarantor.phone) ? parsedGuarantor.phone[0] : parsedGuarantor.phone
+      ).trim();
+
+      normalizedGuarantorPhone = normalizePhone(rawGuarantorPhone);
+
+      if (!normalizedGuarantorPhone) {
+        return res.status(400).json({
+          message:
+            "Invalid guarantor phone. Supported countries: Kenya (+254), Uganda (+256), Tanzania (+255), Rwanda (+250), Nigeria (+234), Ghana (+233)"
+        });
+      }
+    }
+
+    /* ================= FILE VALIDATION ================= */
+    if (
+      !req.files?.frontID?.[0] ||
+      !req.files?.backID?.[0] ||
+      !req.files?.livePhoto?.[0]
+    ) {
+      return res.status(400).json({
+        message: "Front ID, Back ID and Live Photo are required"
+      });
+    }
+
+    /* ================= REQUIRED FIELDS ================= */
+    const cleanFullName = String(fullName || "").trim();
+    const cleanEmail = email
+      ? String(email).toLowerCase().trim()
+      : null;
+    const cleanIdNumber = String(idNumber || "").trim();
 
     const rawPhone =
       Array.isArray(phone)
@@ -439,13 +486,10 @@ const registerCustomer = async (req, res) => {
       });
     }
 
-    /* ================= REQUIRED VALIDATION ================= */
-
     if (
-      !fullName ||
+      !cleanFullName ||
       !normalizedPhone ||
-      !email ||
-      !idNumber ||
+      !cleanIdNumber ||
       !educationLevel ||
       !householdSize ||
       !loanPurpose ||
@@ -453,24 +497,11 @@ const registerCustomer = async (req, res) => {
     ) {
       return res.status(400).json({
         message:
-          "Full name, phone, email, ID number, education level, household size, loan purpose, device type are required"
-      });
-    }
-
-    /* ================= FILE VALIDATION ================= */
-
-    if (
-      !req.files?.frontID?.[0] ||
-      !req.files?.backID?.[0] ||
-      !req.files?.livePhoto?.[0]
-    ) {
-      return res.status(400).json({
-        message: "Front ID, Back ID and Live Photo are required"
+          "Full name, phone, ID number, education level, household size, loan purpose, device type are required"
       });
     }
 
     /* ================= DATA VALIDATION ================= */
-
     const householdSizeNum = Number(householdSize);
     if (isNaN(householdSizeNum) || householdSizeNum < 1) {
       return res.status(400).json({
@@ -496,7 +527,6 @@ const registerCustomer = async (req, res) => {
     }
 
     /* ================= REFERRAL VALIDATION ================= */
-
     if (!referralSource) {
       return res.status(400).json({ message: "referralSource is required" });
     }
@@ -517,34 +547,17 @@ const registerCustomer = async (req, res) => {
     }
 
     /* ================= DUPLICATE CHECK ================= */
-
     if (await Borrower.findOne({ phone: normalizedPhone }))
       return res.status(409).json({ message: "Phone already registered" });
 
-    if (await Borrower.findOne({ idNumber }))
+    if (cleanEmail && (await Borrower.findOne({ email: cleanEmail })))
+      return res.status(409).json({ message: "Email already registered" });
+
+    if (await Borrower.findOne({ idNumber: cleanIdNumber }))
       return res.status(409).json({ message: "ID number already registered" });
 
-    /* ================= VERIFY OTPs ================= */
-
-    const kinNorm = normalizePhone(nextOfKinPhone);
-    const guarNorm = normalizePhone(guarantorPhone);
-
-    const kinOTPRecord = await OTP.findOne({ phone: kinNorm, otp: kinOTP });
-    const guarOTPRecord = await OTP.findOne({ phone: guarNorm, otp: guarantorOTP });
-
-    if (!kinOTPRecord || kinOTPRecord.expiresAt < new Date()) {
-      return res.status(400).json({ message: "Invalid or expired Next of Kin OTP" });
-    }
-
-    if (!guarOTPRecord || guarOTPRecord.expiresAt < new Date()) {
-      return res.status(400).json({ message: "Invalid or expired Guarantor OTP" });
-    }
-
-    // Cleanup OTPs after successful verification check (will be finalized if create succeeds)
-    await OTP.deleteMany({ phone: { $in: [kinNorm, guarNorm] } });
-
     /* ================= FILE UPLOAD ================= */
-
+    console.log("⏳ Uploading files to Firebase...");
     const frontIDUrl = await uploadToFirebase(req.files.frontID[0], "frontID");
     const backIDUrl = await uploadToFirebase(req.files.backID[0], "backID");
     const livePhotoUrl = await uploadToFirebase(
@@ -553,19 +566,20 @@ const registerCustomer = async (req, res) => {
     );
 
     const accountId = await generateAccountId();
+    console.log("✅ Files uploaded. Generated accountId:", accountId);
 
     /* ================= CREATE BORROWER ================= */
-
+    console.log("⏳ Creating borrower record in DB...");
     const borrower = await Borrower.create({
       registeredBy: req.user._id,
       registeredByModel: req.user.role === "agent" ? "Agent" : "User",
       agentId: req.user.role === "agent" ? req.user._id : null,
       accountId,
 
-      fullName,
+      fullName: cleanFullName,
       phone: normalizedPhone,
-      email,
-      idNumber,
+      email: cleanEmail,
+      idNumber: cleanIdNumber,
 
       livePhoto: livePhotoUrl,
       frontID: frontIDUrl,
@@ -574,28 +588,28 @@ const registerCustomer = async (req, res) => {
       isVerified: true,
       status: "Active",
 
-      dateOfBirth,
+      dateOfBirth: resolvedDateOfBirth,
       gender,
       maritalStatus,
-      altPhoneNumber,
+      altPhoneNumber: resolvedAltPhoneNumber,
       physicalAddress,
-      gpsLocation,
+      gpsLocation: parsedGpsLocation,
       occupation,
-      monthlyIncomeRange,
+      monthlyIncomeRange: resolvedMonthlyIncomeRange,
       nextOfKinName,
       nextOfKinPhone,
-      guarantorName,
-      guarantorPhone,
-      kinVerified: true,
-      guarantorVerified: true,
-      preferredMobileMoney,
-      savingsGoal,
-      loanConsent,
+      guarantorName: parsedGuarantor ? String(parsedGuarantor.fullName).trim() : null,
+      guarantorPhone: normalizedGuarantorPhone || null,
+      kinVerified: false,
+      guarantorVerified: false,
+      preferredMobileMoney: resolvedPreferredMobileMoney,
+      savingsGoal: savingsGoal ? Number(savingsGoal) : 0,
+      loanConsent: loanConsentBool,
       kraPin,
-      agreementAcceptance,
+      agreementAcceptance: agreementAcceptanceBool,
 
-      preferences: preferences || {},
-      savingsBalance: savingsBalance || 0,
+      preferences: {},
+      savingsBalance: 0,
 
       referralSource,
       referredByBorrowerId:
@@ -617,31 +631,64 @@ const registerCustomer = async (req, res) => {
       lastScoreUpdate: new Date()
     });
 
+    /* ================= CREATE GUARANTOR DOCUMENT ================= */
+    let guarantorDoc = null;
+    if (parsedGuarantor) {
+      guarantorDoc = await Guarantor.create({
+        borrowerId: borrower._id,
+        fullName: String(parsedGuarantor.fullName).trim(),
+        phone: normalizedGuarantorPhone,
+        relationship: String(parsedGuarantor.relationship).trim(),
+        idNumber: String(parsedGuarantor.idNumber).trim(),
+        consent: false,
+        isVerified: false
+      });
 
-   /* ================= AGENT LINK ================= */
-
-if (req.user.role === "agent") {
-  await AgentModel.updateOne(
-    { _id: req.user._id },
-    {
-      $addToSet: { customers: borrower._id },
-      $inc: { totalCustomers: 1 }
+      const otpService = req.app.locals.otpService;
+      if (otpService && typeof otpService.sendVerificationCode === "function") {
+        await otpService.sendVerificationCode(normalizedGuarantorPhone);
+      }
     }
-  );
-}
+
+    /* ================= AGENT LINK ================= */
+    if (req.user.role === "agent") {
+      await AgentModel.updateOne(
+        { _id: req.user._id },
+        {
+          $addToSet: { customers: borrower._id },
+          $inc: { totalCustomers: 1 }
+        }
+      );
+    }
 
     return res.status(201).json({
       success: true,
       message: "Customer registered successfully",
-      borrower
+      borrower,
+      guarantor: guarantorDoc
+        ? {
+            id: guarantorDoc._id,
+            phone: guarantorDoc.phone,
+            consent: guarantorDoc.consent
+          }
+        : null
     });
 
   } catch (error) {
-    console.error("❌ Error registering customer:", error);
+    console.error("❌ [ERROR] registerCustomer Failure:", {
+      message: error.message,
+      stack: error.stack,
+      idNumber: req.body.idNumber,
+      phone: req.body.phone,
+      agentId: req.user?._id,
+      filesPresent: !!req.files
+    });
+
     return res.status(500).json({
       success: false,
       message: "Error registering customer",
-      error: error.message
+      error: error.message,
+      debug: "Check logs for detailed stack trace"
     });
   }
 };

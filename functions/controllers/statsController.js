@@ -1,7 +1,9 @@
+const mongoose = require("mongoose");
 const Stats = require('../models/Stats');
 const Loan = require("../models/Loan");
 const PDFDocument = require("pdfkit");
 const Customer = require("../models/customer");
+const AgentModel = require("../models/AgentModel");
 const path = require("path");
 const fs = require("fs");
 const logoPath = path.join(__dirname, "../assets/izi-logo.png");
@@ -108,9 +110,17 @@ if (startDate && endDate) {
       match.isDefaulted = true;
     }
 
+    if (req.user) {
+      if (req.user.role === "lender") {
+        match.lenderId = new mongoose.Types.ObjectId(req.user._id);
+      } else if (req.user.role === "agent") {
+        match.lenderId = new mongoose.Types.ObjectId(req.user.lenderId);
+      }
+    }
+
     // 🔹 Geography filters
-    if (agentId) match.requestedByAgentId = agentId;
-    if (groupId) match.groupId = groupId;
+    if (agentId) match.requestedByAgentId = new mongoose.Types.ObjectId(agentId);
+    if (groupId) match.groupId = new mongoose.Types.ObjectId(groupId);
 
     // 🔹 Borrower cycle
     if (borrowerCycle === "first") match.loanCycle = 1;
@@ -230,6 +240,14 @@ exports.getPAR = async (req, res) => {
       status: "active",
       isDefaulted: false
     };
+
+    if (req.user) {
+      if (req.user.role === "lender") {
+        match.lenderId = new mongoose.Types.ObjectId(req.user._id);
+      } else if (req.user.role === "agent") {
+        match.lenderId = new mongoose.Types.ObjectId(req.user.lenderId);
+      }
+    }
 
     if (startDate && endDate) {
       match.issueDate = {
@@ -403,23 +421,27 @@ function calculateStats(loans, start = null, end = null) {
     if (!["active", "fully paid", "overdue"].includes(loan.status))
       return;
 
-    const issuedDate = loan.issueDate || loan.createdAt;
+    const issuedDate = new Date(loan.issueDate || loan.createdAt);
     const issuedInRange =
       !start ||
-      (issuedDate >= start && issuedDate <= effectiveEnd);
+      (start instanceof Date && isNaN(start.getTime()) ? true : (issuedDate >= start && issuedDate <= effectiveEnd));
 
     if (issuedInRange) {
       issuedCount++;
 
-      totalLoanAmount += loan.totalRepayment || 0;
-      principalAmount += loan.amount || 0;
-      outstandingLoanAmount += loan.balance || 0;
+      const principal = Number(loan.amount) || 0;
+      const totalRepay = Number(loan.totalRepayment) || (principal + (Number(loan.interest) || 0));
+      const balance = Number(loan.balance) || 0;
+      const interest = totalRepay - principal;
+
+      totalLoanAmount += totalRepay;
+      principalAmount += principal;
+      outstandingLoanAmount += balance;
+      interestEarned += interest > 0 ? interest : 0;
 
       // ===== STATUS COUNTS =====
-      if (loan.status === "fully paid" || loan.balance === 0) {
+      if (loan.status === "fully paid" || balance === 0) {
         paidLoans++;
-        interestEarned +=
-          (loan.totalRepayment || 0) - (loan.amount || 0);
       } else if (loan.status === "overdue") {
         overdueLoans++;
       } else if (loan.status === "active") {
@@ -435,7 +457,7 @@ function calculateStats(loans, start = null, end = null) {
           (r.date && r.date >= start && r.date <= effectiveEnd);
 
         if (paymentInRange) {
-          collectedAmount += r.amount || 0;
+          collectedAmount += Number(r.amount) || 0;
         }
       });
     }
@@ -461,16 +483,16 @@ function mapLoanDetail(loan) {
   return {
     borrower: loan.borrowerId?.fullName || "N/A",
     phone: loan.borrowerId?.phone || "N/A",
-    principal: loan.amount,
-    totalRepayment: loan.totalRepayment,
+    principal: Number(loan.amount) || 0,
+    totalRepayment: Number(loan.totalRepayment) || ((Number(loan.amount) || 0) + (Number(loan.interest) || 0)),
     collectedAmount: Array.isArray(loan.repayments)
-      ? loan.repayments.reduce((s, r) => s + (r.amount || 0), 0)
+      ? loan.repayments.reduce((s, r) => s + (Number(r.amount) || 0), 0)
       : 0,
-    balance: loan.balance,
-    issueDate: loan.createdAt,
+    balance: Number(loan.balance) || 0,
+    issueDate: loan.issueDate || loan.createdAt,
     dueDate: loan.dueDate,
     status:
-      loan.balance === 0
+      Number(loan.balance) === 0
         ? "Paid"
         : loan.dueDate && new Date(loan.dueDate) < new Date()
         ? "Overdue"
@@ -486,18 +508,19 @@ function filterLoansByIssueDate(loans, start, end) {
 }
 
 function countCustomers(customers, start = null, end = null) {
-  return customers.filter(c =>
-    !start ||
-    !end ||
-    (c.createdAt >= start && c.createdAt <= end)
-  ).length;
+  const effectiveEnd = end || new Date();
+  return customers.filter(c => {
+    if (!c.createdAt) return false;
+    const date = new Date(c.createdAt);
+    return (!start || date >= start) && date <= effectiveEnd;
+  }).length;
 }
 
 
 /* ================= GET STATS API ================= */
 exports.getStats = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     // Helper to get range start
     const getRangeStart = (type) => {
@@ -505,7 +528,7 @@ exports.getStats = async (req, res) => {
       if (type === "24h") d.setHours(d.getHours() - 24);
       else if (type === "7d") d.setDate(d.getDate() - 7);
       else if (type === "1m") d.setMonth(d.getMonth() - 1);
-      else if (type === "overall") return new Date(0);
+      else if (type === "overall") return null;
       return d;
     };
 
@@ -518,61 +541,64 @@ exports.getStats = async (req, res) => {
       isWrittenOff: { $ne: true },
     }).populate("borrowerId", "fullName phone");
 
-    const allCustomers = await Customer.find({
-      registeredBy: lenderId,
-    });
+    const customerQuery = { isDeleted: { $ne: true } };
+    if (req.user.role === "lender") {
+      const agents = await AgentModel.find({ lenderId }).select("_id");
+      const agentIds = agents.map(a => a._id);
+      customerQuery.$or = [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ];
+    } else if (req.user.role === "agent") {
+      customerQuery.$or = [
+        { registeredBy: req.user._id, registeredByModel: "Agent" },
+        { agentId: req.user._id }
+      ];
+    }
+
+    const allCustomers = await Customer.find(customerQuery);
 
     const buildSegment = (start) => {
-      // 🟢 Filter by activity (Show loans issued OR repaid in this period)
+      const segmentStats = calculateStats(allLoans, start);
+      
       const activeInPeriod = allLoans.filter((l) => {
-        const issuedInRange = (l.issueDate || l.createdAt) >= start;
-        const repaidInRange = Array.isArray(l.repayments) && l.repayments.some(r => r.date && r.date >= start);
+        if (!start) return true;
+        const issuedDate = new Date(l.issueDate || l.createdAt);
+        const issuedInRange = issuedDate >= start;
+        const repaidInRange = Array.isArray(l.repayments) && l.repayments.some(r => r.date && new Date(r.date) >= start);
         return issuedInRange || repaidInRange;
       });
-      
-      const filteredCustomers = allCustomers.filter(
-        (c) => c.createdAt >= start,
-      );
+
+      const customerCount = countCustomers(allCustomers, start);
 
       return {
-        stats: calculateStats(allLoans, start), // ⬅️ Calculate stats across ALL loans for collections
-        customersAdded: filteredCustomers.length,
-        loanDetails: activeInPeriod.map(mapLoanDetail),
+        stats: {
+          issuedCount: segmentStats.issuedCount || 0,
+          totalLoans: segmentStats.issuedCount || 0,
+          totalLoanAmount: segmentStats.totalLoanAmount || 0,
+          principalAmount: segmentStats.principalAmount || 0,
+          collectedAmount: segmentStats.collectedAmount || 0,
+          interestEarned: segmentStats.interestEarned || 0,
+          outstandingLoanAmount: segmentStats.outstandingLoanAmount || 0,
+          outstandingAmount: segmentStats.outstandingLoanAmount || 0,
+          outstanding: segmentStats.outstandingLoanAmount || 0,
+          activeLoans: segmentStats.activeLoans || 0,
+          overdueLoans: segmentStats.overdueLoans || 0,
+          paidLoans: segmentStats.paidLoans || 0,
+          customersAdded: customerCount,
+          totalCustomers: customerCount
+        },
+        customersAdded: customerCount,
+        loanDetails: activeInPeriod.map(mapLoanDetail)
       };
     };
-
-    const { fromDate, toDate } = req.query;
-    let customRange = null;
-
-    if (fromDate && toDate) {
-      const start = new Date(fromDate);
-      const end = new Date(toDate);
-      end.setHours(23, 59, 59, 999);
-
-      const filteredLoans = allLoans.filter(
-        (l) => l.createdAt >= start && l.createdAt <= end,
-      );
-      const filteredCustomers = allCustomers.filter(
-        (c) => c.createdAt >= start && c.createdAt <= end,
-      );
-
-      customRange = {
-        stats: calculateStats(filteredLoans),
-        customersAdded: filteredCustomers.length,
-        loanDetails: filteredLoans.map(mapLoanDetail),
-      };
-    }
 
     // Format matches DashboardScreen and StatsScreen expectations:
     res.status(200).json({
       last24Hours: buildSegment(getRangeStart("24h")),
       last7Days: buildSegment(getRangeStart("7d")),
       last1Month: buildSegment(getRangeStart("1m")),
-      overall: buildSegment(getRangeStart("overall")),
-      customRange, // Added custom range support
-      stats: calculateStats(
-        allLoans.filter((l) => l.createdAt >= getRangeStart("24h")),
-      ),
+      overall: buildSegment(getRangeStart("overall"))
     });
   } catch (error) {
     console.error("Stats error:", error);
@@ -589,7 +615,7 @@ exports.downloadStatsPDF = async (req, res) => {
 
     const { fromDate, toDate } = req.query;
     const now = new Date();
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     const loanFilter = {
       loanRequestStatus: "approved",
@@ -827,7 +853,7 @@ exports.downloadFullOverallReportPDF = async (req, res) => {
   try {
 
     const now = new Date();
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     /* ================= FETCH DATA ================= */
 
@@ -839,9 +865,21 @@ exports.downloadFullOverallReportPDF = async (req, res) => {
       isWrittenOff: { $ne: true }
     }).populate("borrowerId", "fullName phone");
 
-    const customers = await Customer.find({
-      isDeleted: { $ne: true }
-    });
+    const customerQuery = { isDeleted: { $ne: true } };
+    if (req.user.role === "lender") {
+      const agents = await AgentModel.find({ lenderId }).select("_id");
+      const agentIds = agents.map(a => a._id);
+      customerQuery.$or = [
+        { registeredBy: lenderId, registeredByModel: "User" },
+        { registeredBy: { $in: agentIds }, registeredByModel: "Agent" }
+      ];
+    } else if (req.user.role === "agent") {
+      customerQuery.$or = [
+        { registeredBy: req.user._id, registeredByModel: "Agent" },
+        { agentId: req.user._id }
+      ];
+    }
+    const customers = await Customer.find(customerQuery);
 
     /* ================= CORRECT FINANCIAL LOGIC ================= */
 
@@ -1034,7 +1072,7 @@ exports.downloadFullOverallReportPDF = async (req, res) => {
 
 exports.getFullyPaidLoansPDF = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { fromDate, toDate } = req.query;
 
     const filter = {

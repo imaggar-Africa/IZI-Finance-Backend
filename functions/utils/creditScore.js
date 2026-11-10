@@ -32,22 +32,7 @@ const getRiskMultiplier = (customer) => {
  * 2️⃣ MAXIMUM LOAN AMOUNT LOGIC
  */
 const getMaxLoanAmount = (customer) => {
-  const totalTaken = Number(customer.totalLoansTaken || customer.totalLoans || 0);
-
-  // Starter loan for new customers
-  if (totalTaken === 0) return 3000;
-
-  const score = Number(customer.creditScore || 500);
-  let baseLimit = 1000;
-
-  if (score >= 750) baseLimit = 20000;
-  else if (score >= 700) baseLimit = 10000;
-  else if (score >= 650) baseLimit = 6000;
-  else if (score >= 600) baseLimit = 3000;
-  else baseLimit = 1000;
-
-  const multiplier = getRiskMultiplier(customer);
-  return Math.round(baseLimit * multiplier);
+  return 500; 
 };
 
 /**
@@ -148,13 +133,10 @@ const recalculateCreditScore = ({ currentScore, event, daysLate }) => {
 };
 
 const evaluateLoanByCreditScore = ({ creditScore, requestedAmount, borrower }) => {
-  if (!borrower) return { allowed: false, approvedAmount: 0, reason: "Missing borrower data" };
-
-  const limit = getMaxLoanAmount(borrower);
   return {
-    allowed: requestedAmount <= limit,
-    approvedAmount: limit,
-    reason: requestedAmount > limit ? `Limit exceeded. Max eligible: ${limit}` : "Eligible",
+    allowed: true,
+    approvedAmount: 500,
+    reason: "Default limit applied",
   };
 };
 

@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const jsonParser = express.json({ limit: "10mb" });
 
 
 const { registerAgent, changePassword,CustomersForAgent, loginAgent, registerCustomer, getAgentProfile, getCustomersForAgent, sendRegistrationOTPs } = require("../controllers/agentController");
@@ -30,6 +31,7 @@ router.post(
   "/initiate-registration-otps",
   protect,
   authorizeRoles("agent","lender"),
+  jsonParser,
   sendRegistrationOTPs
 );
 
@@ -37,6 +39,7 @@ router.get(
   "/getall/customer",
     protect,
   authorizeRoles("agent"),
+  jsonParser,
   getCustomersForAgent 
 );
 
@@ -45,17 +48,18 @@ router.get(
   "/customers/:agentId",
   protect,
   authorizeRoles("agent", "admin", "lender"),
+  jsonParser,
   CustomersForAgent
 );
 
-router.post("/register", protect,authorizeRoles("lender"), validateAfricaPhone, // ✅ phone validation here
-registerAgent);
+router.post("/register", protect,authorizeRoles("lender"), jsonParser, validateAfricaPhone, registerAgent);
 
 // Agent login
-router.post("/login",validateAfricaPhone,loginAgent);
+router.post("/login", jsonParser, validateAfricaPhone, loginAgent);
 
 // Change password (agent only, must be logged in)
-router.put("/change-password", protect, changePassword);
+router.put("/change-password", protect, jsonParser, changePassword);
+
 
 
 // Enhanced customer registration with proper error handling

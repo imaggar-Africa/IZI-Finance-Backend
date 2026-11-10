@@ -1,31 +1,36 @@
 const { QueueEvents } = require("bullmq");
 const bullRedis = require("./redis");
 
-const smsEvents = new QueueEvents("sms-queue", {
-  connection: bullRedis,
-});
+let smsEvents = null;
 
-smsEvents.on("waiting", ({ jobId }) => {
-  console.log("⏳ SMS Job waiting | Job ID:", jobId);
-});
+function initSmsEvents() {
+  if (smsEvents) return smsEvents;
 
-smsEvents.on("active", ({ jobId }) => {
-  console.log("⚡ SMS Job active | Job ID:", jobId);
-});
+  smsEvents = new QueueEvents("sms-queue", {
+    connection: bullRedis,
+  });
 
-smsEvents.on("completed", ({ jobId }) => {
-  console.log("✅ SMS Job completed | Job ID:", jobId);
-});
+  smsEvents.on("waiting", ({ jobId }) => {
+    console.log("⏳ SMS Job waiting | Job ID:", jobId);
+  });
 
-smsEvents.on("failed", ({ jobId, failedReason, prev }) => {
-  console.error("❌ SMS Job failed");
-  console.error("🆔 Job ID:", jobId);
-  console.error("📌 Reason:", failedReason);
-  console.error("↩️ Previous state:", prev);
-});
+  smsEvents.on("active", ({ jobId }) => {
+    console.log("⚡ SMS Job active | Job ID:", jobId);
+  });
 
-smsEvents.on("ready", () => {
-  console.log("🟢 SMS QueueEvents ready");
-});
+  smsEvents.on("completed", ({ jobId }) => {
+    console.log("✅ SMS Job completed | Job ID:", jobId);
+  });
 
-module.exports = smsEvents;
+  smsEvents.on("failed", ({ jobId, failedReason, prev }) => {
+    console.error("❌ SMS Job failed | Job ID:", jobId, "| Reason:", failedReason);
+  });
+
+  smsEvents.on("ready", () => {
+    console.log("🟢 SMS QueueEvents ready");
+  });
+
+  return smsEvents;
+}
+
+module.exports = { initSmsEvents };

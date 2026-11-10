@@ -10,7 +10,7 @@ const mongoose = require("mongoose");
 
 exports.getDashboardReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const now = new Date();
 
     const startOfToday = new Date(
@@ -25,6 +25,10 @@ exports.getDashboardReport = async (req, res) => {
       isDeleted: { $ne: true },
       isWrittenOff: { $ne: true }
     };
+
+    if (req.user.role === "agent") {
+      baseFilter.requestedByAgentId = req.user._id;
+    }
 
     /* ===============================
        TOTAL PORTFOLIO
@@ -228,8 +232,13 @@ exports.getDashboardReport = async (req, res) => {
       lenderId,
       issueDate: { $gte: startOfToday }
     });
+    
+    // Find lender's agent IDs first
+    const agentsOfLender = await Agent.find({ lenderId }).select("_id");
+    const agentIdsOfLender = agentsOfLender.map(a => a._id);
+    
     const activeAgentsFromCustomers = await Customer.distinct("agentId", {
-      lenderId,
+      agentId: { $in: agentIdsOfLender },
       createdAt: { $gte: startOfToday }
     });
     
@@ -279,7 +288,7 @@ exports.getDashboardReport = async (req, res) => {
 
 exports.getLoansReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate, agentId, status } = req.query;
 
     const baseFilter = {
@@ -287,6 +296,12 @@ exports.getLoansReport = async (req, res) => {
       loanRequestStatus: "approved",
       isDeleted: { $ne: true }
     };
+
+    if (req.user.role === "agent") {
+      baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    } else if (agentId) {
+      baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(agentId);
+    }
 
     // Period filtering
     if (startDate || endDate) {
@@ -479,7 +494,7 @@ const statusBreakdown = [
 =========================== */
 exports.getRepaymentsReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate, region, agentId, loanProduct } = req.query;
 
     const baseFilter = {
@@ -488,6 +503,12 @@ exports.getRepaymentsReport = async (req, res) => {
       status: { $in: ["active", "overdue", "fully paid"] },
       isDeleted: { $ne: true }
     };
+
+    if (req.user.role === "agent") {
+      baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    } else if (agentId) {
+      baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(agentId);
+    }
 
     if (startDate || endDate) {
       baseFilter.dueDate = {};
@@ -689,7 +710,7 @@ exports.getRepaymentsReport = async (req, res) => {
 =========================== */
 exports.getProfitReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate, groupBy = "month" } = req.query;
 
     const baseFilter = {
@@ -697,6 +718,10 @@ exports.getProfitReport = async (req, res) => {
       loanRequestStatus: "approved",
       isDeleted: { $ne: true }
     };
+
+    if (req.user.role === "agent") {
+      baseFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
 
     const loans = await Loan.find(baseFilter);
     const now = new Date();
@@ -859,7 +884,7 @@ exports.getProfitReport = async (req, res) => {
 =========================== */
 exports.getBorrowersReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate } = req.query;
 
     const dateFilter = {};
@@ -869,24 +894,33 @@ exports.getBorrowersReport = async (req, res) => {
       if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
     }
 
-    // 1. Get all agents for this lender to filter customers
-    const agents = await Agent.find({ lenderId }).select("_id").lean();
-    const agentIds = agents.map(a => a._id);
+    let borrowerMatch = { isDeleted: { $ne: true } };
 
-    const borrowerMatch = { 
-      $or: [
+    if (req.user.role === "lender") {
+      const agents = await Agent.find({ lenderId }).select("_id").lean();
+      const agentIds = agents.map(a => a._id);
+      borrowerMatch.$or = [
         { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
         { agentId: { $in: agentIds } },
         { assignedAgent: { $in: agentIds } }
-      ],
-      isDeleted: { $ne: true }
-    };
+      ];
+    } else if (req.user.role === "agent") {
+      borrowerMatch.$or = [
+        { registeredBy: new mongoose.Types.ObjectId(req.user._id), registeredByModel: "Agent" },
+        { agentId: new mongoose.Types.ObjectId(req.user._id) },
+        { assignedAgent: new mongoose.Types.ObjectId(req.user._id) }
+      ];
+    }
 
     const loanBaseFilter = {
       lenderId: new mongoose.Types.ObjectId(lenderId),
       loanRequestStatus: "approved",
       isDeleted: { $ne: true }
     };
+
+    if (req.user.role === "agent") {
+      loanBaseFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
 
     const periodLoanFilter = { ...loanBaseFilter };
     if (startDate || endDate) {
@@ -1109,17 +1143,21 @@ exports.getBorrowersReport = async (req, res) => {
 =========================== */
 exports.getAgentsReport = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate } = req.query;
 
     const startObj = startDate ? new Date(startDate) : new Date(0);
     const endObj = endDate ? new Date(endDate) : new Date();
 
+    const agentFilter = { isDeleted: { $ne: true } };
+    if (req.user.role === "lender") {
+      agentFilter.lenderId = lenderId;
+    } else if (req.user.role === "agent") {
+      agentFilter._id = req.user._id;
+    }
+
     // 1. Fetch Agents for this lender (excluding deleted ones)
-    const agents = await Agent.find({ 
-      lenderId,
-      isDeleted: { $ne: true } 
-    }).select("name phone status lastActiveAt").lean();
+    const agents = await Agent.find(agentFilter).select("name phone status lastActiveAt").lean();
     
     const agentMap = new Map();
     agents.forEach(a => {
@@ -1140,14 +1178,19 @@ exports.getAgentsReport = async (req, res) => {
     });
 
     // 2. Aggregate Productivity & Portfolio Quality from Loans (excluding deleted records)
+    const loanMatch = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
+      requestedByAgentId: { $ne: null },
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true } // Skip deleted loans
+    };
+    if (req.user.role === "agent") {
+      loanMatch.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     const loanStats = await Loan.aggregate([
       {
-        $match: {
-          lenderId: new mongoose.Types.ObjectId(lenderId),
-          requestedByAgentId: { $ne: null },
-          loanRequestStatus: "approved",
-          isDeleted: { $ne: true } // Skip deleted loans
-        }
+        $match: loanMatch
       },
       // Ensure borrower (customer) is not deleted
       {
@@ -1397,9 +1440,16 @@ exports.getAuditLogs = async (req, res) => {
 exports.getLoanRepaymentReport = async (req, res) => {
   try {
     const { borrowerId, loanId, fromDate, toDate } = req.query;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     // 🔹 Build filter (EMPTY = ALL BORROWERS)
-    const loanFilter = {};
+    const loanFilter = {
+      lenderId: new mongoose.Types.ObjectId(lenderId)
+    };
+
+    if (req.user.role === "agent") {
+      loanFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
 
     if (borrowerId) {
       loanFilter.borrowerId = borrowerId;
@@ -1484,7 +1534,28 @@ exports.getLoanRepaymentReport = async (req, res) => {
 =========================== */
 exports.getMaritalStatusReport = async (req, res) => {
   try {
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
+
+    const agents = await Agent.find({ lenderId }).select("_id").lean();
+    const agentIds = agents.map(a => a._id);
+
+    const match = { isDeleted: { $ne: true } };
+    if (req.user.role === "lender") {
+      match.$or = [
+        { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
+        { agentId: { $in: agentIds } },
+        { assignedAgent: { $in: agentIds } }
+      ];
+    } else if (req.user.role === "agent") {
+      match.$or = [
+        { registeredBy: new mongoose.Types.ObjectId(req.user._id), registeredByModel: "Agent" },
+        { agentId: new mongoose.Types.ObjectId(req.user._id) },
+        { assignedAgent: new mongoose.Types.ObjectId(req.user._id) }
+      ];
+    }
+
     const data = await Customer.aggregate([
+      { $match: match },
       {
         $group: {
           _id: "$maritalStatus",
@@ -1761,6 +1832,7 @@ exports.getBusinessTypeLoanReport = async (req, res) => {
 =========================== */
 exports.getRegionalRepaymentReport = async (req, res) => {
   try {
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     // Phone prefix → Country code map
     const phoneCountryMap = {
@@ -1772,7 +1844,18 @@ exports.getRegionalRepaymentReport = async (req, res) => {
       "255": "TZ"
     };
 
+    const loanFilter = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true }
+    };
+
+    if (req.user.role === "agent") {
+      loanFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     const data = await Loan.aggregate([
+      { $match: loanFilter },
       {
         $lookup: {
           from: "customers",
@@ -1840,7 +1923,19 @@ exports.getRegionalRepaymentReport = async (req, res) => {
 
 exports.getRegionPerformanceReport = async (req, res) => {
   try {
-    const lenderId = new mongoose.Types.ObjectId(req.user._id);
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
+    const lenderIdObj = new mongoose.Types.ObjectId(lenderId);
+
+    const loanFilter = {
+      lenderId: lenderIdObj,
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true }
+    };
+
+    if (req.user.role === "agent") {
+      loanFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     const { startDate, endDate } = req.query;
 
     const end = endDate ? new Date(endDate) : new Date();
@@ -1854,11 +1949,7 @@ exports.getRegionPerformanceReport = async (req, res) => {
 
     const aggResult = await Loan.aggregate([
       {
-        $match: {
-          lenderId,
-          loanRequestStatus: "approved",
-          isDeleted: { $ne: true }
-        }
+        $match: loanFilter
       },
 
       {
@@ -2114,7 +2205,20 @@ region: {
 
 exports.getBusinessTypeLoanReport = async (req, res) => {
   try {
-    const lenderId = new mongoose.Types.ObjectId(req.user._id);
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
+    const lenderIdObj = new mongoose.Types.ObjectId(lenderId);
+
+    const loanFilter = {
+      lenderId: lenderIdObj,
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true },
+      issueDate: { $gte: start, $lte: end }
+    };
+
+    if (req.user.role === "agent") {
+      loanFilter.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     const { startDate, endDate } = req.query;
 
     const start = startDate ? new Date(startDate) : new Date(0);
@@ -2122,12 +2226,7 @@ exports.getBusinessTypeLoanReport = async (req, res) => {
 
     const aggResult = await Loan.aggregate([
       {
-        $match: {
-          lenderId,
-          loanRequestStatus: "approved",
-          isDeleted: { $ne: true },
-          issueDate: { $gte: start, $lte: end }
-        }
+        $match: loanFilter
       },
       {
         $lookup: {
@@ -2302,7 +2401,7 @@ businessType: {
 =========================== */
 exports.getDetailedProfitReport = async (req, res) => {
   try {
-    const lenderId = req.user.id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
 
     const from = req.query.from ? new Date(req.query.from) : null;
     const to = req.query.to ? new Date(req.query.to) : null;
@@ -2316,6 +2415,10 @@ exports.getDetailedProfitReport = async (req, res) => {
       loanRequestStatus: "approved",
       status: { $in: ["active", "overdue", "fully paid"] }
     };
+
+    if (req.user.role === "agent") {
+      loanFilter.requestedByAgentId = req.user._id;
+    }
 
     const loans = await Loan.find(loanFilter);
 
@@ -2431,6 +2534,10 @@ exports.getDetailedProfitReport = async (req, res) => {
       loanRequestStatus: "approved"
     };
 
+    if (req.user.role === "agent") {
+      trendMatch.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     const interestTrend = await Loan.aggregate([
       { $match: trendMatch },
       {
@@ -2535,28 +2642,28 @@ exports.getDetailedProfitReport = async (req, res) => {
 
 exports.getDemographicsAnalysis = async (req, res) => {
   try {
-    const lenderId = req.user._id;
+    const lenderId = req.user.role === "agent" ? req.user.lenderId : req.user._id;
     const { startDate, endDate } = req.query;
 
     const startObj = startDate ? new Date(startDate) : null;
     const endObj = endDate ? new Date(endDate) : new Date();
 
-    // 1. Get agents for this lender to filter customers
-    const agents = await Agent.find({ lenderId }).select("_id").lean();
-    const agentIds = agents.map(a => a._id);
-
-    const borrowerMatch = {
-      $and: [
-        {
-          $or: [
-            { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
-            { agentId: { $in: agentIds } },
-            { assignedAgent: { $in: agentIds } }
-          ]
-        },
-        { isDeleted: { $ne: true } }
-      ]
-    };
+    let borrowerMatch = { isDeleted: { $ne: true } };
+    if (req.user.role === "lender") {
+      const agents = await Agent.find({ lenderId }).select("_id").lean();
+      const agentIds = agents.map(a => a._id);
+      borrowerMatch.$or = [
+        { registeredBy: new mongoose.Types.ObjectId(lenderId), registeredByModel: "User" },
+        { agentId: { $in: agentIds } },
+        { assignedAgent: { $in: agentIds } }
+      ];
+    } else if (req.user.role === "agent") {
+      borrowerMatch.$or = [
+        { registeredBy: new mongoose.Types.ObjectId(req.user._id), registeredByModel: "Agent" },
+        { agentId: new mongoose.Types.ObjectId(req.user._id) },
+        { assignedAgent: new mongoose.Types.ObjectId(req.user._id) }
+      ];
+    }
 
     // 2. Aggregate Demographics & Geographic Insights
     const demographicsData = await Customer.aggregate([
@@ -2643,14 +2750,19 @@ exports.getDemographicsAnalysis = async (req, res) => {
       }
     ]);
 
+    const behaviorMatch = {
+      lenderId: new mongoose.Types.ObjectId(lenderId),
+      loanRequestStatus: "approved",
+      isDeleted: { $ne: true }
+    };
+    if (req.user.role === "agent") {
+      behaviorMatch.requestedByAgentId = new mongoose.Types.ObjectId(req.user._id);
+    }
+
     // 3. Aggregate Behavior Patterns by Demographic Segments
     const behaviorData = await Loan.aggregate([
       {
-        $match: {
-          lenderId: new mongoose.Types.ObjectId(lenderId),
-          loanRequestStatus: "approved",
-          isDeleted: { $ne: true }
-        }
+        $match: behaviorMatch
       },
       {
         $lookup: {

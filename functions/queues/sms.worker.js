@@ -6,42 +6,38 @@ require("dotenv").config({
 });
 
 const { Worker } = require("bullmq");
-const africastalking = require("africastalking");
 const bullRedis = require("./redis");
 const initConfig = require("../config/loadConfig");
+const connectDB = require("../config/db");
+const SmsQueue = require("../models/SmsQueue");
+const { sendSMSDirect } = require("../utils/sms");
+const { initSmsEvents } = require("./sms.events");
 
-require("./sms.events");
-
-let smsClient;
-//  
 /* ===============================
    INIT ONCE (IMPORTANT)
 ================================ */
 const startWorker = async () => {
-  console.log("🟡 Initializing global.config in worker...");
+  console.log(" 🟡 Initializing global.config in worker...");
   await initConfig();
   console.log("✅ global.config initialized in worker");
 
-  const AT_USERNAME = (global.config?.atUsername || "").trim();
-  const AT_API_KEY = (global.config?.atApiKey || "").trim();
-  const AT_SENDER_ID = (global.config?.atSenderId || "").trim();
-
-  if (!AT_USERNAME || !AT_API_KEY) {
-    throw new Error("AfricasTalking credentials missing");
+  // Ensure DB is connected for the worker
+  try {
+    const mongoUri = global.config?.mongoUri || process.env.MONGO_URI;
+    await connectDB(mongoUri);
+  } catch (err) {
+    console.error("❌ Worker DB connection error:", err.message);
   }
 
-  const client = africastalking({
-    username: AT_USERNAME,
-    apiKey: AT_API_KEY,
-  });
+  // Initialize event logging
+  initSmsEvents();
 
-  smsClient = client.SMS;
-  console.log("✅ AfricasTalking initialized in worker");
+  console.log("✅ Background database connection ensured in worker");
 
   /* ===============================
      WORKER
   ================================ */
-  new Worker(
+  const worker = new Worker(
     "sms-queue",
     async (job) => {
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -54,72 +50,74 @@ const startWorker = async () => {
       );
       console.log("📦 Job Data:", job.data);
 
-      const { phoneNumber, message } = job.data;
+      const { smsId, phoneNumber, message } = job.data;
 
-      console.log("📨 Sending SMS to:", phoneNumber);
-      console.log("📝 Message:", message);
+      let smsRecord = null;
 
-      const payload = {
-        to: [phoneNumber],
-        message,
-      };
-
-      // ✅ Sender ID only for non-sandbox
-      if (AT_SENDER_ID && AT_USERNAME !== "sandbox") {
-        payload.from = AT_SENDER_ID;
-        console.log("🏷 Sender ID:", AT_SENDER_ID);
+      if (smsId) {
+        smsRecord = await SmsQueue.findById(smsId);
+        if (!smsRecord) {
+          throw new Error(`SmsQueue record not found for ID: ${smsId}`);
+        }
+        if (smsRecord.status === "Sent" || smsRecord.status === "Processing") {
+          console.log(`⚠️ [SMS WORKER SKIPPED] SMS ID: ${smsRecord._id} is already ${smsRecord.status}`);
+          return { success: true, skipped: true, status: smsRecord.status };
+        }
+        smsRecord.status = "Processing";
+        await smsRecord.save();
+      } else {
+        // Fallback for legacy jobs
+        console.warn(`⚠️ SMS Job without smsId. Creating new SmsQueue record for: ${phoneNumber}`);
+        smsRecord = await SmsQueue.create({
+          phoneNumber,
+          message,
+          status: "Pending",
+        });
       }
 
+      console.log(`📨 [SMS WORKER] Starting execution for SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber}`);
+      
       try {
-        const result = await smsClient.send(payload);
-
-        console.log("📩 Africa’s Talking FULL response:");
-        console.log(JSON.stringify(result, null, 2));
-
-        const recipient =
-          result?.SMSMessageData?.Recipients?.[0];
-
-        if (!recipient) {
-          throw new Error("NO_RECIPIENT_RESPONSE");
-        }
-
-        if (recipient.status !== "Success") {
-          throw new Error(`AT_STATUS_${recipient.status}`);
-        }
-
-        console.log("✅ SMS SENT SUCCESSFULLY");
-        console.log("📱 Number:", recipient.number);
-        console.log("🆔 Message ID:", recipient.messageId);
-        console.log("💰 Cost:", recipient.cost);
-
+        // Perform the direct sending using the shared utility
+        const result = await sendSMSDirect(smsRecord);
+        console.log(`✅ [SMS WORKER SUCCESS] Delivered SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber} | Result: ${JSON.stringify(result)}`);
         return {
           success: true,
-          messageId: recipient.messageId,
-          cost: recipient.cost,
+          smsId: smsRecord._id,
+          status: smsRecord.status,
+          result
         };
       } catch (err) {
-        console.error("❌ SMS SEND FAILED");
-        console.error("❗ Reason:", err.message);
-        console.error(
-          "🔁 Will retry:",
-          job.attemptsMade + 1 < job.opts.attempts
-        );
-        throw err; // BullMQ retry
+        console.error(`❌ [SMS WORKER ERROR] Failed to send SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber} | Error: ${err.message}`);
+        throw err;
       }
     },
     {
       connection: bullRedis,
-      concurrency: 1, // ✅ recommended for SMS gateways
+      concurrency: 1, // recommended for SMS gateways
+      stalledInterval: 300000, // 5 minutes instead of 30 seconds (reduces polling 10x)
+      drainDelay: 10,           // reduce empty queue check frequency
+      maxStalledCount: 2,
     }
   );
+
+  worker.on("completed", (job) => console.log(`✅ [SMS WORKER] Job ${job.id} completed successfully`));
+  worker.on("failed", (job, err) => console.error(`❌ [SMS WORKER] Job ${job.id} failed:`, err.message));
+  worker.on("error", (err) => {
+    // Suppress transient connection errors and limit errors from spamming logs
+    if (
+      err.code === 'ETIMEDOUT' || 
+      err.code === 'ECONNRESET' || 
+      err.message?.includes('ETIMEDOUT') || 
+      err.message?.includes('ECONNRESET') ||
+      err.message?.includes('max requests limit exceeded')
+    ) {
+      return;
+    }
+    console.error(`🚨 [SMS WORKER] Worker Error:`, err);
+  });
 
   console.log("🚀 SMS Worker started");
 };
 
-/* ===============================
-   START
-================================ */
-startWorker().catch((err) => {
-  console.error("❌ Worker startup failed:", err.message);
-  process.exit(1);
-});
+module.exports = { startWorker };

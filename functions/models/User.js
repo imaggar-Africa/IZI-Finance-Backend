@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema(
    accountType: {
   type: String,
   enum: ["individual", "company"],
+  default: "individual",
   required: true
 },
 
@@ -60,7 +61,9 @@ kycStatus: {
     walletBalance: {
       type: Number,
       default: 0,
-      min: 0
+      min: 0,
+      get: v => Math.round((v + Number.EPSILON) * 100) / 100,
+      set: v => Math.round((v + Number.EPSILON) * 100) / 100
     },
 
     isPhoneVerified: {
@@ -102,8 +105,8 @@ kycStatus: {
     }
   },
   {
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true }
   }
 );
 

@@ -21,11 +21,19 @@
 
 // middlewares/validateAfricaPhone.js
 
+const { normalizePhone } = require("../utils/phone");
+
 exports.validateAfricaPhone = (req, res, next) => {
-  const { phone } = req.body;
+  let { phone } = req.body;
 
   if (!phone) {
     return res.status(400).json({ message: "Phone number is required" });
+  }
+
+  const normalized = normalizePhone(phone);
+  if (normalized) {
+    req.body.phone = normalized;
+    phone = normalized;
   }
 
   // Country-wise regex patterns

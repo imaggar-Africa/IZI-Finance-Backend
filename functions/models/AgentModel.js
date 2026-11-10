@@ -88,7 +88,9 @@ blockReason: {
 
     walletBalance: {
       type: Number,
-      default: 0
+      default: 0,
+      get: v => Math.round((v + Number.EPSILON) * 100) / 100,
+      set: v => Math.round((v + Number.EPSILON) * 100) / 100
     },
 
     totalCustomers: {
@@ -121,7 +123,11 @@ blockReason: {
       default: null
     }
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true }
+  }
 );
 
 /* ===============================

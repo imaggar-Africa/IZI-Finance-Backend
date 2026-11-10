@@ -1,0 +1,761 @@
+{
+	"info": {
+		"_postman_id": "7a3b1c9d-8e5f-4d2a-b1c4-9a0e7f8d6c5b",
+		"name": "IZI Finance - API Collection",
+		"description": "Postman collection for IZI Finance Backend APIs (Authentication & Reports)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "User (Lender/Admin)",
+					"item": [
+						{
+							"name": "Register",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\",\n    \"password\": \"password123\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/register",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"register"
+									]
+								},
+								"description": "Step 1: Send OTP to phone for registration."
+							},
+							"response": []
+						},
+						{
+							"name": "Verify Phone & Register",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\",\n    \"otp\": \"123456\",\n    \"password\": \"password123\",\n    \"accountType\": \"individual\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/verify-phone",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"verify-phone"
+									]
+								},
+								"description": "Step 2: Verify OTP and create user account."
+							},
+							"response": []
+						},
+						{
+							"name": "Login",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\",\n    \"password\": \"password123\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/login",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"login"
+									]
+								},
+								"description": "Login to receive tokens."
+							},
+							"response": []
+						},
+						{
+							"name": "Refresh Token",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"refreshToken\": \"{{refreshToken}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/refresh",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"refresh"
+									]
+								},
+								"description": "Rotate refresh token."
+							},
+							"response": []
+						},
+						{
+							"name": "Send OTP (Manual)",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/send-verification-code",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"send-verification-code"
+									]
+								},
+								"description": "Manually send OTP."
+							},
+							"response": []
+						},
+						{
+							"name": "Forgot Password",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/forgot-password",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"forgot-password"
+									]
+								},
+								"description": "Request password reset OTP."
+							},
+							"response": []
+						},
+						{
+							"name": "Reset Password",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\",\n    \"otp\": \"123456\",\n    \"password\": \"newpassword123\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/reset-password",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"reset-password"
+									]
+								},
+								"description": "Reset password with OTP."
+							},
+							"response": []
+						},
+						{
+							"name": "Upload ID Verification",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{
+											"key": "fullName",
+											"value": "John Doe",
+											"type": "text"
+										},
+										{
+											"key": "idNumber",
+											"value": "12345678",
+											"type": "text"
+										},
+										{
+											"key": "selfie",
+											"type": "file",
+											"src": []
+										},
+										{
+											"key": "frontID",
+											"type": "file",
+											"src": []
+										},
+										{
+											"key": "backID",
+											"type": "file",
+											"src": []
+										}
+									]
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/upload-id-verification",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"upload-id-verification"
+									]
+								},
+								"description": "Submit KYC images (Bearer token required)."
+							},
+							"response": []
+						},
+						{
+							"name": "Delete User Account",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/users/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"users",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "user_id_here"
+										}
+									]
+								},
+								"description": "Delete user account (Bearer token required)."
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Borrower",
+					"item": [
+						{
+							"name": "Login Request",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/borrower/login/request",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"borrower",
+										"login",
+										"request"
+									]
+								},
+								"description": "Borrower requests OTP."
+							},
+							"response": []
+						},
+						{
+							"name": "Login Verify",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"+254712345678\",\n    \"otp\": \"123456\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/borrower/login/verify",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"borrower",
+										"login",
+										"verify"
+									]
+								},
+								"description": "Borrower verifies OTP to login."
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Borrower Account",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "{{baseUrl}}/api/auth/borrower/borrowers/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"api",
+										"auth",
+										"borrower",
+										"borrowers",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "borrower_id_here"
+										}
+									]
+								},
+								"description": "Soft delete borrower account (Bearer token required)."
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Reports",
+			"item": [
+				{
+					"name": "Summary Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/summary",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"summary"
+							]
+						},
+						"description": "Get high-level dashboard summary including portfolio, disbursement, and collections."
+					},
+					"response": []
+				},
+				{
+					"name": "Loans Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/loans",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"loans"
+							]
+						},
+						"description": "Get detailed loan volume metrics, status breakdown, and trends."
+					},
+					"response": []
+				},
+				{
+					"name": "Repayments Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/repayments",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"repayments"
+							]
+						},
+						"description": "Get repayment performance, behavior, channel analysis, and aging analysis."
+					},
+					"response": []
+				},
+				{
+					"name": "Profit Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/profit",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"profit"
+							]
+						},
+						"description": "Get revenue metrics, profitability, efficiency indicators, and yield on portfolio."
+					},
+					"response": []
+				},
+				{
+					"name": "Borrowers Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/borrowers",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"borrowers"
+							]
+						},
+						"description": "Get borrower base metrics, credit behavior, and segmentation."
+					},
+					"response": []
+				},
+				{
+					"name": "Agents Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/agents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"agents"
+							]
+						},
+						"description": "Get agent performance summary, portfolio quality by agent, and leaderboards."
+					},
+					"response": []
+				},
+				{
+					"name": "Audit Logs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/audit-logs",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"audit-logs"
+							]
+						},
+						"description": "Get basic audit logs (currently returns empty array)."
+					},
+					"response": []
+				},
+				{
+					"name": "Loan & Repayment Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/loan-repayment?borrowerId=&loanId=&fromDate=2024-01-01&toDate=2024-12-31",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"loan-repayment"
+							],
+							"query": [
+								{
+									"key": "borrowerId",
+									"value": "",
+									"description": "Optional: Filter by borrower ID"
+								},
+								{
+									"key": "loanId",
+									"value": "",
+									"description": "Optional: Filter by loan ID"
+								},
+								{
+									"key": "fromDate",
+									"value": "2024-01-01",
+									"description": "Optional: Start date (YYYY-MM-DD)"
+								},
+								{
+									"key": "toDate",
+									"value": "2024-12-31",
+									"description": "Optional: End date (YYYY-MM-DD)"
+								}
+							]
+						},
+						"description": "Get filtered loan and repayment details with summary."
+					},
+					"response": []
+				},
+				{
+					"name": "Marital Status Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/marital-status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"marital-status"
+							]
+						},
+						"description": "Get distribution of borrowers by marital status."
+					},
+					"response": []
+				},
+				{
+					"name": "Business Type Loan Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/business-type-loans",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"business-type-loans"
+							]
+						},
+						"description": "Get loan metrics and borrower behavior grouped by business type."
+					},
+					"response": []
+				},
+				{
+					"name": "Regional Repayment Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/regional-repayment",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"regional-repayment"
+							]
+						},
+						"description": "Get repayment percentage mapped by country (based on phone prefix)."
+					},
+					"response": []
+				},
+				{
+					"name": "Detailed Profit Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/profit-detailed?from=2024-01-01&to=2024-12-31",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"profit-detailed"
+							],
+							"query": [
+								{
+									"key": "from",
+									"value": "2024-01-01",
+									"description": "Optional: Start date"
+								},
+								{
+									"key": "to",
+									"value": "2024-12-31",
+									"description": "Optional: End date"
+								}
+							]
+						},
+						"description": "Get detailed profit metrics including fees and trend charts."
+					},
+					"response": []
+				},
+				{
+					"name": "Region Performance Detailed",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/region-performance-detailed",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"region-performance-detailed"
+							]
+						},
+						"description": "Get comprehensive region-specific portfolio metrics, risk heatmap, and growth indicators."
+					},
+					"response": []
+				},
+				{
+					"name": "Demographics Analysis",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/demographicsAnalysis",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"demographicsAnalysis"
+							]
+						},
+						"description": "Get deep dive analysis on age, gender, occupation, and geographic demographics."
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{token}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:5000",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "YOUR_ACCESS_TOKEN",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "YOUR_REFRESH_TOKEN",
+			"type": "string"
+		}
+	]
+}

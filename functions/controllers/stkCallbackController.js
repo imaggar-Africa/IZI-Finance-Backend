@@ -487,7 +487,8 @@ exports.stkCallback = async (req, res) => {
     if (!transaction) throw new Error("Transaction not found");
 
     // 🔁 Duplicate callback
-    if (transaction.status === "successful") {
+    // 🔁 Duplicate callback
+    if (transaction.status === "successful" || transaction.status === "Paid") {
       return res.json({ message: "Duplicate callback ignored" });
     }
 
@@ -504,126 +505,8 @@ exports.stkCallback = async (req, res) => {
 
     /* ===================== REPAYMENT FLOW ===================== */
     if (transaction.type === "repayment") {
-      const loan = await Loan.findById(transaction.loanId);
-      const borrower = await Customer.findById(transaction.userId);
-
-      if (!loan || !borrower) {
-        throw new Error("Loan or Borrower not found");
-      }
-
-      transaction.balanceBefore = loan.balance;
-
-      /* 1️⃣ Apply repayment */
-      loan.repaidAmount += amount;
-      loan.balance -= amount;
-
-      let event = "ON_TIME";
-      let daysLate = 0;
-
-      /* 2️⃣ Late penalty */
-      if (loan.dueDate && new Date() > loan.dueDate && loan.balance > 0) {
-        event = "LATE";
-        daysLate = Math.ceil(
-          (new Date() - loan.dueDate) / (1000 * 60 * 60 * 24)
-        );
-
-        const penalty = Math.ceil(loan.balance * 0.15);
-        loan.balance += penalty;
-
-        await sendSMS(
-          borrower.phone,
-          `Dear ${borrower.fullName},
-Your payment was late.
-
-Penalty: KES ${penalty}
-New Balance: KES ${loan.balance}
-
-- IziFinance`
-        );
-      }
-
-      /* 3️⃣ Credit score update */
-      const scoreDelta = getRepaymentScoreDelta(loan, borrower, amount, new Date());
-      const { newScore } = updateCreditScore(borrower, scoreDelta, event === "LATE" ? `Late repayment (${daysLate} days)` : "On-time repayment");
-
-      if (event === "LATE") {
-        borrower.latePayments = (borrower.latePayments || 0) + 1;
-      }
-
-      /* 4️⃣ Save repayment history */
-      loan.repayments.push({
-        loanId: loan._id,
-        transactionId: transaction._id,
-        borrowerId: borrower._id,
-        amount,
-        date: new Date(),
-        expectedPaymentDate: loan.dueDate,
-        wasPaymentLate: event === "LATE",
-        daysLate,
-        creditScoreDelta: scoreDelta
-      });
-
-
-
-      /* 5️⃣ Fully paid check */
-      let isFullyPaid = false;
-      if (loan.balance <= 0) {
-        loan.balance = 0;
-        loan.status = "fully paid";
-        loan.creditScoreAfter = newScore;
-        isFullyPaid = true;
-      }
-
-      await loan.save();
-
-      /* 6️⃣ Credit lender wallet */
-      const lender = await User.findById(loan.lenderId);
-      if (lender) {
-        lender.walletBalance += amount;
-        await lender.save();
-      }
-
-      borrower.loanBalance = loan.balance;
-      await borrower.save();
-
-      // 📩 Send 'Loan Cleared' Congratulations SMS
-      if (isFullyPaid) {
-        await sendSMS(
-          borrower.phone,
-          `IziFinance – Congratulations!\nWell done ${borrower.fullName} 🎉\nYou have fully cleared your loan. \nYour new loan limit has been updated. \nPlease check your IziFinance app to see your new limit.`
-        );
-      }
-
-      transaction.balanceAfter = loan.balance;
-
-      /* 7️⃣ Lender notification */
-      await Notification.create({
-        userId: loan.lenderId,
-        userModel: "User",
-        title: isFullyPaid ? "Loan Fully Repaid" : "Loan Repayment Received",
-        message: isFullyPaid
-          ? `Loan fully repaid by ${borrower.fullName}`
-          : `KES ${amount} received from ${borrower.fullName}. Balance: KES ${loan.balance}`,
-        type: "repayment",
-        data: {
-          loanId: loan._id,
-          borrowerId: borrower._id,
-          amountPaid: amount,
-          remainingBalance: loan.balance,
-          transactionId: transaction._id
-        }
-      });
-
-      /* 8️⃣ Agent commission (only once) */
-      if (isFullyPaid) {
-        borrower.totalLoansRepaid = (borrower.totalLoansRepaid || 0) + 1;
-        borrower.completedLoans = (borrower.completedLoans || 0) + 1;
-
-        if (loan.requestedByAgentId) {
-          await handleAgentFullRepaymentCommission(loan, transaction);
-        }
-      }
-
+      const { processRepayment } = require("../utils/repaymentService");
+      await processRepayment(transaction, amount, mpesaReceipt);
     }
     /* ===================== SAVINGS (LENDER DEPOSIT) ===================== */
     if (transaction.type === "savings") {

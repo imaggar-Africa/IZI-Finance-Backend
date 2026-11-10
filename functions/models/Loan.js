@@ -38,40 +38,32 @@ const loanSchema = new mongoose.Schema({
   repayments: [
     {
       transactionId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Transaction",
-        required: true
+        type: mongoose.Schema.Types.Mixed, // Supports both MongoDB ObjectId and legacy Safaricom transaction string IDs
+        ref: "Transaction"
       },
       loanId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "Loan",
-        required: true
+        ref: "Loan"
       },
       borrowerId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "Customer",
-        required: true
+        ref: "Customer"
       },
       amount: {
         type: Number,
-        required: true,
         min: 0
       },
       date: {
-        type: Date,
-        required: true
+        type: Date
       },
       expectedPaymentDate: {
-        type: Date,
-        required: true
+        type: Date
       },
       wasPaymentLate: {
-        type: Boolean,
-        required: true
+        type: Boolean
       },
       daysLate: {
         type: Number,
-        required: true,
         min: 0
       },
       creditScoreDelta: Number
@@ -89,6 +81,12 @@ const loanSchema = new mongoose.Schema({
 
   // 🔹 Add this field for reminders
   lastReminderSent: { type: Date, default: null },
+  lastReminderSentAt: { type: Date, default: null },
+  penaltyAmount: { type: Number, default: 0 },
+  penaltyApplied: { type: Boolean, default: false },
+  penaltyAppliedAt: { type: Date, default: null },
+  lastMonthlyPenaltyAt: { type: Date, default: null },
+  principalPaid: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

@@ -45,7 +45,8 @@ router.post("/pay/stk", async (req, res) => {
     `);
 
   } catch (err) {
-    res.status(500).send("Failed to initiate payment");
+    console.error("❌ STK payment route failed:", err);
+    res.status(500).send(`Failed to initiate payment: ${err.message}`);
   }
 });
 

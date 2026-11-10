@@ -24,13 +24,44 @@ exports.normalizePhone = (raw) => {
 
   if (!s) return null;
 
-  // Already valid E.164
+  // Normalize +0... format (e.g. +0710367688 -> 0710367688)
+  if (s.startsWith("+0")) {
+    s = "0" + s.slice(2);
+  }
+
+  // Already valid E.164 (we only match after fixing +0, since +07... is not valid E.164)
   if (s.startsWith("+") && E164.test(s)) {
-    return s;
+    // Check if it's country code + leading zero, e.g. +25407...
+    const noPlus = s.slice(1);
+    if (!(
+      (noPlus.startsWith("2540") && noPlus.length === 13) ||
+      (noPlus.startsWith("2560") && noPlus.length === 13) ||
+      (noPlus.startsWith("2550") && noPlus.length === 13) ||
+      (noPlus.startsWith("2500") && noPlus.length === 13) ||
+      (noPlus.startsWith("2340") && noPlus.length === 14) ||
+      (noPlus.startsWith("2330") && noPlus.length === 13)
+    )) {
+      return s;
+    }
   }
 
   // Remove "+"
   s = s.replace(/^\+/, "");
+
+  // Normalize leading zero after country codes (e.g. 25407... -> 2547...)
+  if (s.startsWith("2540") && s.length === 13) {
+    s = "254" + s.slice(4);
+  } else if (s.startsWith("2560") && s.length === 13) {
+    s = "256" + s.slice(4);
+  } else if (s.startsWith("2550") && s.length === 13) {
+    s = "255" + s.slice(4);
+  } else if (s.startsWith("2500") && s.length === 13) {
+    s = "250" + s.slice(4);
+  } else if (s.startsWith("2340") && s.length === 14) {
+    s = "234" + s.slice(4);
+  } else if (s.startsWith("2330") && s.length === 13) {
+    s = "233" + s.slice(4);
+  }
 
   /* ---------------- KENYA ---------------- */
   if (s.startsWith("254") && s.length === 12) {

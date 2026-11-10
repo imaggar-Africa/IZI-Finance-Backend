@@ -7,46 +7,59 @@ function africasTalkingService({ atUsername, atApiKey, atSenderId }) {
   const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
   async function sendVerificationCode(phone) {
+    let otp;
     try {
-      const otp = generateOTP();
+      otp = generateOTP();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+      console.log(`🔑 [AT Service] Generated OTP for ${phone}: ${otp}`);
+
       // Always save OTP to DB first
-      await OTP.findOneAndUpdate(
-        { phone },
-        { otp, expiresAt },
-        { upsert: true, new: true }
-      );
+      try {
+        await OTP.findOneAndUpdate(
+          { phone },
+          { otp, expiresAt },
+          { upsert: true, new: true }
+        );
+        console.log(`[AT Service] ✅ OTP saved to DB for ${phone}`);
+      } catch (dbError) {
+        console.error(`[AT Service] ❌ Database error saving OTP for ${phone}:`, dbError.message);
+        throw new Error(`Database error: ${dbError.message}`);
+      }
 
-      console.log(`📌 OTP generated and saved for ${phone}: ${otp}`);
-
-      // ⚡ ENQUEUE SMS (using the unified background system)
+      // ⚡ ENQUEUE SMS
       const messageText = `Your Izifinance verification code is: ${otp}. Valid for 5 minutes.`;
-
+      
+      console.log(`[AT Service] Enqueueing SMS for ${phone}...`);
       const smsResponse = await sendSMS(phone, messageText);
 
+      if (smsResponse.success) {
+        console.log(`[AT Service] ✅ SMS successfully queued for ${phone}`);
+      } else {
+        console.warn(`[AT Service] ⚠️ SMS queueing reported failure for ${phone}:`, smsResponse.message || smsResponse.error);
+      }
+
       return {
-        success: true, 
+        success: smsResponse.success, 
         phone,
         delivered: smsResponse.success,
         message: smsResponse.success 
           ? "OTP queued for delivery" 
           : "OTP saved but background queuing failed",
-        error: smsResponse.error || null,
+        error: smsResponse.error || smsResponse.message || null,
         otp: process.env.NODE_ENV === "development" ? otp : undefined,
       };
 
     } catch (error) {
-      console.error("❌ SMS background sending error:", error.message);
+      console.error(`[AT Service] ❌ Critical failure in sendVerificationCode for ${phone}:`, error.message);
       
-      // Still return success if DB save worked, but indicate delivery error
       return {
-        success: true, 
+        success: false, // Changed to false because something actually failed
         phone,
         delivered: false,
-        message: "OTP saved but SMS background enqueue failed",
+        message: error.message || "Internal error in OTP service",
         error: error.message,
-        otp: process.env.NODE_ENV === "development" ? otp : undefined,
+        otp: (process.env.NODE_ENV === "development" && otp) ? otp : undefined,
       };
     }
   }

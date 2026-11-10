@@ -16,6 +16,719 @@ const { getB2CCharge } = require("../utils/mpesaCharges");
 const groupMonthlyPaymentModel = require("../models/groupMonthlyPaymentModel");
 
 
+
+
+// Helper function to find nested values in callback
+
+exports.b2cCallback = async (req, res) => {
+  console.log("\n📥 B2C CALLBACK RECEIVED");
+  console.log("==============================\n");
+
+  let session;
+  const postCommitTasks = [];
+
+  try {
+    const callback = req.body;
+    console.log("📩 Raw Callback Body:", JSON.stringify(callback, null, 2));
+
+    let Result, ResultCode, ResultDesc,
+      OriginatorConversationID,
+      ConversationID,
+      MpesaTransactionID;
+
+    /* ===============================
+       CALLBACK PARSING (UNCHANGED)
+    =============================== */
+
+    if (callback?.Result) {
+      Result = callback.Result;
+      ResultCode = Result.ResultCode;
+      ResultDesc = Result.ResultDesc;
+      OriginatorConversationID = Result.OriginatorConversationID;
+      ConversationID = Result.ConversationID;
+
+      if (Result.ResultParameters?.ResultParameter) {
+        const resultParams = Result.ResultParameters.ResultParameter;
+        if (Array.isArray(resultParams)) {
+          const transactionParam = resultParams.find(
+            (param) =>
+              param.Key === "TransactionID" ||
+              param.Key === "TransactionReceipt"
+          );
+          if (transactionParam) {
+            MpesaTransactionID = transactionParam.Value;
+          }
+        }
+      }
+
+      if (!MpesaTransactionID) {
+        MpesaTransactionID = Result.TransactionID;
+      }
+    } else {
+      Result = callback;
+      ResultCode = callback.ResultCode || callback.resultCode;
+      ResultDesc = callback.ResultDesc || callback.resultDesc;
+      OriginatorConversationID =
+        callback.OriginatorConversationID ||
+        callback.originatorConversationID;
+      ConversationID =
+        callback.ConversationID || callback.conversationID;
+      MpesaTransactionID =
+        callback.TransactionID ||
+        callback.transactionID ||
+        callback.MpesaTransactionID;
+    }
+
+    /* ===============================
+       FIND TRANSACTION
+    =============================== */
+
+    let transaction = await Transaction.findOne({
+      $or: [
+        { checkoutRequestID: OriginatorConversationID },
+        { originatorConversationID: OriginatorConversationID },
+        { conversationID: ConversationID },
+        { conversationID: OriginatorConversationID }
+      ]
+    });
+
+    if (!transaction) {
+      return res.status(200).json({ message: "No transaction found" });
+    }
+
+    if (transaction.status !== "pending") {
+      return res.status(200).json({ message: "Already processed" });
+    }
+
+    /* ===============================
+       START SESSION
+    =============================== */
+
+    session = await mongoose.startSession();
+    session.startTransaction();
+
+    /* ===============================
+       FAILURE FLOW
+    =============================== */
+
+    if (ResultCode !== 0) {
+
+      transaction.status = "failed";
+      transaction.mpesaPayload = Result;
+      transaction.failureReason = ResultDesc;
+
+      await transaction.save({ session });
+
+      // 🔥 FIX: update loan properly and refund lender
+      if (transaction.type === "loan issued") {
+        const loan = await Loan.findById(transaction.loanId).session(session);
+        if (loan) {
+          loan.loanRequestStatus = "failed"; // ✅ IMPORTANT
+          loan.status = "pending";           // non-blocking
+          await loan.save({ session });
+        }
+
+        // Refund lender wallet on B2C failure
+        const lender = await User.findById(transaction.userId).session(session);
+        if (lender) {
+          const refundAmount = Number(transaction.amount) + Number(transaction.mpesaCharge || 0);
+          lender.walletBalance += refundAmount;
+          await lender.save({ session });
+          console.log(`[B2C_CALLBACK] Refunded KES ${refundAmount} to lender ID: ${lender._id} due to B2C failure.`);
+        }
+      }
+
+      if (transaction.type === "group loan issued") {
+        const request = await GroupLoanRequest.findById(transaction.groupLoanRequestId).session(session);
+        if (request) {
+          request.status = "pending"; // Reset for retry
+          await request.save({ session });
+
+          // 🔔 Push Notification for Group Leader (Failure)
+          await Notification.create([{
+            userId: request.requestedById,
+            userModel: "Customer",
+            title: "Loan Disbursement Failed",
+            message: `Disbursement to a member in group failed. \nReason: ${ResultDesc}`,
+            type: "general"
+          }], { session });
+
+          // 🔔 Push Notification for Lender (Failure)
+          await Notification.create([{
+            userId: transaction.userId,
+            userModel: "User",
+            title: "Disbursement Failed",
+            message: `A group loan disbursement of KES ${transaction.amount} failed.`,
+            type: "general"
+          }], { session });
+        }
+
+        // Refund lender wallet on B2C failure
+        const lender = await User.findById(transaction.userId).session(session);
+        if (lender) {
+          const refundAmount = Number(transaction.amount) + Number(transaction.mpesaCharge || 0);
+          lender.walletBalance += refundAmount;
+          await lender.save({ session });
+          console.log(`[B2C_CALLBACK] Refunded KES ${refundAmount} to lender ID: ${lender._id} due to B2C group failure.`);
+        }
+      }
+
+      if (transaction.type === "agent withdrawal") {
+        const withdrawalRequest = await WithdrawRequest.findById(transaction.withdrawalRequestId)
+          .populate("lenderId")
+          .session(session);
+
+        if (withdrawalRequest) {
+          withdrawalRequest.status = "failed";
+          withdrawalRequest.reason = ResultDesc || "M-Pesa B2C callback failed";
+          await withdrawalRequest.save({ session });
+
+          // Refund the agent
+          const agent = await AgentModel.findById(transaction.userId).session(session);
+          if (agent) {
+            const agentRefundAmount = Number(transaction.amount);
+            const agentBalanceBefore = agent.walletBalance;
+            const agentBalanceAfter = agentBalanceBefore + agentRefundAmount;
+            
+            agent.walletBalance = agentBalanceAfter;
+            await agent.save({ session });
+
+            transaction.balanceBefore = agentBalanceBefore;
+            transaction.balanceAfter = agentBalanceAfter;
+            console.log(`[B2C_CALLBACK] Refunded KES ${agentRefundAmount} to agent ID: ${agent._id} due to B2C failure.`);
+          }
+
+          // Refund the lender
+          const lender = withdrawalRequest.lenderId;
+          if (lender) {
+            const refundAmount = Number(transaction.amount) + Number(transaction.mpesaCharge || getB2CCharge(transaction.amount));
+            const lenderBalanceBefore = lender.walletBalance;
+            const lenderBalanceAfter = lenderBalanceBefore + refundAmount;
+            
+            lender.walletBalance = lenderBalanceAfter;
+            await lender.save({ session });
+
+            // Find lender's withdrawal transaction and mark it as reversed
+            const lenderTx = await Transaction.findOne({
+              withdrawalRequestId: withdrawalRequest._id,
+              userId: lender._id,
+              type: "withdrawal"
+            }).session(session);
+
+            if (lenderTx) {
+              lenderTx.status = "reversed";
+              lenderTx.balanceBefore = lenderBalanceBefore;
+              lenderTx.balanceAfter = lenderBalanceAfter;
+              await lenderTx.save({ session });
+            } else {
+              // Create a reversal/refund transaction record for the lender if the original was somehow not found
+              await Transaction.create(
+                [{
+                  userId: lender._id,
+                  userModel: "User",
+                  withdrawalRequestId: withdrawalRequest._id,
+                  type: "repayment",
+                  amount: refundAmount,
+                  status: "successful",
+                  phone: lender.phone,
+                  balanceBefore: lenderBalanceBefore,
+                  balanceAfter: lenderBalanceAfter,
+                  accountReference: transaction.accountReference,
+                }],
+                { session }
+              );
+            }
+            console.log(`[B2C_CALLBACK] Refunded KES ${refundAmount} to lender ID: ${lender._id} due to agent withdrawal B2C failure.`);
+          }
+        }
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        message: "Transaction failed"
+      });
+    }
+
+
+    /* ===============================
+       SUCCESS FLOW
+    =============================== */
+
+    transaction.status = "successful";
+    transaction.mpesaPayload = Result;
+    transaction.processedAt = new Date();
+    await transaction.save({ session });
+
+    /* ✅ SAFE TRANSACTION ID */
+
+    if (MpesaTransactionID) {
+      const existingTx = await Transaction.findOne({
+        transactionId: MpesaTransactionID
+      }).session(session);
+
+      if (!existingTx) {
+        transaction.transactionId = MpesaTransactionID;
+      }
+    }
+
+    if (
+      !transaction.checkoutRequestID &&
+      (ConversationID || OriginatorConversationID)
+    ) {
+      transaction.checkoutRequestID =
+        ConversationID || OriginatorConversationID;
+    }
+
+    /* =========================================================
+       🔥 NEW: LOAN ISSUED SUCCESS HANDLING (ADDED BLOCK)
+    ========================================================= */
+
+    if (transaction.type === "loan issued") {
+      console.log('[B2C_CALLBACK] Handling loan issued, transaction ID:', transaction._id, 'type:', transaction.type);
+
+      // ✅ Fetch the loan associated with this transaction
+      const loan = await Loan.findById(transaction.loanId).session(session);
+      console.log('[B2C_CALLBACK] Fetched loan:', loan ? loan._id : 'null');
+      
+      if (loan) {
+        // ✅ FINAL LOAN STATE (Wallet and transaction details were updated at approval time)
+        loan.status = "active";
+        loan.loanRequestStatus = "approved";
+        loan.disbursedAt = new Date();
+
+        await loan.save({ session });
+
+        // 📩 Send 'Loan Issued' Alert SMS (Individual)
+        try {
+          const borrower = await Borrower.findById(loan.borrowerId).session(session);
+          if (borrower && borrower.phone) {
+            console.log('[B2C_CALLBACK] Sending SMS to borrower', borrower._id);
+            const dueDateStr = loan.dueDate ? new Date(loan.dueDate).toLocaleDateString() : "N/A";
+            await sendSMS(
+              borrower.phone,
+              `IziFinance Loan Alert\nHello ${borrower.fullName}, you have received a loan of KES ${loan.amount}.\nRepayment Amount: KES ${loan.totalRepayment}\nDue Date: ${dueDateStr}\n\nThank you for using IziFinance.`
+            );
+
+            // 🔔 Also trigger Push Notification
+            await Notification.create({
+              userId: borrower._id,
+              userModel: "Customer",
+              title: "Loan Received",
+              message: `Your loan of KES ${loan.amount} has been disbursed.`,
+              type: "loan"
+            });
+          } else {
+            console.warn('[B2C_CALLBACK] Borrower not found or missing phone; skipping notifications.');
+          }
+        } catch (notifErr) {
+          console.error('[B2C_CALLBACK] Notification error:', notifErr);
+        }
+
+        // Commission handling – only if loan exists and has an agent
+        if (loan.requestedByAgentId) {
+          const commissionAmount = Number(loan.amount) * 0.0495;
+
+          const commissionUpdate = await AgentCommission.updateOne(
+            {
+              agentId: loan.requestedByAgentId,
+              loanId: loan._id,
+              commissionType: "approval"
+            },
+            {
+              status: "earned",
+              amount: commissionAmount,
+              earnedAt: new Date(),
+              transactionId: transaction._id
+            },
+            { session }
+          );
+
+          if (commissionUpdate.modifiedCount > 0) {
+            const agent = await AgentModel.findById(loan.requestedByAgentId).session(session);
+            if (agent) {
+              agent.walletBalance = (agent.walletBalance || 0) + commissionAmount;
+              agent.commissionEarned = (agent.commissionEarned || 0) + commissionAmount;
+              await agent.save({ session });
+              console.log(` Commission added to agent wallet: KES ${commissionAmount}`);
+            }
+          }
+        }
+      }
+    }
+
+    /* =========================================================
+       🔥 NEW: GROUP LOAN ISSUED SUCCESS HANDLING
+    ========================================================= */
+    if (transaction.type === "group loan issued") {
+      const amount = Number(transaction.amount);
+      request.status = "approved";
+
+      const member = await GroupMember.findOne({ 
+        groupId: request.groupId, 
+        borrowerId: request.borrowerId 
+      }).session(session);
+
+      if (member) {
+        member.internal_loan_amount = amount;
+        member.daily_repayment_amount = request.daily_repayment;
+        member.remaining_balance = request.total_repayment;
+        member.total_repaid = 0;
+        member.status = "active";
+        await member.save({ session });
+      }
+
+      await request.save({ session });
+
+      /* ===============================
+         SMS NOTIFICATIONS
+      =============================== */
+      const group = await Group.findById(request.groupId).session(session);
+      const borrower = await Borrower.findById(request.borrowerId).session(session);
+      const leader = group?.group_leader_id ? await Borrower.findById(group.group_leader_id).session(session) : null;
+
+      if (borrower) {
+        await sendSMS(
+          borrower.phone, 
+          `Dear ${borrower.fullName}, your group loan of KES ${amount} has been successfully disbursed to your M-Pesa. \nDaily Repayment: KES ${request.daily_repayment}. \nTotal: KES ${request.total_repayment}. \nREF: ${transaction.transactionId || "M-PESA"}`
+        );
+
+        // 🔔 Add Push Notification for Borrower
+        await Notification.create({
+          userId: borrower._id,
+          userModel: "Customer",
+          title: "Loan Disbursed",
+          message: `Your group loan of KES ${amount} has been sent to your M-Pesa.`,
+          type: "loan"
+        });
+      }
+
+      if (leader && leader._id.toString() !== borrower?._id.toString()) {
+        await sendSMS(
+          leader.phone,
+          `Notice: KES ${amount} has been successfully disbursed to group member ${borrower?.fullName} from group ${group?.name || "your group"}.`
+        );
+
+        // 🔔 Add Push Notification for Leader
+        await Notification.create({
+          userId: leader._id,
+          userModel: "Customer",
+          title: "Loan Successfully Disbursed",
+          message: `The loan of KES ${amount} for ${borrower?.fullName} has been successfully disbursed.`,
+          type: "loan"
+        });
+      }
+
+      if (lender) {
+        // 🔔 Add Push Notification for Lender
+        await Notification.create({
+          userId: lender._id,
+          userModel: "User",
+          title: "Disbursement Complete",
+          message: `Your disbursement of KES ${amount} to group member ${borrower?.fullName} was successful.`,
+          type: "loan"
+        });
+
+        const lenderProfile = await Profile.findOne({ userId: lender._id }).session(session);
+        const lenderName = lenderProfile?.fullName || "Lender";
+      }
+
+    }
+
+    /* =========================================================
+       🔥 NEW: MONTHLY GROUP REPAYMENT B2C CALLBACK
+    ========================================================= */
+    if (transaction.type === "monthly group repayment") {
+      const monthlyPayment = await groupMonthlyPaymentModel.findOne({ 
+        transaction_id: transaction._id 
+      }).session(session);
+
+      if (monthlyPayment) {
+        // We keep 'shortfall' status but we mark the B2C transfer as successful
+        // If it was 'pending', we move it to 'paid' (or keep shortfall if applicable)
+        if (monthlyPayment.status === "pending") {
+          monthlyPayment.status = "paid";
+        }
+        await monthlyPayment.save({ session });
+      }
+
+      const lender = await User.findById(transaction.userId).session(session);
+      if (lender) {
+          const group = await Group.findById(transaction.groupId).session(session);
+          
+          if (group) {
+            // ♻️ RESET POOL ON SUCCESSFUL CALLBACK
+            group.collected_pool_balance = 0;
+            await group.save({ session });
+            console.log(`♻️ Pool reset for group ${group.name} following successful B2C.`);
+          }
+
+          // 📩 Send Confirmation SMS to Lender
+          postCommitTasks.push(async () => {
+            await sendSMS(
+              lender.phone,
+              `Dear Lender, your monthly repayment for group ${group?.name || "Group"} of KES ${transaction.amount} has been successfully sent to your M-Pesa. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
+            );
+
+            // 🔔 Also send Push Notification
+            const { sendPushToUser } = require("../utils/expoPush");
+            await sendPushToUser(
+              lender._id,
+              "User",
+              "Monthly Payment Received",
+              `KES ${transaction.amount} from group ${group?.name} has been disbursed to your M-Pesa.`
+            );
+          });
+      }
+    }
+
+
+
+    /* ===============================
+       CUSTOMER WITHDRAWAL LOGIC
+    =============================== */
+
+    if (transaction.type === "customer withdrawal") {
+
+      const customer = await Borrower.findById(
+        transaction.userId
+      ).session(session);
+
+      if (customer) {
+
+        const balanceBefore = Number(customer.savingsBalance || 0);
+        const withdrawalAmount = Number(transaction.amount);
+
+        const fee = getB2CCharge(withdrawalAmount);
+        const totalDebit = withdrawalAmount + fee;
+
+        if (balanceBefore < totalDebit) {
+          throw new Error("Insufficient savings balance");
+        }
+
+        const balanceAfter = balanceBefore - totalDebit;
+
+        customer.savingsBalance = balanceAfter;
+
+        transaction.mpesaCharge = fee;
+        transaction.balanceBefore = balanceBefore;
+        transaction.balanceAfter = balanceAfter;
+
+        await customer.save({ session });
+      }
+    }
+
+    /* ===============================
+       USER WITHDRAWAL LOGIC
+    =============================== */
+
+    if (transaction.type === "withdrawal") {
+      const user = await User.findById(transaction.userId).session(session);
+
+      if (user) {
+        const balanceBefore = Number(user.walletBalance || 0);
+        const withdrawalAmount = Number(transaction.amount);
+
+        const fee = getB2CCharge(withdrawalAmount);
+        const totalDebit = withdrawalAmount + fee;
+
+        if (balanceBefore < totalDebit) {
+          throw new Error("Insufficient wallet balance");
+        }
+
+        const balanceAfter = balanceBefore - totalDebit;
+
+        user.walletBalance = balanceAfter;
+
+        transaction.mpesaCharge = fee;
+        transaction.balanceBefore = balanceBefore;
+        transaction.balanceAfter = balanceAfter;
+
+        await user.save({ session });
+
+        // Trigger Notifications
+        try {
+          const profile = await Profile.findOne({ userId: user._id }).session(session);
+          const userName = profile?.fullName || "User";
+
+          await Notification.create([{
+            userId: user._id,
+            userModel: "User",
+            title: "Withdrawal Successful",
+            message: `KES ${withdrawalAmount} has been withdrawn from your wallet.`,
+            type: "withdraw",
+          }], { session });
+
+          postCommitTasks.push(async () => {
+            await sendSMS(
+              user.phone,
+              `Dear ${userName}, your withdrawal of KES ${withdrawalAmount} has been processed successfully. \nNew wallet balance: KES ${balanceAfter}. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
+            );
+          });
+        } catch (notifErr) {
+          console.error('[B2C_CALLBACK] User withdrawal notification error:', notifErr);
+        }
+      }
+    }
+
+    /* =========================================================
+       🔥 NEW: AGENT WITHDRAWAL SUCCESS HANDLING
+    ========================================================= */
+    if (transaction.type === "agent withdrawal") {
+      console.log("💰 Processing agent withdrawal callback...");
+      
+      const agent = await AgentModel.findById(transaction.userId).session(session);
+
+      const withdrawalRequest = await WithdrawRequest.findOne({ 
+        transactionId: transaction._id 
+      }).populate('lenderId').session(session);
+
+      if (withdrawalRequest) {
+        withdrawalRequest.status = "completed";
+        await withdrawalRequest.save({ session });
+        console.log(`✅ Updated withdrawal request ${withdrawalRequest._id} to completed`);
+
+        // Find and update the lender's withdrawal transaction with the actual M-Pesa receipt ID
+        if (MpesaTransactionID) {
+          const lenderTx = await Transaction.findOne({
+            withdrawalRequestId: withdrawalRequest._id,
+            userModel: "User",
+            type: "withdrawal"
+          }).session(session);
+
+          if (lenderTx) {
+            lenderTx.transactionId = MpesaTransactionID;
+            await lenderTx.save({ session });
+            console.log(`✅ Updated lender transaction ${lenderTx._id} with transactionId: ${MpesaTransactionID}`);
+          }
+        }
+      }
+
+      postCommitTasks.push(async () => {
+        if (agent) {
+          // Notify Agent
+          await Notification.create({
+            userId: agent._id,
+            userModel: "Agent",
+            title: "Withdrawal Successful",
+            message: `Your withdrawal of KES ${transaction.amount} has been processed successfully.`,
+            type: "withdraw",
+          });
+
+          await sendSMS(
+            agent.phone,
+            `Dear ${agent.name || "Agent"}, your withdrawal of KES ${transaction.amount} has been processed successfully. \nNew wallet balance: KES ${agent.walletBalance}. \nREF: ${transaction.transactionId || transaction._id}\nFunds are on the way to your M-Pesa.\n- IziFinance`
+          );
+
+          // Notify Lender
+          const lender = withdrawalRequest?.lenderId;
+          if (lender) {
+            await Notification.create({
+              userId: lender._id,
+              userModel: "User",
+              title: "Agent Withdrawal Processed",
+              message: `Agent ${agent.name || "Agent"} has successfully withdrawn KES ${transaction.amount}.`,
+              type: "agent_withdrawal",
+            });
+          }
+        }
+      });
+    }
+
+    /* ===============================
+       FINAL SAVE + COMMIT
+    =============================== */
+
+    await transaction.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Execute post-commit tasks
+    if (postCommitTasks.length > 0) {
+      await Promise.all(postCommitTasks.map(fn => fn().catch(e => console.error("Post-commit task error:", e))));
+    }
+
+    return res.status(200).json({
+      message: "B2C callback processed successfully",
+      transactionId: transaction._id
+    });
+
+  } catch (err) {
+
+    console.error("🔥 B2C CALLBACK ERROR:", err);
+
+    if (session) {
+      try {
+        if (session.inTransaction()) {
+          await session.abortTransaction();
+        }
+      } finally {
+        session.endSession();
+      }
+    }
+
+    return res.status(500).json({
+      error: "Internal server error processing callback",
+      details: err.message
+    });
+  }
+};
+
+
+function findNestedValue(obj, keys) {
+  for (const key of keys) {
+    if (key.includes('.')) {
+      const keyParts = key.split('.');
+      let value = obj;
+      for (const part of keyParts) {
+        value = value?.[part];
+        if (value === undefined) break;
+      }
+      if (value !== undefined) return value;
+    } else {
+      if (obj?.[key] !== undefined) return obj[key];
+    }
+  }
+  return null;
+}
+
+// Helper function to extract amount from callback
+function extractAmountFromCallback(callback) {
+  try {
+    // Check ResultParameters first
+    if (callback?.Result?.ResultParameters?.ResultParameter) {
+      const params = callback.Result.ResultParameters.ResultParameter;
+      if (Array.isArray(params)) {
+        const amountParam = params.find(param =>
+          param.Key === "TransactionAmount" || param.Key === "Amount"
+        );
+        if (amountParam) {
+          return Number(amountParam.Value);
+        }
+      }
+    }
+
+    // Check direct properties
+    if (callback?.TransactionAmount) return Number(callback.TransactionAmount);
+    if (callback?.amount) return Number(callback.amount);
+    if (callback?.Amount) return Number(callback.Amount);
+
+    return null;
+  } catch (error) {
+    console.error("Error extracting amount from callback:", error);
+    return null;
+  }
+}
+
+
+
+
+
+
+
+
 // B2C Callback Handler
 // exports.b2cCallback = async (req, res) => {
 //   console.log("\n📥 B2C CALLBACK RECEIVED");
@@ -1375,538 +2088,6 @@ const groupMonthlyPaymentModel = require("../models/groupMonthlyPaymentModel");
 //   });
 // }
 // }
-
-// Helper function to find nested values in callback
-
-exports.b2cCallback = async (req, res) => {
-  console.log("\n📥 B2C CALLBACK RECEIVED");
-  console.log("==============================\n");
-
-  let session;
-  const postCommitTasks = [];
-
-  try {
-    const callback = req.body;
-    console.log("📩 Raw Callback Body:", JSON.stringify(callback, null, 2));
-
-    let Result, ResultCode, ResultDesc,
-      OriginatorConversationID,
-      ConversationID,
-      MpesaTransactionID;
-
-    /* ===============================
-       CALLBACK PARSING (UNCHANGED)
-    =============================== */
-
-    if (callback?.Result) {
-      Result = callback.Result;
-      ResultCode = Result.ResultCode;
-      ResultDesc = Result.ResultDesc;
-      OriginatorConversationID = Result.OriginatorConversationID;
-      ConversationID = Result.ConversationID;
-
-      if (Result.ResultParameters?.ResultParameter) {
-        const resultParams = Result.ResultParameters.ResultParameter;
-        if (Array.isArray(resultParams)) {
-          const transactionParam = resultParams.find(
-            (param) =>
-              param.Key === "TransactionID" ||
-              param.Key === "TransactionReceipt"
-          );
-          if (transactionParam) {
-            MpesaTransactionID = transactionParam.Value;
-          }
-        }
-      }
-
-      if (!MpesaTransactionID) {
-        MpesaTransactionID = Result.TransactionID;
-      }
-    } else {
-      Result = callback;
-      ResultCode = callback.ResultCode || callback.resultCode;
-      ResultDesc = callback.ResultDesc || callback.resultDesc;
-      OriginatorConversationID =
-        callback.OriginatorConversationID ||
-        callback.originatorConversationID;
-      ConversationID =
-        callback.ConversationID || callback.conversationID;
-      MpesaTransactionID =
-        callback.TransactionID ||
-        callback.transactionID ||
-        callback.MpesaTransactionID;
-    }
-
-    /* ===============================
-       FIND TRANSACTION
-    =============================== */
-
-    let transaction = await Transaction.findOne({
-      $or: [
-        { checkoutRequestID: OriginatorConversationID },
-        { originatorConversationID: OriginatorConversationID },
-        { conversationID: ConversationID },
-        { conversationID: OriginatorConversationID }
-      ]
-    });
-
-    if (!transaction) {
-      return res.status(200).json({ message: "No transaction found" });
-    }
-
-    if (transaction.status !== "pending") {
-      return res.status(200).json({ message: "Already processed" });
-    }
-
-    /* ===============================
-       START SESSION
-    =============================== */
-
-    session = await mongoose.startSession();
-    session.startTransaction();
-
-    /* ===============================
-       FAILURE FLOW
-    =============================== */
-
-    if (ResultCode !== 0) {
-
-      transaction.status = "failed";
-      transaction.mpesaPayload = Result;
-      transaction.failureReason = ResultDesc;
-
-      await transaction.save({ session });
-
-      // 🔥 FIX: update loan properly
-      if (transaction.type === "loan issued") {
-        const loan = await Loan.findById(transaction.loanId).session(session);
-        if (loan) {
-          loan.loanRequestStatus = "failed"; // ✅ IMPORTANT
-          loan.status = "pending";           // non-blocking
-          await loan.save({ session });
-        }
-      }
-
-      if (transaction.type === "group loan issued") {
-        const request = await GroupLoanRequest.findById(transaction.groupLoanRequestId).session(session);
-        if (request) {
-          request.status = "pending"; // Reset for retry
-          await request.save({ session });
-
-          // 🔔 Push Notification for Group Leader (Failure)
-          await Notification.create({
-            userId: request.requestedById,
-            userModel: "Customer",
-            title: "Loan Disbursement Failed",
-            message: `Disbursement to a member in group failed. \nReason: ${ResultDesc}`,
-            type: "general"
-          });
-
-          // 🔔 Push Notification for Lender (Failure)
-          await Notification.create({
-            userId: transaction.userId,
-            userModel: "User",
-            title: "Disbursement Failed",
-            message: `A group loan disbursement of KES ${transaction.amount} failed.`,
-            type: "general"
-          });
-        }
-      }
-
-
-      await session.commitTransaction();
-      session.endSession();
-
-      return res.status(200).json({
-        message: "Transaction failed"
-      });
-    }
-
-
-    /* ===============================
-       SUCCESS FLOW
-    =============================== */
-
-    transaction.status = "successful";
-    transaction.mpesaPayload = Result;
-    transaction.processedAt = new Date();
-
-    /* ✅ SAFE TRANSACTION ID */
-
-    if (MpesaTransactionID) {
-      const existingTx = await Transaction.findOne({
-        transactionId: MpesaTransactionID
-      }).session(session);
-
-      if (!existingTx) {
-        transaction.transactionId = MpesaTransactionID;
-      }
-    }
-
-    if (
-      !transaction.checkoutRequestID &&
-      (ConversationID || OriginatorConversationID)
-    ) {
-      transaction.checkoutRequestID =
-        ConversationID || OriginatorConversationID;
-    }
-
-    /* =========================================================
-       🔥 NEW: LOAN ISSUED SUCCESS HANDLING (ADDED BLOCK)
-    ========================================================= */
-
-    if (transaction.type === "loan issued") {
-
-      const loan = await Loan.findById(transaction.loanId).session(session);
-      if (!loan) throw new Error("Loan not found");
-
-      const lender = await User.findById(loan.lenderId).session(session);
-      if (!lender) throw new Error("Lender not found");
-
-      const amount = Number(transaction.amount);
-      const fee = getB2CCharge(amount);
-      const totalDebit = amount + fee;
-
-      const balanceBefore = lender.walletBalance;
-
-      if (balanceBefore < totalDebit) {
-        throw new Error("Insufficient wallet balance for loan + fee");
-      }
-
-      // 🔥 DEDUCT PRINCIPAL + FEE
-      lender.walletBalance -= totalDebit;
-
-      // 🔥 TRACK TRANSACTION DETAILS
-      transaction.mpesaCharge = fee;
-      transaction.balanceBefore = balanceBefore;
-      transaction.balanceAfter = lender.walletBalance;
-
-      // ✅ FINAL LOAN STATE
-      loan.status = "active";
-      loan.loanRequestStatus = "approved";
-      loan.disbursedAt = new Date();
-
-      await lender.save({ session });
-      await loan.save({ session });
-
-      // 📩 Send 'Loan Issued' Alert SMS (Individual)
-      const Borrower = require("../models/customer");
-      const borrower = await Borrower.findById(loan.borrowerId).session(session);
-      if (borrower) {
-        const dueDateStr = loan.dueDate ? new Date(loan.dueDate).toLocaleDateString() : "N/A";
-        await sendSMS(
-          borrower.phone,
-          `IziFinance Loan Alert\nHello ${borrower.fullName}, you have received a loan of KES ${loan.amount}.\nRepayment Amount: KES ${loan.totalRepayment}\nDue Date: ${dueDateStr}\n\nThank you for using IziFinance.`
-        );
-
-        // 🔔 Also trigger Push Notification
-        await Notification.create({
-          userId: borrower._id,
-          userModel: "Customer",
-          title: "Loan Received",
-          message: `Your loan of KES ${loan.amount} has been disbursed.`,
-          type: "loan"
-        });
-      }
-
-      if (loan.requestedByAgentId) {
-        const commissionAmount = Number(loan.amount) * 0.0495;
-
-        const commissionUpdate = await AgentCommission.updateOne(
-          {
-            agentId: loan.requestedByAgentId,
-            loanId: loan._id,
-            commissionType: "approval"
-          },
-          {
-            status: "earned",
-            amount: commissionAmount,
-            earnedAt: new Date(),
-            transactionId: transaction._id
-          },
-          { session }
-        );
-
-        if (commissionUpdate.modifiedCount > 0) {
-          const agent = await AgentModel.findById(loan.requestedByAgentId).session(session);
-          if (agent) {
-            agent.walletBalance = (agent.walletBalance || 0) + commissionAmount;
-            agent.commissionEarned = (agent.commissionEarned || 0) + commissionAmount;
-            await agent.save({ session });
-            console.log(` Commission added to agent wallet: KES ${commissionAmount}`);
-          }
-        }
-      }
-    }
-
-    /* =========================================================
-       🔥 NEW: GROUP LOAN ISSUED SUCCESS HANDLING
-    ========================================================= */
-    if (transaction.type === "group loan issued") {
-      const request = await GroupLoanRequest.findById(transaction.groupLoanRequestId).session(session);
-      if (!request) throw new Error("Group Loan Request not found");
-
-      const lender = await User.findById(transaction.userId).session(session);
-      if (!lender) throw new Error("Lender not found");
-
-      const amount = Number(transaction.amount);
-      const fee = getB2CCharge(amount);
-      const totalDebit = amount + fee;
-
-      const balanceBefore = lender.walletBalance;
-      if (balanceBefore < totalDebit) {
-        throw new Error("Insufficient wallet balance for group loan + fee");
-      }
-
-      lender.walletBalance -= totalDebit;
-      transaction.mpesaCharge = fee;
-      transaction.balanceBefore = balanceBefore;
-      transaction.balanceAfter = lender.walletBalance;
-
-      request.status = "approved";
-
-      const member = await GroupMember.findOne({ 
-        groupId: request.groupId, 
-        borrowerId: request.borrowerId 
-      }).session(session);
-
-      if (member) {
-        member.internal_loan_amount = amount;
-        member.daily_repayment_amount = request.daily_repayment;
-        member.remaining_balance = request.total_repayment;
-        member.total_repaid = 0;
-        member.status = "active";
-        await member.save({ session });
-      }
-
-      await lender.save({ session });
-      await request.save({ session });
-
-      /* ===============================
-         SMS NOTIFICATIONS
-      =============================== */
-      const group = await Group.findById(request.groupId).session(session);
-      const borrower = await Borrower.findById(request.borrowerId).session(session);
-      const leader = group?.group_leader_id ? await Borrower.findById(group.group_leader_id).session(session) : null;
-
-      if (borrower) {
-        await sendSMS(
-          borrower.phone, 
-          `Dear ${borrower.fullName}, your group loan of KES ${amount} has been successfully disbursed to your M-Pesa. \nDaily Repayment: KES ${request.daily_repayment}. \nTotal: KES ${request.total_repayment}. \nREF: ${transaction.transactionId || "M-PESA"}`
-        );
-
-        // 🔔 Add Push Notification for Borrower
-        await Notification.create({
-          userId: borrower._id,
-          userModel: "Customer",
-          title: "Loan Disbursed",
-          message: `Your group loan of KES ${amount} has been sent to your M-Pesa.`,
-          type: "loan"
-        });
-      }
-
-      if (leader && leader._id.toString() !== borrower?._id.toString()) {
-        await sendSMS(
-          leader.phone,
-          `Notice: KES ${amount} has been successfully disbursed to group member ${borrower?.fullName} from group ${group?.name || "your group"}.`
-        );
-
-        // 🔔 Add Push Notification for Leader
-        await Notification.create({
-          userId: leader._id,
-          userModel: "Customer",
-          title: "Loan Successfully Disbursed",
-          message: `The loan of KES ${amount} for ${borrower?.fullName} has been successfully disbursed.`,
-          type: "loan"
-        });
-      }
-
-      if (lender) {
-        // 🔔 Add Push Notification for Lender
-        await Notification.create({
-          userId: lender._id,
-          userModel: "User",
-          title: "Disbursement Complete",
-          message: `Your disbursement of KES ${amount} to group member ${borrower?.fullName} was successful.`,
-          type: "loan"
-        });
-
-        const lenderProfile = await Profile.findOne({ userId: lender._id }).session(session);
-        const lenderName = lenderProfile?.fullName || "Lender";
-      }
-
-    }
-
-    /* =========================================================
-       🔥 NEW: MONTHLY GROUP REPAYMENT B2C CALLBACK
-    ========================================================= */
-    if (transaction.type === "monthly group repayment") {
-      const monthlyPayment = await groupMonthlyPaymentModel.findOne({ 
-        transaction_id: transaction._id 
-      }).session(session);
-
-      if (monthlyPayment) {
-        // We keep 'shortfall' status but we mark the B2C transfer as successful
-        // If it was 'pending', we move it to 'paid' (or keep shortfall if applicable)
-        if (monthlyPayment.status === "pending") {
-          monthlyPayment.status = "paid";
-        }
-        await monthlyPayment.save({ session });
-      }
-
-      const lender = await User.findById(transaction.userId).session(session);
-      if (lender) {
-          const group = await Group.findById(transaction.groupId).session(session);
-          
-          if (group) {
-            // ♻️ RESET POOL ON SUCCESSFUL CALLBACK
-            group.collected_pool_balance = 0;
-            await group.save({ session });
-            console.log(`♻️ Pool reset for group ${group.name} following successful B2C.`);
-          }
-
-          // 📩 Send Confirmation SMS to Lender
-          postCommitTasks.push(async () => {
-            await sendSMS(
-              lender.phone,
-              `Dear Lender, your monthly repayment for group ${group?.name || "Group"} of KES ${transaction.amount} has been successfully sent to your M-Pesa. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
-            );
-
-            // 🔔 Also send Push Notification
-            const { sendPushToUser } = require("../utils/expoPush");
-            await sendPushToUser(
-              lender._id,
-              "User",
-              "Monthly Payment Received",
-              `KES ${transaction.amount} from group ${group?.name} has been disbursed to your M-Pesa.`
-            );
-          });
-      }
-    }
-
-
-
-    /* ===============================
-       CUSTOMER WITHDRAWAL LOGIC
-    =============================== */
-
-    if (transaction.type === "customer withdrawal") {
-
-      const customer = await Borrower.findById(
-        transaction.userId
-      ).session(session);
-
-      if (customer) {
-
-        const balanceBefore = Number(customer.savingsBalance || 0);
-        const withdrawalAmount = Number(transaction.amount);
-
-        const fee = getB2CCharge(withdrawalAmount);
-        const totalDebit = withdrawalAmount + fee;
-
-        if (balanceBefore < totalDebit) {
-          throw new Error("Insufficient savings balance");
-        }
-
-        const balanceAfter = balanceBefore - totalDebit;
-
-        customer.savingsBalance = balanceAfter;
-
-        transaction.mpesaCharge = fee;
-        transaction.balanceBefore = balanceBefore;
-        transaction.balanceAfter = balanceAfter;
-
-        await customer.save({ session });
-      }
-    }
-
-    /* ===============================
-       FINAL SAVE + COMMIT
-    =============================== */
-
-    await transaction.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return res.status(200).json({
-      message: "B2C callback processed successfully",
-      transactionId: transaction._id
-    });
-
-  } catch (err) {
-
-    console.error("🔥 B2C CALLBACK ERROR:", err);
-
-    if (session) {
-      try {
-        if (session.inTransaction()) {
-          await session.abortTransaction();
-        }
-      } finally {
-        session.endSession();
-      }
-    }
-
-    return res.status(500).json({
-      error: "Internal server error processing callback",
-      details: err.message
-    });
-  }
-};
-
-
-
-
-
-function findNestedValue(obj, keys) {
-  for (const key of keys) {
-    if (key.includes('.')) {
-      const keyParts = key.split('.');
-      let value = obj;
-      for (const part of keyParts) {
-        value = value?.[part];
-        if (value === undefined) break;
-      }
-      if (value !== undefined) return value;
-    } else {
-      if (obj?.[key] !== undefined) return obj[key];
-    }
-  }
-  return null;
-}
-
-// Helper function to extract amount from callback
-function extractAmountFromCallback(callback) {
-  try {
-    // Check ResultParameters first
-    if (callback?.Result?.ResultParameters?.ResultParameter) {
-      const params = callback.Result.ResultParameters.ResultParameter;
-      if (Array.isArray(params)) {
-        const amountParam = params.find(param =>
-          param.Key === "TransactionAmount" || param.Key === "Amount"
-        );
-        if (amountParam) {
-          return Number(amountParam.Value);
-        }
-      }
-    }
-
-    // Check direct properties
-    if (callback?.TransactionAmount) return Number(callback.TransactionAmount);
-    if (callback?.amount) return Number(callback.amount);
-    if (callback?.Amount) return Number(callback.Amount);
-
-    return null;
-  } catch (error) {
-    console.error("Error extracting amount from callback:", error);
-    return null;
-  }
-}
-
-
-
-// Withdrawal function for Customer Savings
 
 
 

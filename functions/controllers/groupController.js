@@ -11,7 +11,7 @@ const Notification = require("../models/Notification");
 ========================= */
 exports.createGroup = async (req, res) => {
   try {
-    const { name, description, lenderId, agentId, group_leader_id, location } = req.body;
+    const { name, description, lenderId, agentId, group_leader_id, location, loan_amount, status } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Group name required" });
@@ -35,8 +35,7 @@ exports.createGroup = async (req, res) => {
       finalAgentId = null;
     }
 
-
-    const group = await Group.create({
+    const groupData = {
       name,
       description,
       lenderId: finalLenderId,
@@ -45,8 +44,11 @@ exports.createGroup = async (req, res) => {
       createdByModel: req.user.role === "agent" ? "Agent" : "User",
       group_leader_id,
       location,
-      status: req.user.role === "agent" ? "pending" : "active"
-    });
+      status: status || (req.user.role === "agent" ? "pending" : "active")
+    };
+    if (loan_amount !== undefined) groupData.loan_amount = loan_amount;
+
+    const group = await Group.create(groupData);
 
 
     // 🔔 Push Notifications
