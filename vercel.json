@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
     "izi-backend": {
-      "root": ".",
+      "root": "./",
       "installCommand": "npm install && npm install --prefix functions",
       "buildCommand": "",
       "functions": {
