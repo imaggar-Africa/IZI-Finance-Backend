@@ -4,7 +4,6 @@
     "izi-backend": {
       "root": "./",
       "installCommand": "npm install && npm install --prefix functions",
-      "buildCommand": "",
       "functions": {
         "api/index.js": {
           "maxDuration": 300,
