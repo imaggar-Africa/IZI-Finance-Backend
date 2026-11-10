@@ -33,7 +33,7 @@ Scheduled tasks still run on Firebase when you use `firebase deploy`. On Vercel,
 
 - **SMS BullMQ worker** does not run in serverless by default. Set `ENABLE_SMS_WORKER=true` only if you accept a long-lived worker on a plan that supports it; otherwise keep the worker on Firebase or a separate process.
 - **Puppeteer / PDF** may need extra setup (e.g. `@sparticuz/chromium`) for serverless; test report/PDF routes after deploy.
-- **Function timeout**: `maxDuration` is 300s in `vercel.json` (Pro). Hobby is capped lower—reduce or upgrade if requests time out.
+- **Hobby plan**: `memory` is capped at **2048 MB** and `maxDuration` at **60s** in `vercel.json`. Upgrade to Pro for more memory/time; use Firebase for long PDF/cron jobs if needed.
 
 ## Firebase (unchanged)
 
