@@ -1,9 +1,9 @@
 name: Build and Push Docker
 
+# Manual only — avoids red X on staging when Docker Hub secrets are not set.
+# Vercel deploys separately from vercel.json.
 on:
-  push:
-    branches:
-      - staging
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,7 +19,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build image
-        run: docker build -t dockerimaggar/izi-backend:latest .
+        run: docker build -f docker/Dockerfile -t dockerimaggar/izi-backend:latest .
 
       - name: Push image
         run: docker push dockerimaggar/izi-backend:latest
