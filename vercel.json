@@ -3,6 +3,8 @@
   "services": {
     "izi-backend": {
       "root": "./",
+      "framework": "express",
+      "entrypoint": "api/index.js",
       "installCommand": "npm install && npm install --prefix functions",
       "functions": {
         "api/index.js": {
