@@ -6,14 +6,20 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.join(__dirname, "..");
-const targets = [
-  path.join(root, "node_modules", "puppeteer"),
-  path.join(root, "node_modules", "puppeteer-core"),
-  path.join(root, "node_modules", "@puppeteer"),
-  path.join(root, "functions", "node_modules", "puppeteer"),
-  path.join(root, "functions", "node_modules", "puppeteer-core"),
-  path.join(root, "functions", "node_modules", "@puppeteer"),
+const pruneRoots = [
+  path.join(root, "node_modules"),
+  path.join(root, "functions", "node_modules"),
+  path.join(root, "api", "node_modules"),
 ];
+
+const heavy = ["puppeteer", "puppeteer-core", "@puppeteer"];
+
+const targets = [];
+for (const base of pruneRoots) {
+  for (const name of heavy) {
+    targets.push(path.join(base, name));
+  }
+}
 
 for (const dir of targets) {
   if (fs.existsSync(dir)) {

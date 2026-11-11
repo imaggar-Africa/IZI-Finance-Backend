@@ -71,6 +71,7 @@ for (const name of [...required].sort()) {
 }
 
 const modulePaths = [
+  path.join(root, "api", "node_modules"),
   path.join(root, "node_modules"),
   path.join(root, "functions", "node_modules"),
 ];
@@ -103,7 +104,9 @@ if (missingRoot.length) {
 }
 
 if (resolveFails.length) {
-  console.log("\n❌ Cannot resolve (run npm install && npm install --prefix functions):");
+  console.log(
+    "\n❌ Cannot resolve (run npm install && npm run sync:vercel-api-deps && npm install --prefix api):",
+  );
   resolveFails.forEach((p) => console.log("  -", p));
   process.exitCode = 1;
 } else {
@@ -116,23 +119,20 @@ if (missingRoot.length || missingBoth.length) {
   console.log("✅ All packages declared in root package.json.");
 }
 
-const ensurePath = path.join(root, "api", "ensure-vercel-deps.js");
-const ensureSrc = fs.readFileSync(ensurePath, "utf8");
-const ensurePkgs = [...ensureSrc.matchAll(/^\s*["']([^"']+)["'],?\s*$/gm)]
-  .map((m) => packageName(m[1]))
-  .filter(Boolean);
-const ensureSet = new Set(ensurePkgs);
-const missingEnsure = [...required].filter((p) => !ensureSet.has(p));
-const extraEnsure = [...ensureSet].filter((p) => !required.has(p));
+const runtimePath = path.join(__dirname, "vercel-runtime-deps.json");
+const runtimeList = JSON.parse(fs.readFileSync(runtimePath, "utf8"));
+const runtimeSet = new Set(runtimeList.map((p) => packageName(p)));
+const missingRuntime = [...required].filter((p) => !runtimeSet.has(p));
+const extraRuntime = runtimeList.filter((p) => !required.has(packageName(p)));
 
-if (missingEnsure.length) {
-  console.log("\n⚠️ In code but missing from api/ensure-vercel-deps.js:");
-  missingEnsure.forEach((p) => console.log("  -", p));
+if (missingRuntime.length) {
+  console.log("\n⚠️ In code but missing from scripts/vercel-runtime-deps.json:");
+  missingRuntime.forEach((p) => console.log("  -", p));
   process.exitCode = 1;
 }
-if (extraEnsure.length) {
-  console.log("\nℹ️ In ensure-vercel-deps.js but unused in functions/:");
-  extraEnsure.forEach((p) => console.log("  -", p));
+if (extraRuntime.length) {
+  console.log("\nℹ️ In vercel-runtime-deps.json but unused in functions/:");
+  extraRuntime.forEach((p) => console.log("  -", p));
 }
 
 const vercelIgnore = path.join(root, ".vercelignore");
@@ -140,7 +140,11 @@ if (fs.existsSync(vercelIgnore)) {
   const ignore = fs.readFileSync(vercelIgnore, "utf8");
   if (/functions\/node_modules/i.test(ignore)) {
     console.log(
-      "\nℹ️ functions/node_modules is ignored on Vercel (size); root npm install + ensure-vercel-deps supplies the bundle.",
+      "\nℹ️ functions/node_modules ignored on deploy; api/node_modules carries Vercel runtime deps.",
     );
+  }
+  if (/\/api\/node_modules/i.test(ignore)) {
+    console.log("\n❌ Do not ignore api/node_modules in .vercelignore.");
+    process.exitCode = 1;
   }
 }

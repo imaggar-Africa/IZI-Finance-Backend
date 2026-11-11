@@ -5,7 +5,10 @@ const path = require("path");
 const Module = require("module");
 
 const projectRoot = path.join(__dirname, "..");
-const moduleSearchPaths = [path.join(projectRoot, "node_modules")];
+const moduleSearchPaths = [
+  path.join(projectRoot, "api", "node_modules"),
+  path.join(projectRoot, "node_modules"),
+];
 const existingNodePath = process.env.NODE_PATH
   ? process.env.NODE_PATH.split(path.delimiter)
   : [];
@@ -20,9 +23,6 @@ let initializeApp;
 let getMissingFirebaseEnvKeys;
 
 try {
-  require("axios");
-  require("./ensure-vercel-deps");
-
   if (!process.env.VERCEL) {
     require("dotenv").config({ path: path.join(projectRoot, ".env") });
   } else if (process.env.NODE_ENV !== "production") {
