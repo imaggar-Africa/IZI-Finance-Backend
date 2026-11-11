@@ -13,7 +13,7 @@
     "api/index.js": {
       "maxDuration": 60,
       "memory": 2048,
-      "includeFiles": "{functions/**,node_modules/bcryptjs/**,node_modules/mongoose/**,node_modules/mongodb/**,node_modules/bson/**,node_modules/kareem/**,node_modules/mpath/**,node_modules/mquery/**,node_modules/sift/**,node_modules/@mongodb-js/**,node_modules/@fastify/busboy/**,functions/node_modules/**}",
+      "includeFiles": "functions/**",
       "excludeFiles": "node_modules/{puppeteer,puppeteer-core,@puppeteer}/**"
     },
     "api/cron/[job].js": {
