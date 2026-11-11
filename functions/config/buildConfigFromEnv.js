@@ -41,7 +41,6 @@ const FIREBASE_ENV_KEYS = [
   "MPESA_B2C_SECURITY_CREDENTIAL",
   "MPESA_B2C_RESULT_URL",
   "MPESA_B2C_TIMEOUT_URL",
-  "MPESA_REVERSAL_URL",
   "MPESA_REVERSAL_RESULT_URL",
   "MPESA_REVERSAL_TIMEOUT_URL",
   "MPESA_CONFIRM_URL",
@@ -49,9 +48,13 @@ const FIREBASE_ENV_KEYS = [
   "MPESA_ACCOUNT_BALANCE_RESULT_URL",
 ];
 
+function resolveMongoUri(env = process.env) {
+  return clean(env.MONGO_URI || env.DATABASE_URL || env.Database);
+}
+
 function buildConfigFromEnv(env = process.env) {
   return {
-    mongoUri: clean(env.MONGO_URI),
+    mongoUri: resolveMongoUri(env),
     redisUrl: clean(env.UPSTASH_REDIS_REST_URL),
     redisToken: clean(env.UPSTASH_REDIS_REST_TOKEN),
 
@@ -77,7 +80,6 @@ function buildConfigFromEnv(env = process.env) {
     mpesaB2cResultUrl: clean(env.MPESA_B2C_RESULT_URL),
     mpesaB2cTimeoutUrl: clean(env.MPESA_B2C_TIMEOUT_URL),
 
-    mpesaReversalUrl: clean(env.MPESA_REVERSAL_URL),
     mpesaReversalResult: clean(env.MPESA_REVERSAL_RESULT_URL),
     mpesaReversalTimeout: clean(env.MPESA_REVERSAL_TIMEOUT_URL),
 
@@ -107,9 +109,13 @@ function getMissingFirebaseEnvKeys(env = process.env) {
     "REDIS_PORT",
     "REDIS_PASSWORD",
     "REDIS_TLS",
+    "MPESA_CONSUMER_KEY",
+    "MPESA_CONSUMER_SECRET",
+    "MPESA_ACCOUNT_BALANCE_RESULT_URL",
   ]);
   return FIREBASE_ENV_KEYS.filter((key) => {
     if (optional.has(key)) return false;
+    if (key === "MONGO_URI") return !resolveMongoUri(env);
     return !clean(env[key]);
   });
 }

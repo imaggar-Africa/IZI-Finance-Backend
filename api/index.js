@@ -13,6 +13,8 @@ if (!process.env.VERCEL) {
 
 process.env.IZI_RUNTIME = process.env.IZI_RUNTIME || "vercel";
 
+require("./vercel-preload-deps");
+
 const { app, initializeApp } = require("../functions/app");
 const {
   buildConfigFromEnv,
@@ -75,7 +77,10 @@ function formatInitError(err) {
     initStep: err.initStep || null,
     missingEnv: missingEnv.length ? missingEnv : undefined,
     mongoUriConfigured: Boolean(
-      process.env.MONGO_URI || global.config?.mongoUri
+      process.env.MONGO_URI ||
+        process.env.Database ||
+        process.env.DATABASE_URL ||
+        global.config?.mongoUri
     ),
     stack: err.stack || null,
     vercelRequestId: null,

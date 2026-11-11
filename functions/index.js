@@ -52,8 +52,7 @@ const mpesaB2cCredential = defineSecret("MPESA_B2C_SECURITY_CREDENTIAL");
 const mpesaB2cResultUrl = defineSecret("MPESA_B2C_RESULT_URL");
 const mpesaB2cTimeoutUrl = defineSecret("MPESA_B2C_TIMEOUT_URL");
 
-// MPESA REVERSAL
-const mpesaReversalUrl = defineSecret("MPESA_REVERSAL_URL");
+// MPESA REVERSAL (URL derived from MPESA_ENV in mpesa.js)
 const mpesaReversalResult = defineSecret("MPESA_REVERSAL_RESULT_URL");
 const mpesaReversalTimeout = defineSecret("MPESA_REVERSAL_TIMEOUT_URL");
 
@@ -86,7 +85,7 @@ setGlobalOptions({
     mpesaB2cShortcode, mpesaB2cInitiator, mpesaB2cCredential,
     mpesaB2cResultUrl, mpesaB2cTimeoutUrl,
 
-    mpesaReversalUrl, mpesaReversalResult, mpesaReversalTimeout,
+    mpesaReversalResult, mpesaReversalTimeout,
 
     mpesaC2bConfirmUrl, mpesaC2bValidateUrl,
 
@@ -149,7 +148,6 @@ onInit(async () => {
       mpesaB2cResultUrl: clean(getSecretValue(mpesaB2cResultUrl)),
       mpesaB2cTimeoutUrl: clean(getSecretValue(mpesaB2cTimeoutUrl)),
 
-      mpesaReversalUrl: clean(getSecretValue(mpesaReversalUrl)),
       mpesaReversalResult: clean(getSecretValue(mpesaReversalResult)),
       mpesaReversalTimeout: clean(getSecretValue(mpesaReversalTimeout)),
 
@@ -266,7 +264,6 @@ async function ensureGlobalConfig() {
       mpesaB2cResultUrl: clean(getSecretValue(mpesaB2cResultUrl)),
       mpesaB2cTimeoutUrl: clean(getSecretValue(mpesaB2cTimeoutUrl)),
 
-      mpesaReversalUrl: clean(getSecretValue(mpesaReversalUrl)),
       mpesaReversalResult: clean(getSecretValue(mpesaReversalResult)),
       mpesaReversalTimeout: clean(getSecretValue(mpesaReversalTimeout)),
 

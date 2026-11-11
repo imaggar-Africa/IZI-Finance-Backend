@@ -1,0 +1,19 @@
+/**
+ * Side-effect requires so Vercel's bundler includes packages loaded from `functions/`.
+ */
+require("bcryptjs");
+require("mongoose");
+require("jsonwebtoken");
+require("joi");
+require("validator");
+require("bullmq");
+require("ioredis");
+require("multer");
+require("africastalking");
+require("firebase-admin");
+require("axios");
+require("xss");
+require("helmet");
+require("express-rate-limit");
+require("mongo-sanitize");
+require("expo-server-sdk");

@@ -24,7 +24,6 @@ module.exports = async function localInit() {
     mpesaB2cResultUrl: process.env.MPESA_B2C_RESULT_URL,
     mpesaB2cTimeoutUrl: process.env.MPESA_B2C_TIMEOUT_URL,
 
-    mpesaReversalUrl: process.env.MPESA_REVERSAL_URL,
     mpesaReversalResult: process.env.MPESA_REVERSAL_RESULT_URL,
     mpesaReversalTimeout: process.env.MPESA_REVERSAL_TIMEOUT_URL,
   };

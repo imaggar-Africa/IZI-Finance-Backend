@@ -202,7 +202,7 @@ async function reverseTransaction(transactionId, amount, sender) {
   const token = await getAccessToken();
 
   await axios.post(
-    config.mpesaReversalUrl.trim(),
+    `${getBaseURL()}/mpesa/reversal/v1/request`,
     {
       Initiator: config.mpesaB2cInitiator.trim(),
       SecurityCredential: config.mpesaB2cCredential.trim(),
