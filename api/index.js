@@ -18,6 +18,9 @@ process.env.NODE_PATH = [...existingNodePath, ...moduleSearchPaths].join(
 );
 Module._initPaths();
 
+// Trace runtime deps into the serverless bundle (see scripts/check-vercel-deps.js)
+require("./ensure-vercel-deps");
+
 // Load .env from repo root when running `vercel dev` locally
 if (!process.env.VERCEL) {
   require("dotenv").config({ path: path.join(projectRoot, ".env") });

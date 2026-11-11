@@ -1,5 +1,4 @@
 functions/.cache/**
-functions/node_modules/**
 Dockerfile
 **/.env
 **/.env.*

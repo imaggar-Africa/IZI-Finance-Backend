@@ -115,3 +115,33 @@ if (missingRoot.length || missingBoth.length) {
 } else if (!process.exitCode) {
   console.log("✅ All packages declared in root package.json.");
 }
+
+const ensurePath = path.join(root, "api", "ensure-vercel-deps.js");
+const ensureSrc = fs.readFileSync(ensurePath, "utf8");
+const ensurePkgs = [...ensureSrc.matchAll(/^\s*["']([^"']+)["'],?\s*$/gm)]
+  .map((m) => packageName(m[1]))
+  .filter(Boolean);
+const ensureSet = new Set(ensurePkgs);
+const missingEnsure = [...required].filter((p) => !ensureSet.has(p));
+const extraEnsure = [...ensureSet].filter((p) => !required.has(p));
+
+if (missingEnsure.length) {
+  console.log("\n⚠️ In code but missing from api/ensure-vercel-deps.js:");
+  missingEnsure.forEach((p) => console.log("  -", p));
+  process.exitCode = 1;
+}
+if (extraEnsure.length) {
+  console.log("\nℹ️ In ensure-vercel-deps.js but unused in functions/:");
+  extraEnsure.forEach((p) => console.log("  -", p));
+}
+
+const vercelIgnore = path.join(root, ".vercelignore");
+if (fs.existsSync(vercelIgnore)) {
+  const ignore = fs.readFileSync(vercelIgnore, "utf8");
+  if (/functions\/node_modules/i.test(ignore)) {
+    console.log(
+      "\n❌ .vercelignore must NOT exclude functions/node_modules (breaks deploy).",
+    );
+    process.exitCode = 1;
+  }
+}
