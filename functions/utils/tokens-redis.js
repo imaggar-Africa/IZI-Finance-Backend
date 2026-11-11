@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const redisModule = require("./redis");
-const { defineSecret } = require("firebase-functions/params");
+const { defineSecret } = require("./defineSecret");
 
 // --- Firebase Secrets (fallback to process.env on Vercel / local) ---
 const JWT_ACCESS_SECRET = defineSecret("JWT_ACCESS_SECRET");
