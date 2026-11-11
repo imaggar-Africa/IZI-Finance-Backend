@@ -11,6 +11,7 @@ const { generateAccountId } = require("../utils/generateAccountId");
 const { sendSMS } = require("../utils/sms");
 const crypto = require("crypto");
 const Guarantor = require("../models/Guarantor");
+const { serverErrorBody } = require("../utils/serverErrorBody");
 
 // @desc    Register a new agent (by lender)
 // @route   POST /api/agents
@@ -255,7 +256,10 @@ const loginAgent = async (req, res) => {
     });
   } catch (err) {
     console.error("Agent login error:", err);
-    return res.status(500).json({ message: "Error logging in" });
+    return res.status(500).json({
+      message: "Error logging in",
+      ...serverErrorBody(err),
+    });
   }
 };
 

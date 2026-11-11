@@ -12,6 +12,7 @@ const fsp = require("fs/promises");
 const uploadToFirebase = require("../utils/uploadToFirebase");
 const { normalizePhone } = require("../utils/normalizePhone");
 const { sendSMS } = require("../utils/sms");
+const { serverErrorBody } = require("../utils/serverErrorBody");
 
 
 
@@ -275,7 +276,10 @@ exports.login = async (req, res) => {
     });
   } catch (err) {
     console.error('Error logging in:', err);
-    return res.status(500).json({ message: 'Error logging in' });
+    return res.status(500).json({
+      message: 'Error logging in',
+      ...serverErrorBody(err),
+    });
   }
 };
 
