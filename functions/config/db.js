@@ -1,8 +1,12 @@
 // config/db.js
 const mongoose = require('mongoose');
 
-const connectDB = async () => {
-  const uri = process.env.MONGO_URI?.trim();
+const connectDB = async (mongoUri) => {
+  const uri = (
+    mongoUri ||
+    process.env.MONGO_URI ||
+    global.config?.mongoUri
+  )?.trim();
 
   if (!uri) {
     console.warn('⚠️ MONGO_URI not set; skipping MongoDB connection initialization.');

@@ -28,7 +28,7 @@ function ensureInit() {
       if (missing.length) {
         console.warn(
           "⚠️ Missing env vars for Vercel (Firebase secret names):",
-          missing.join(", ")
+          missing.join(", "),
         );
       }
 
@@ -67,6 +67,21 @@ function isHealthPath(url = "") {
   );
 }
 
+function formatInitError(err) {
+  const missingEnv = getMissingFirebaseEnvKeys();
+  return {
+    error: "Server initialization failed",
+    details: err.message,
+    initStep: err.initStep || null,
+    missingEnv: missingEnv.length ? missingEnv : undefined,
+    mongoUriConfigured: Boolean(
+      process.env.MONGO_URI || global.config?.mongoUri
+    ),
+    stack: err.stack || null,
+    vercelRequestId: null,
+  };
+}
+
 module.exports = async (req, res) => {
   try {
     if (!isHealthPath(req.url)) {
@@ -74,12 +89,16 @@ module.exports = async (req, res) => {
     }
     return app(req, res);
   } catch (err) {
-    console.error("❌ Vercel handler init error:", err);
+    const payload = formatInitError(err);
+    payload.vercelRequestId = req.headers["x-vercel-id"] || null;
+
+    console.error("❌ Vercel handler init error:", err.message);
+    console.error("initStep:", payload.initStep);
+    console.error("missingEnv:", payload.missingEnv);
+    console.error(err.stack);
+
     if (!res.headersSent) {
-      res.status(500).json({
-        error: "Server initialization failed",
-        details: err.message,
-      });
+      res.status(500).json(payload);
     }
   }
 };
