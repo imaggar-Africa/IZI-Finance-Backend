@@ -140,8 +140,7 @@ if (fs.existsSync(vercelIgnore)) {
   const ignore = fs.readFileSync(vercelIgnore, "utf8");
   if (/functions\/node_modules/i.test(ignore)) {
     console.log(
-      "\n❌ .vercelignore must NOT exclude functions/node_modules (breaks deploy).",
+      "\nℹ️ functions/node_modules is ignored on Vercel (size); root npm install + ensure-vercel-deps supplies the bundle.",
     );
-    process.exitCode = 1;
   }
 }
