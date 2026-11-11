@@ -13,7 +13,7 @@
     "api/index.js": {
       "maxDuration": 60,
       "memory": 2048,
-      "includeFiles": "{functions/**,node_modules/@fastify/busboy/**,node_modules/@upstash/**,node_modules/@sendgrid/**,node_modules/@mongodb-js/**,node_modules/{bcryptjs,firebase-admin,mongoose,joi,mongodb,bson}/**}",
+      "includeFiles": "{functions/**,node_modules/axios/**,node_modules/@fastify/busboy/**,node_modules/@upstash/**,node_modules/@sendgrid/**,node_modules/@mongodb-js/**,node_modules/{bcryptjs,firebase-admin,mongoose,joi,mongodb,bson,express}/**}",
       "excludeFiles": "node_modules/{puppeteer,puppeteer-core,@puppeteer}/**"
     },
     "api/cron/[job].js": {

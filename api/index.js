@@ -20,6 +20,7 @@ let initializeApp;
 let getMissingFirebaseEnvKeys;
 
 try {
+  require("axios");
   require("./ensure-vercel-deps");
 
   if (!process.env.VERCEL) {
