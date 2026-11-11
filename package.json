@@ -10,6 +10,7 @@
     "vercel:dev": "vercel dev",
     "vercel:deploy": "vercel deploy --prod",
     "check:env": "node scripts/check-env-keys.js",
+    "check:vercel-deps": "node scripts/check-vercel-deps.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
@@ -21,6 +22,7 @@
   "description": "",
   "dependencies": {
     "@fastify/busboy": "^3.2.0",
+    "@sendgrid/mail": "^8.1.3",
     "@upstash/redis": "^1.35.6",
     "africastalking": "^0.7.4",
     "aws-sdk": "^2.1692.0",
