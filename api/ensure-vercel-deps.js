@@ -38,5 +38,14 @@ const PACKAGES = [
 ];
 
 for (const name of PACKAGES) {
-  require(name);
+  try {
+    require(name);
+  } catch (err) {
+    const wrapped = new Error(
+      `[ensure-vercel-deps] Cannot load "${name}": ${err.message}`,
+    );
+    wrapped.cause = err;
+    wrapped.packageName = name;
+    throw wrapped;
+  }
 }

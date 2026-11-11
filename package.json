@@ -11,6 +11,7 @@
     "vercel:deploy": "vercel deploy --prod",
     "check:env": "node scripts/check-env-keys.js",
     "check:vercel-deps": "node scripts/check-vercel-deps.js",
+    "check:vercel-boot": "node scripts/vercel-boot-check.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
