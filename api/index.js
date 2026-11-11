@@ -13,97 +13,115 @@ if (!process.env.VERCEL) {
 
 process.env.IZI_RUNTIME = process.env.IZI_RUNTIME || "vercel";
 
-require("./vercel-preload-deps");
+let preloadError = null;
+try {
+  require("./vercel-preload-deps");
+} catch (err) {
+  preloadError = err;
+  console.error("❌ Vercel dependency preload failed:", err);
+}
 
-const { app, initializeApp } = require("../functions/app");
-const {
-  buildConfigFromEnv,
-  getMissingFirebaseEnvKeys,
-} = require("../functions/config/buildConfigFromEnv");
+if (preloadError) {
+  module.exports = async (_req, res) => {
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Server dependency preload failed",
+        details: preloadError.message,
+        stack: preloadError.stack || null,
+      });
+    }
+  };
+} else {
+  const { app, initializeApp } = require("../functions/app");
+  const {
+    buildConfigFromEnv,
+    getMissingFirebaseEnvKeys,
+  } = require("../functions/config/buildConfigFromEnv");
 
-let initPromise = null;
+  let initPromise = null;
 
-function ensureInit() {
-  if (!initPromise) {
-    initPromise = (async () => {
-      const missing = getMissingFirebaseEnvKeys();
-      if (missing.length) {
-        console.warn(
-          "⚠️ Missing env vars for Vercel (Firebase secret names):",
-          missing.join(", "),
-        );
-      }
-
-      if (!global.config || Object.keys(global.config).length === 0) {
-        global.config = buildConfigFromEnv();
-      }
-
-      await initializeApp(global.config);
-
-      if (process.env.ENABLE_SMS_WORKER === "true") {
-        try {
-          const { startWorker } = require("../functions/queues/sms.worker");
-          startWorker().catch((err) =>
-            console.error("❌ SMS worker failed to start on Vercel:", err)
+  function ensureInit() {
+    if (!initPromise) {
+      initPromise = (async () => {
+        const missing = getMissingFirebaseEnvKeys();
+        if (missing.length) {
+          console.warn(
+            "⚠️ Missing env vars for Vercel (Firebase secret names):",
+            missing.join(", "),
           );
-          console.log("🚀 SMS worker started (ENABLE_SMS_WORKER=true)");
-        } catch (err) {
-          console.warn("⚠️ Could not load SMS worker:", err.message);
         }
-      }
-    })().catch((err) => {
-      initPromise = null;
-      throw err;
-    });
+
+        if (!global.config || Object.keys(global.config).length === 0) {
+          global.config = buildConfigFromEnv();
+        }
+
+        await initializeApp(global.config);
+
+        if (process.env.ENABLE_SMS_WORKER === "true") {
+          try {
+            const { startWorker } = require("../functions/queues/sms.worker");
+            startWorker().catch((workerErr) =>
+              console.error("❌ SMS worker failed to start on Vercel:", workerErr)
+            );
+            console.log("🚀 SMS worker started (ENABLE_SMS_WORKER=true)");
+          } catch (err) {
+            console.warn("⚠️ Could not load SMS worker:", err.message);
+          }
+        }
+      })().catch((err) => {
+        initPromise = null;
+        throw err;
+      });
+    }
+    return initPromise;
   }
-  return initPromise;
-}
 
-function isHealthPath(url = "") {
-  const pathOnly = url.split("?")[0];
-  return (
-    pathOnly === "/healthz" ||
-    pathOnly === "/ping" ||
-    pathOnly === "/version" ||
-    pathOnly === "/"
-  );
-}
+  function isHealthPath(url = "") {
+    const pathOnly = url.split("?")[0];
+    return (
+      pathOnly === "/healthz" ||
+      pathOnly === "/ping" ||
+      pathOnly === "/version" ||
+      pathOnly === "/"
+    );
+  }
 
-function formatInitError(err) {
-  const missingEnv = getMissingFirebaseEnvKeys();
-  return {
-    error: "Server initialization failed",
-    details: err.message,
-    initStep: err.initStep || null,
-    missingEnv: missingEnv.length ? missingEnv : undefined,
-    mongoUriConfigured: Boolean(
-      process.env.MONGO_URI ||
-        process.env.Database ||
-        process.env.DATABASE_URL ||
-        global.config?.mongoUri
-    ),
-    stack: err.stack || null,
-    vercelRequestId: null,
+  function formatInitError(err) {
+    const missingEnv = getMissingFirebaseEnvKeys();
+    return {
+      error: "Server initialization failed",
+      details: err.message,
+      initStep: err.initStep || null,
+      missingEnv: missingEnv.length ? missingEnv : undefined,
+      mongoUriConfigured: Boolean(
+        process.env.MONGO_URI ||
+          process.env.Database ||
+          process.env.DATABASE_URL ||
+          global.config?.mongoUri
+      ),
+      stack: err.stack || null,
+      vercelRequestId: null,
+    };
+  }
+
+  module.exports = async (req, res) => {
+    try {
+      if (!isHealthPath(req.url)) {
+        await ensureInit();
+      }
+      return app(req, res);
+    } catch (err) {
+      const payload = formatInitError(err);
+      payload.vercelRequestId = req.headers["x-vercel-id"] || null;
+
+      console.error("❌ Vercel handler init error:", err.message);
+      console.error("initStep:", payload.initStep);
+      console.error("missingEnv:", payload.missingEnv);
+      console.error(err.stack);
+
+      if (!res.headersSent) {
+        res.status(500).json(payload);
+      }
+    }
   };
 }
-
-module.exports = async (req, res) => {
-  try {
-    if (!isHealthPath(req.url)) {
-      await ensureInit();
-    }
-    return app(req, res);
-  } catch (err) {
-    const payload = formatInitError(err);
-    payload.vercelRequestId = req.headers["x-vercel-id"] || null;
-
-    console.error("❌ Vercel handler init error:", err.message);
-    console.error("initStep:", payload.initStep);
-    console.error("missingEnv:", payload.missingEnv);
-    console.error(err.stack);
-
-    if (!res.headersSent) {
-      res.status(500).json(payload);
-    }
-  }
-};
