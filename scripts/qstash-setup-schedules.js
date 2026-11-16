@@ -88,6 +88,25 @@ async function main() {
     }
   }
 
+  const allowedDests = new Set([
+    ...JOB_SCHEDULES.map((j) => destination(base, j.slug)),
+    ...REMOVED_SLUGS.map((s) => destination(base, s)),
+  ]);
+  const orphans = (existing || []).filter((s) => !allowedDests.has(s.destination));
+  if (orphans.length) {
+    console.warn(`\nOrphan schedules (${orphans.length}) — old projects or duplicates:`);
+    for (const s of orphans) {
+      console.warn(`  ${s.scheduleId} → ${s.destination}`);
+      if (process.argv.includes("--prune-orphans")) {
+        await client.schedules.delete(s.scheduleId);
+        console.log(`DEL orphan ${s.scheduleId}`);
+      }
+    }
+    if (!process.argv.includes("--prune-orphans")) {
+      console.warn("Run: npm run qstash:schedules -- --prune-orphans");
+    }
+  }
+
   console.log("\nDone. Set on Vercel (Production):");
   console.log("  QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY, CRON_BASE_URL=" + base);
 }

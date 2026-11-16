@@ -117,7 +117,12 @@ async function authorizeCron(req, res) {
   let lastErr = null;
 
   for (const bodyTry of bodies) {
-    const verifyBase = { signature, body: bodyTry, upstashRegion };
+    const verifyBase = {
+      signature,
+      body: bodyTry,
+      upstashRegion,
+      clockTolerance: 120,
+    };
     for (const { url } of attempts) {
       try {
         const payload = url ? { ...verifyBase, url } : verifyBase;
