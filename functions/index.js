@@ -283,6 +283,10 @@ async function ensureGlobalConfig() {
 
 const { checkLoansAndSendReminders, runScoreRecovery } = require("./utils/cron/loanCron");
 
+// Vercel schedules: Upstash QStash → api/cron/[job].js (see QSTASH.md).
+// Firebase duplicates disabled unless ENABLE_FIREBASE_SCHEDULED_CRONS=true.
+if (process.env.ENABLE_FIREBASE_SCHEDULED_CRONS === "true") {
+
 exports.dailyGroupHealthCheck = onSchedule(
   {
     schedule: "0 0 1 * *", // 12:00 AM on the 1st of the month
@@ -433,5 +437,7 @@ exports.creditScoreRecoveryCron = onSchedule(
     }
   }
 );
+
+} // ENABLE_FIREBASE_SCHEDULED_CRONS
 
 console.log("🚀 Deployment timestamp:", new Date().toISOString());

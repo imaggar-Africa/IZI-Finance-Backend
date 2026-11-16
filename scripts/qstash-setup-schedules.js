@@ -10,31 +10,16 @@ const { Client } = require("@upstash/qstash");
 
 const DEFAULT_BASE = "https://vercel-izi-finance-backend.vercel.app";
 
+/** All Vercel QStash jobs — every 10 minutes (Nairobi). Use --force after changing. */
+const EVERY_10_MIN = "CRON_TZ=Africa/Nairobi */10 * * * *";
+
 const JOB_SCHEDULES = [
-  {
-    slug: "loan-reminder",
-    cron: "CRON_TZ=Africa/Nairobi 0 18 * * *",
-  },
-  {
-    slug: "reconciliation",
-    cron: "CRON_TZ=Africa/Nairobi 15 18 * * *",
-  },
-  {
-    slug: "group-health",
-    cron: "CRON_TZ=Africa/Nairobi 0 0 1 * *",
-  },
-  {
-    slug: "monthly-group-repayment",
-    cron: "CRON_TZ=Africa/Nairobi 0 1 1 * *",
-  },
-  {
-    slug: "credit-score-recovery",
-    cron: "CRON_TZ=Africa/Nairobi 30 0 1 * *",
-  },
-  {
-    slug: "lender-cron-test",
-    cron: "CRON_TZ=Africa/Nairobi */5 * * * *",
-  },
+  { slug: "loan-reminder", cron: EVERY_10_MIN },
+  { slug: "reconciliation", cron: EVERY_10_MIN },
+  { slug: "group-health", cron: EVERY_10_MIN },
+  { slug: "monthly-group-repayment", cron: EVERY_10_MIN },
+  { slug: "credit-score-recovery", cron: EVERY_10_MIN },
+  { slug: "lender-cron-test", cron: EVERY_10_MIN },
 ];
 
 function destination(base, slug) {

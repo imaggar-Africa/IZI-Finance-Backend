@@ -27,11 +27,9 @@ Update M-Pesa callback URLs to your Vercel domain after the first deploy.
 
 ## Crons vs Firebase
 
-Scheduled tasks still run on Firebase when you use `firebase deploy` (`onSchedule` in `functions/index.js`).
+On **Vercel**, schedules are **QStash only** → `api/cron/[job].js`. See [QSTASH.md](QSTASH.md).
 
-On **Vercel**, schedules are triggered by **QStash** HTTP POSTs to `api/cron/[job].js` (QStash signature or `CRON_SECRET`). There is **no** `crons` block in `vercel.json`.
-
-Running both Firebase and QStash can **duplicate** jobs (e.g. SMS reminders). See [QSTASH.md](QSTASH.md) for setup.
+Firebase `onSchedule` for the same five jobs is **disabled** by default (`ENABLE_FIREBASE_SCHEDULED_CRONS` not set). Run `firebase deploy --only functions` after this change to remove old Cloud Scheduler triggers.
 
 ## Limitations on Vercel
 
