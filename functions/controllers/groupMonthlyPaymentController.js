@@ -112,13 +112,19 @@ exports.processMonthlyGroupRepayments = async (req, res) => {
           }
 
           // In-system Notification to Lender
-          await Notification.create({
-            userId: group.lenderId._id,
-            userModel: "User",
-            title: `Shortfall on ${group.name}`,
-            message: `The group ${group.name} has a shortfall of KES ${shortfall.toFixed(2)} in their monthly repayment pool.`,
-            type: "general"
-          });
+          if (group.lenderId?._id) {
+            await Notification.create({
+              userId: group.lenderId._id,
+              userModel: "User",
+              title: `Shortfall on ${group.name}`,
+              message: `The group ${group.name} has a shortfall of KES ${shortfall.toFixed(2)} in their monthly repayment pool.`,
+              type: "general"
+            });
+          } else {
+            console.warn(
+              `⚠️ Skipping lender notification for ${group.name}: missing lenderId`
+            );
+          }
         } else {
             console.log(`✅ Group ${group.name} monthly repayment successful.`);
         }
