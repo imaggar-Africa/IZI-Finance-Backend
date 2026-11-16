@@ -102,34 +102,52 @@ async function authorizeCron(req, res) {
     return false;
   }
 
-  const receiver = new Receiver({
-    currentSigningKey: currentKey,
-    nextSigningKey: nextKey,
-  });
-
   const body = getRequestBodyString(req);
   const upstashRegion = header(req, "upstash-region") || undefined;
   const bodies = [body];
   if (body !== "") bodies.push("");
   if (body !== "{}") bodies.push("{}");
   const publishedUrl = buildPublishedUrl(req);
-  const attempts = [{ url: undefined }, ...(publishedUrl ? [{ url: publishedUrl }] : [])];
+  const urlAttempts = [{ url: undefined }, ...(publishedUrl ? [{ url: publishedUrl }] : [])];
+
+  const keyPairs = [];
+  const pushPair = (c, n, label) => {
+    if (c && n) keyPairs.push({ currentSigningKey: c, nextSigningKey: n, label });
+  };
+  pushPair(currentKey, nextKey, "QSTASH_*");
+  if (upstashRegion) {
+    const norm = upstashRegion.replace(/-/g, "_").toUpperCase();
+    pushPair(
+      process.env[`${norm}_QSTASH_CURRENT_SIGNING_KEY`]?.trim(),
+      process.env[`${norm}_QSTASH_NEXT_SIGNING_KEY`]?.trim(),
+      `${norm}_*`
+    );
+  }
+
   let lastErr = null;
 
-  for (const bodyTry of bodies) {
-    const verifyBase = {
-      signature,
-      body: bodyTry,
-      upstashRegion,
-      clockTolerance: 120,
-    };
-    for (const { url } of attempts) {
-      try {
-        const payload = url ? { ...verifyBase, url } : verifyBase;
-        await receiver.verify(payload);
-        return true;
-      } catch (err) {
-        lastErr = err;
+  for (const keys of keyPairs) {
+    const receiver = new Receiver(keys);
+    for (const bodyTry of bodies) {
+      for (const { url } of urlAttempts) {
+        for (const withRegion of [false, true]) {
+          try {
+            const payload = {
+              signature,
+              body: bodyTry,
+              clockTolerance: 120,
+              ...(withRegion && upstashRegion ? { upstashRegion } : {}),
+              ...(url ? { url } : {}),
+            };
+            await receiver.verify(payload);
+            if (keys.label !== "QSTASH_*") {
+              console.warn(`[cron/qstash-auth] verified using ${keys.label}`);
+            }
+            return true;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
       }
     }
   }

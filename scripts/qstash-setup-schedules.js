@@ -2,6 +2,9 @@
 /**
  * Create or update QStash schedules that POST to Vercel api/cron/{job}.
  * Requires QSTASH_TOKEN. Reads CRON_BASE_URL from env (see QSTASH.md).
+ *   npm run qstash:schedules              — ensure 5 jobs exist
+ *   npm run qstash:schedules -- --force   — recreate each job
+ *   npm run qstash:reset                  — delete ALL schedules on this token, then create 5
  */
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
@@ -41,7 +44,8 @@ async function main() {
     token,
     ...(qstashUrl ? { baseUrl: qstashUrl } : {}),
   });
-  const force = process.argv.includes("--force");
+  const wipeAll = process.argv.includes("--wipe-all");
+  const force = process.argv.includes("--force") || wipeAll;
 
   let existing = [];
   try {
@@ -49,6 +53,15 @@ async function main() {
   } catch (err) {
     console.error("Failed to list schedules:", err.message);
     process.exit(1);
+  }
+
+  if (wipeAll && existing.length) {
+    console.log(`Wiping ${existing.length} schedule(s) on this QStash project…`);
+    for (const s of existing) {
+      await client.schedules.delete(s.scheduleId);
+      console.log(`DEL ${s.scheduleId} → ${s.destination}`);
+    }
+    existing = [];
   }
 
   const byDest = new Map(
