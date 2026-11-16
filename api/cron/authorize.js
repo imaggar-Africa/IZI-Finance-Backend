@@ -118,23 +118,10 @@ async function authorizeCron(req, res) {
   const publishedUrl = buildPublishedUrl(req);
   const urlAttempts = [{ url: undefined }, ...(publishedUrl ? [{ url: publishedUrl }] : [])];
 
-  const keyPairs = [];
-  const pushPair = (c, n, label) => {
-    if (c && n) keyPairs.push({ currentSigningKey: c, nextSigningKey: n, label });
-  };
-  pushPair(currentKey, nextKey, "QSTASH_*");
-  if (upstashRegion) {
-    const norm = upstashRegion.replace(/-/g, "_").toUpperCase();
-    pushPair(
-      process.env[`${norm}_QSTASH_CURRENT_SIGNING_KEY`]?.trim(),
-      process.env[`${norm}_QSTASH_NEXT_SIGNING_KEY`]?.trim(),
-      `${norm}_*`
-    );
-  }
-
+  const keys = { currentSigningKey: currentKey, nextSigningKey: nextKey };
   let lastErr = null;
 
-  for (const keys of keyPairs) {
+  {
     const receiver = new Receiver(keys);
     for (const bodyTry of bodies) {
       for (const { url } of urlAttempts) {
@@ -148,9 +135,6 @@ async function authorizeCron(req, res) {
               ...(url ? { url } : {}),
             };
             await receiver.verify(payload);
-            if (keys.label !== "QSTASH_*") {
-              console.warn(`[cron/qstash-auth] verified using ${keys.label}`);
-            }
             return true;
           } catch (err) {
             lastErr = err;
@@ -168,6 +152,9 @@ async function authorizeCron(req, res) {
     verifyUrl: publishedUrl || "(none)",
     signaturePresent: Boolean(signature),
     signatureLen: signature ? String(signature).length : 0,
+    upstashMessageId: header(req, "upstash-message-id") || "(none)",
+    upstashRetries: header(req, "upstash-retries") ?? "(none)",
+    requestHost: header(req, "host") || "(none)",
   });
   res.status(401).json({ error: "Unauthorized" });
   return false;
