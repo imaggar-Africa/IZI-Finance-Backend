@@ -19,7 +19,8 @@
     "api/cron/[job].js": {
       "maxDuration": 60,
       "memory": 1024,
-      "includeFiles": "{functions/**,api/node_modules/@upstash/qstash/**}"
+      "includeFiles": "{functions/**,api/node_modules/**}",
+      "excludeFiles": "node_modules/{puppeteer,puppeteer-core,@puppeteer}/**"
     }
   }
 }
