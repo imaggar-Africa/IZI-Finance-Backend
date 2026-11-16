@@ -48,6 +48,25 @@ function buildPublishedUrl(req) {
   return undefined;
 }
 
+/** Log key fingerprints only — never full secrets. */
+function maskSigningKey(key) {
+  if (!key) return "(missing)";
+  const k = String(key).trim();
+  if (k.length <= 10) return `set(len=${k.length})`;
+  return `${k.slice(0, 8)}...${k.slice(-4)} (len=${k.length})`;
+}
+
+function logQStashKeyContext(extra) {
+  const currentKey = process.env.QSTASH_CURRENT_SIGNING_KEY?.trim();
+  const nextKey = process.env.QSTASH_NEXT_SIGNING_KEY?.trim();
+  console.warn("[cron/qstash-auth]", {
+    ...extra,
+    currentSigningKey: maskSigningKey(currentKey),
+    nextSigningKey: maskSigningKey(nextKey),
+    cronBaseUrl: getPublicBaseUrl() || "(unset)",
+  });
+}
+
 /**
  * Accept QStash signed requests or Bearer CRON_SECRET (manual / emergency).
  */
@@ -90,27 +109,37 @@ async function authorizeCron(req, res) {
 
   const body = getRequestBodyString(req);
   const upstashRegion = header(req, "upstash-region") || undefined;
-  const verifyBase = { signature, body, upstashRegion };
+  const bodies = [body];
+  if (body !== "") bodies.push("");
+  if (body !== "{}") bodies.push("{}");
+  const publishedUrl = buildPublishedUrl(req);
+  const attempts = [{ url: undefined }, ...(publishedUrl ? [{ url: publishedUrl }] : [])];
+  let lastErr = null;
 
-  try {
-    // Match @upstash/qstash Next/Express helpers (no url) — works for EU schedules.
-    await receiver.verify(verifyBase);
-    return true;
-  } catch (err) {
-    const publishedUrl = buildPublishedUrl(req);
-    if (publishedUrl) {
+  for (const bodyTry of bodies) {
+    const verifyBase = { signature, body: bodyTry, upstashRegion };
+    for (const { url } of attempts) {
       try {
-        await receiver.verify({ ...verifyBase, url: publishedUrl });
+        const payload = url ? { ...verifyBase, url } : verifyBase;
+        await receiver.verify(payload);
         return true;
-      } catch (errUrl) {
-        console.warn("QStash verify failed:", err.message, "| url:", errUrl.message);
+      } catch (err) {
+        lastErr = err;
       }
-    } else {
-      console.warn("QStash verify failed:", err.message);
     }
-    res.status(401).json({ error: "Unauthorized" });
-    return false;
   }
+
+  logQStashKeyContext({
+    event: "verify_failed",
+    error: lastErr?.message,
+    upstashRegion: upstashRegion || "(no header)",
+    bodyLen: body.length,
+    verifyUrl: publishedUrl || "(none)",
+    signaturePresent: Boolean(signature),
+    signatureLen: signature ? String(signature).length : 0,
+  });
+  res.status(401).json({ error: "Unauthorized" });
+  return false;
 }
 
 module.exports = {
