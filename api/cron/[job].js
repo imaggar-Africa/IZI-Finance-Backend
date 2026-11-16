@@ -4,13 +4,28 @@
  */
 const path = require("path");
 
-if (!process.env.VERCEL) {
-  require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
-}
+require(path.join(__dirname, "..", "vercel-node-path"));
 
-const { initializeApp } = require("../../functions/app");
-const { buildConfigFromEnv } = require("../../functions/config/buildConfigFromEnv");
-const { authorizeCron, resolveJobSlug } = require("./authorize");
+let bootError = null;
+let initializeApp;
+let buildConfigFromEnv;
+let authorizeCron;
+let resolveJobSlug;
+
+try {
+  if (!process.env.VERCEL) {
+    require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
+  }
+
+  process.env.IZI_RUNTIME = process.env.IZI_RUNTIME || "vercel";
+
+  ({ initializeApp } = require("../../functions/app"));
+  ({ buildConfigFromEnv } = require("../../functions/config/buildConfigFromEnv"));
+  ({ authorizeCron, resolveJobSlug } = require("./authorize"));
+} catch (err) {
+  bootError = err;
+  console.error("Cron handler boot error:", err);
+}
 
 let initPromise = null;
 
@@ -90,6 +105,14 @@ const jobs = {
 };
 
 module.exports = async (req, res) => {
+  if (bootError) {
+    res.status(500).json({
+      error: "Cron handler failed to load",
+      detail: bootError.message,
+    });
+    return;
+  }
+
   if (!(await authorizeCron(req, res))) return;
 
   const job = resolveJobSlug(req);
