@@ -54,7 +54,7 @@ function buildPublishedUrl(req) {
 async function authorizeCron(req, res) {
   const auth = header(req, "authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = process.env.CRON_SECRET?.trim();
 
   if (cronSecret && token && token === cronSecret) {
     return true;
@@ -88,16 +88,26 @@ async function authorizeCron(req, res) {
     nextSigningKey: nextKey,
   });
 
+  const body = getRequestBodyString(req);
+  const upstashRegion = header(req, "upstash-region") || undefined;
+  const verifyBase = { signature, body, upstashRegion };
+
   try {
-    await receiver.verify({
-      signature,
-      body: getRequestBodyString(req),
-      url: buildPublishedUrl(req),
-      upstashRegion: header(req, "upstash-region"),
-    });
+    // Match @upstash/qstash Next/Express helpers (no url) — works for EU schedules.
+    await receiver.verify(verifyBase);
     return true;
   } catch (err) {
-    console.warn("QStash signature verification failed:", err.message);
+    const publishedUrl = buildPublishedUrl(req);
+    if (publishedUrl) {
+      try {
+        await receiver.verify({ ...verifyBase, url: publishedUrl });
+        return true;
+      } catch (errUrl) {
+        console.warn("QStash verify failed:", err.message, "| url:", errUrl.message);
+      }
+    } else {
+      console.warn("QStash verify failed:", err.message);
+    }
     res.status(401).json({ error: "Unauthorized" });
     return false;
   }
