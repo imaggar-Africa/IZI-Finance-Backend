@@ -240,9 +240,67 @@ const processSmsQueueRetry = async () => {
   }
 };
 
+// ------------------------------
+// Drain Pending SMS on serverless (Vercel cron — no long-lived BullMQ worker)
+// ------------------------------
+async function drainSmsQueueForServerless(options = {}) {
+  const limit = options.limit ?? parseInt(process.env.CRON_SMS_DRAIN_LIMIT || "25", 10);
+  const maxMs = options.maxMs ?? parseInt(process.env.CRON_SMS_DRAIN_MAX_MS || "50000", 10);
+  const start = Date.now();
+
+  console.log(`[SMS_DRAIN] Starting (limit=${limit}, maxMs=${maxMs})`);
+
+  const staleProcessingCutoff = new Date(Date.now() - 10 * 60 * 1000);
+  await SmsQueue.updateMany(
+    { status: "Processing", updatedAt: { $lt: staleProcessingCutoff } },
+    { $set: { status: "Pending" } }
+  );
+
+  const pending = await SmsQueue.find({ status: "Pending" })
+    .sort({ createdAt: 1 })
+    .limit(limit);
+
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+
+  for (const sms of pending) {
+    if (Date.now() - start > maxMs) {
+      console.warn("[SMS_DRAIN] Stopped: time budget exceeded");
+      break;
+    }
+
+    const claimed = await SmsQueue.findOneAndUpdate(
+      { _id: sms._id, status: "Pending" },
+      { $set: { status: "Processing", lastAttemptAt: new Date() } },
+      { new: true }
+    );
+
+    if (!claimed) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      await sendSMSDirect(claimed);
+      sent++;
+    } catch (err) {
+      failed++;
+      console.warn(
+        `[SMS_DRAIN] Send failed ID ${claimed._id}: ${err.message}`
+      );
+    }
+  }
+
+  const summary = { sent, failed, skipped, examined: pending.length };
+  console.log(`[SMS_DRAIN] Done in ${Date.now() - start}ms`, summary);
+  return summary;
+}
+
 module.exports = {
   sendSMS,
   sendSMSDirect,
   processSmsQueueRetry,
+  drainSmsQueueForServerless,
   isInsufficientBalanceError,
 };

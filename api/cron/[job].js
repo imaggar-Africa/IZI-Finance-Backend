@@ -100,6 +100,18 @@ const jobs = {
   },
 };
 
+async function drainSmsAfterCron() {
+  const onVercel =
+    process.env.VERCEL === "1" ||
+    process.env.VERCEL === "true" ||
+    process.env.IZI_RUNTIME === "vercel";
+  if (!onVercel || process.env.CRON_SMS_DRAIN === "false") {
+    return null;
+  }
+  const { drainSmsQueueForServerless } = require("../../functions/utils/sms");
+  return drainSmsQueueForServerless();
+}
+
 module.exports = async (req, res) => {
   if (bootError) {
     res.status(500).json({
@@ -126,7 +138,14 @@ module.exports = async (req, res) => {
   try {
     await ensureInit();
     const result = await handler();
-    res.status(200).json(result);
+    let smsDrain = null;
+    try {
+      smsDrain = await drainSmsAfterCron();
+    } catch (drainErr) {
+      console.error(`[SMS_DRAIN] Cron ${job} post-drain error:`, drainErr.message);
+      smsDrain = { error: drainErr.message };
+    }
+    res.status(200).json({ ...result, smsDrain });
   } catch (err) {
     console.error(`Cron job ${job} failed:`, err);
     res.status(500).json({ error: err.message, job });
