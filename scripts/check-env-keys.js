@@ -21,7 +21,16 @@ if (fs.existsSync(envPath)) {
 }
 
 const missing = getMissingFirebaseEnvKeys();
-const vercelOnly = ["CRON_SECRET", "ENABLE_SMS_WORKER", "NODE_ENV"];
+const vercelOnly = [
+  "CRON_SECRET",
+  "CRON_BASE_URL",
+  "QSTASH_CURRENT_SIGNING_KEY",
+  "QSTASH_NEXT_SIGNING_KEY",
+  "CRON_TEST_SMS",
+  "CRON_TEST_LENDER_PHONES",
+  "ENABLE_SMS_WORKER",
+  "NODE_ENV",
+];
 
 console.log("\nFirebase-aligned keys (required unless optional in buildConfig):");
 console.log(FIREBASE_ENV_KEYS.join(", "));

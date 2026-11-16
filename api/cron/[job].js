@@ -1,6 +1,6 @@
 /**
- * Vercel Cron targets (see vercel.json). Firebase scheduled jobs are unchanged.
- * Set CRON_SECRET in Vercel env; Vercel sends Authorization: Bearer <CRON_SECRET>.
+ * Scheduled jobs invoked by Upstash QStash (primary on Vercel).
+ * Optional: Bearer CRON_SECRET for manual runs. Firebase onSchedule unchanged.
  */
 const path = require("path");
 
@@ -10,6 +10,7 @@ if (!process.env.VERCEL) {
 
 const { initializeApp } = require("../../functions/app");
 const { buildConfigFromEnv } = require("../../functions/config/buildConfigFromEnv");
+const { authorizeCron, resolveJobSlug } = require("./authorize");
 
 let initPromise = null;
 
@@ -26,23 +27,6 @@ function ensureInit() {
     });
   }
   return initPromise;
-}
-
-function authorizeCron(req, res) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    res.status(503).json({
-      error: "CRON_SECRET is not configured",
-    });
-    return false;
-  }
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (token !== secret) {
-    res.status(401).json({ error: "Unauthorized" });
-    return false;
-  }
-  return true;
 }
 
 const jobs = {
@@ -99,13 +83,17 @@ const jobs = {
     await runScoreRecovery();
     return { ok: true, job: "credit-score-recovery" };
   },
+  "lender-cron-test": async () => {
+    const { runLenderCronTest } = require("../../functions/utils/cron/lenderCronTest");
+    return runLenderCronTest();
+  },
 };
 
 module.exports = async (req, res) => {
-  if (!authorizeCron(req, res)) return;
+  if (!(await authorizeCron(req, res))) return;
 
-  const job = req.query.job;
-  const handler = jobs[job];
+  const job = resolveJobSlug(req);
+  const handler = job ? jobs[job] : null;
 
   if (!handler) {
     res.status(404).json({
@@ -121,7 +109,7 @@ module.exports = async (req, res) => {
     const result = await handler();
     res.status(200).json(result);
   } catch (err) {
-    console.error(`❌ Cron job ${job} failed:`, err);
+    console.error(`Cron job ${job} failed:`, err);
     res.status(500).json({ error: err.message, job });
   }
 };

@@ -19,29 +19,7 @@
     "api/cron/[job].js": {
       "maxDuration": 60,
       "memory": 1024,
-      "includeFiles": "functions/**"
+      "includeFiles": "{functions/**,api/node_modules/@upstash/qstash/**}"
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/loan-reminder",
-      "schedule": "0 18 * * *"
-    },
-    {
-      "path": "/api/cron/reconciliation",
-      "schedule": "0 18 * * *"
-    },
-    {
-      "path": "/api/cron/group-health",
-      "schedule": "0 0 1 * *"
-    },
-    {
-      "path": "/api/cron/monthly-group-repayment",
-      "schedule": "0 1 1 * *"
-    },
-    {
-      "path": "/api/cron/credit-score-recovery",
-      "schedule": "0 0 1 * *"
-    }
-  ]
+  }
 }

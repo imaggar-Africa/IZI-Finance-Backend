@@ -12,6 +12,9 @@
     "check:env": "node scripts/check-env-keys.js",
     "check:vercel-deps": "node scripts/check-vercel-deps.js",
     "check:vercel-boot": "node scripts/vercel-boot-check.js",
+    "qstash:schedules": "node scripts/qstash-setup-schedules.js",
+    "qstash:smoke": "node scripts/qstash-smoke.js",
+    "cron:local": "node scripts/cron-local-run.js",
     "sync:vercel-api-deps": "node scripts/sync-vercel-api-deps.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -25,6 +28,7 @@
   "dependencies": {
     "@fastify/busboy": "^3.2.0",
     "@sendgrid/mail": "^8.1.3",
+    "@upstash/qstash": "^2.12.2",
     "@upstash/redis": "^1.35.6",
     "africastalking": "^0.7.4",
     "aws-sdk": "^2.1692.0",

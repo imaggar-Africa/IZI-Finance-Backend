@@ -9,7 +9,7 @@ Root `vercel.json` uses a **single** `services.izi-backend` entry (required by V
 1. Install dependencies: `npm install`
 2. Link the project: `npx vercel link`
 3. Copy environment variables from your Firebase secrets / local `.env` into the Vercel project (**Settings → Environment Variables**). Use the same names as in `functions/index.js` / `.env` (e.g. `MONGO_URI`, `JWT_ACCESS_SECRET`, `MPESA_*`, `CLIENT_EMAIL`, `FB_PRIVATE_KEY`, `PROJECT_ID`, `STORAGE_BUCKET`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, Africa's Talking vars).
-4. Set `CRON_SECRET` to a long random string (required for Vercel Cron jobs in `vercel.json`).
+4. For scheduled jobs on Vercel, use **Upstash QStash** — see [QSTASH.md](QSTASH.md) (`QSTASH_*` signing keys, `CRON_BASE_URL`, optional `CRON_SECRET`).
 5. Deploy: `npm run vercel:deploy` or push to a Git branch connected in the Vercel dashboard.
 
 Local Vercel dev (uses root `.env`):
@@ -27,7 +27,11 @@ Update M-Pesa callback URLs to your Vercel domain after the first deploy.
 
 ## Crons vs Firebase
 
-Scheduled tasks still run on Firebase when you use `firebase deploy`. On Vercel, equivalent jobs are defined in `vercel.json` and hit `api/cron/[job].js` (protected by `CRON_SECRET`). You can keep crons on Firebase only, use Vercel only, or run both—avoid duplicate schedules unless intended.
+Scheduled tasks still run on Firebase when you use `firebase deploy` (`onSchedule` in `functions/index.js`).
+
+On **Vercel**, schedules are triggered by **QStash** HTTP POSTs to `api/cron/[job].js` (QStash signature or `CRON_SECRET`). There is **no** `crons` block in `vercel.json`.
+
+Running both Firebase and QStash can **duplicate** jobs (e.g. SMS reminders). See [QSTASH.md](QSTASH.md) for setup.
 
 ## Limitations on Vercel
 

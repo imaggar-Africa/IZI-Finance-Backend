@@ -1,6 +1,7 @@
 [
   "@fastify/busboy",
   "@sendgrid/mail",
+  "@upstash/qstash",
   "@upstash/redis",
   "africastalking",
   "axios",
