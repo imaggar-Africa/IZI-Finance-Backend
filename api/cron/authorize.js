@@ -61,8 +61,8 @@ async function authorizeCron(req, res) {
   }
 
   const signature = header(req, "upstash-signature");
-  const currentKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
-  const nextKey = process.env.QSTASH_NEXT_SIGNING_KEY;
+  const currentKey = process.env.QSTASH_CURRENT_SIGNING_KEY?.trim();
+  const nextKey = process.env.QSTASH_NEXT_SIGNING_KEY?.trim();
 
   if (!signature) {
     if (!cronSecret && !currentKey && !nextKey) {
