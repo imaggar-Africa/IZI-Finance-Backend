@@ -21,7 +21,9 @@ SMS **lenders only** (`User` with `role: "lender"`). Safe to push without spammi
 
 - Without `CRON_TEST_SMS=true` → **dry run** (200, no SMS).
 - `CRON_TEST_SMS=true` → sends Africa’s Talking SMS to all lenders with valid phones.
+- On **Vercel**, SMS uses **direct** send (or set `CRON_TEST_SMS_DIRECT=true`); without that, `sendSMS` only **queues** in Mongo/BullMQ and needs the Firebase SMS worker.
 - `CRON_TEST_LENDER_PHONES=+254...,+254...` → limit to those numbers (recommended while testing).
+- Response / Vercel logs: `[lender-cron-test]` and `sentTo` / `wouldSendTo` (dry run) list each mobile.
 
 Pause or delete this schedule in Upstash when you finish testing.
 
