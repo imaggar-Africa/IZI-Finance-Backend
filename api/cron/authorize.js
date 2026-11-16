@@ -30,7 +30,15 @@ function getRequestBodyString(req) {
 
 function getPublicBaseUrl() {
   const fromEnv = process.env.CRON_BASE_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  if (fromEnv) {
+    const normalized = fromEnv.replace(/\/$/, "");
+    if (/^https?:\/\//i.test(normalized)) {
+      return normalized;
+    }
+    console.warn(
+      "[cron/qstash-auth] CRON_BASE_URL must be https://your-app.vercel.app (not CRON_SECRET); using VERCEL_URL"
+    );
+  }
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL.replace(/\/$/, "")}`;
   }
