@@ -98,10 +98,6 @@ const jobs = {
     await runScoreRecovery();
     return { ok: true, job: "credit-score-recovery" };
   },
-  "lender-cron-test": async () => {
-    const { runLenderCronTest } = require("../../functions/utils/cron/lenderCronTest");
-    return runLenderCronTest();
-  },
 };
 
 module.exports = async (req, res) => {

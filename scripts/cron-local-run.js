@@ -15,7 +15,6 @@ const allowed = [
   "group-health",
   "monthly-group-repayment",
   "credit-score-recovery",
-  "lender-cron-test",
 ];
 
 if (!job || !allowed.includes(job)) {

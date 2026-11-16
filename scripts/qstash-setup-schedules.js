@@ -19,8 +19,10 @@ const JOB_SCHEDULES = [
   { slug: "group-health", cron: EVERY_10_MIN },
   { slug: "monthly-group-repayment", cron: EVERY_10_MIN },
   { slug: "credit-score-recovery", cron: EVERY_10_MIN },
-  { slug: "lender-cron-test", cron: EVERY_10_MIN },
 ];
+
+/** Slugs removed from QStash — deleted on each `npm run qstash:schedules` run. */
+const REMOVED_SLUGS = ["lender-cron-test"];
 
 function destination(base, slug) {
   return `${base}/api/cron/${slug}`;
@@ -75,6 +77,15 @@ async function main() {
     });
 
     console.log(`ADD ${job.slug} cron=${job.cron} id=${created.scheduleId} → ${dest}`);
+  }
+
+  for (const slug of REMOVED_SLUGS) {
+    const dest = destination(base, slug);
+    const found = byDest.get(dest);
+    if (found) {
+      await client.schedules.delete(found.scheduleId);
+      console.log(`DEL ${slug} (removed from QStash, id ${found.scheduleId})`);
+    }
   }
 
   console.log("\nDone. Set on Vercel (Production):");
