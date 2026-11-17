@@ -95,19 +95,23 @@ exports.processMonthlyGroupRepayments = async (req, res) => {
         if (shortfall > 0) {
           // Alert Group Leader
           if (group.group_leader_id && group.group_leader_id.phone) {
-            await sendSMS(
-              group.group_leader_id.phone,
-              `IZIFINANCE: ${group.name} shortfall of KES ${shortfall.toFixed(2)} this month. Please follow up with members who missed payments.`
-            );
+            const leaderMsg = `IZIFINANCE: ${group.name} shortfall of KES ${shortfall.toFixed(2)} this month. Please follow up with members who missed payments.`;
+            await sendSMS(group.group_leader_id.phone, leaderMsg, {
+              job: "monthly-group-repayment",
+              template: "monthly_shortfall_leader",
+              meta: { groupName: group.name, shortfall },
+            });
             console.log(`📩 Monthly Shortfall SMS Sent to Leader: ${group.group_leader_id.name || 'Leader'} for group ${group.name}`);
           }
 
           // Alert Agent
           if (group.agentId && group.agentId.phone) {
-            await sendSMS(
-              group.agentId.phone,
-              `IZIFINANCE: Group ${group.name} shortfall of KES ${shortfall.toFixed(2)}. Follow up with the group leader.`
-            );
+            const agentMsg = `IZIFINANCE: Group ${group.name} shortfall of KES ${shortfall.toFixed(2)}. Follow up with the group leader.`;
+            await sendSMS(group.agentId.phone, agentMsg, {
+              job: "monthly-group-repayment",
+              template: "monthly_shortfall_agent",
+              meta: { groupName: group.name, shortfall },
+            });
             console.log(`📩 Monthly Shortfall SMS Sent to Agent: ${group.agentId.name || 'Agent'} for group ${group.name}`);
           }
 

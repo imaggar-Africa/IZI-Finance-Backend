@@ -151,18 +151,22 @@ exports.checkGroupHealth = async (req, res) => {
         const agent = group.agentId ? await require("../models/AgentModel").findById(group.agentId) : null;
 
         if (leader) {
-          await sendSMS(
-            leader.phone,
-            `Health Alert: Your group ${group.name} is behind on daily collections. Current total: KES ${actualPool}. Please encourage members to pay. - IziFinance`
-          );
+          const leaderMsg = `Health Alert: Your group ${group.name} is behind on daily collections. Current total: KES ${actualPool}. Please encourage members to pay. - IziFinance`;
+          await sendSMS(leader.phone, leaderMsg, {
+            job: "group-health",
+            template: "group_health_leader",
+            meta: { groupId: String(group._id), groupName: group.name, pool: actualPool },
+          });
           console.log(`📩 SMS Sent to Leader: ${leader?.fullName} about poor group health for ${group.name}`);
         }
 
         if (agent) {
-          await sendSMS(
-            agent.phone,
-            `Agent Alert: Group ${group.name} collection health is POOR (< 80% of target). Current Pool: KES ${actualPool}. Immediate follow up required. - IziFinance`
-          );
+          const agentMsg = `Agent Alert: Group ${group.name} collection health is POOR (< 80% of target). Current Pool: KES ${actualPool}. Immediate follow up required. - IziFinance`;
+          await sendSMS(agent.phone, agentMsg, {
+            job: "group-health",
+            template: "group_health_agent",
+            meta: { groupId: String(group._id), groupName: group.name, pool: actualPool },
+          });
           console.log(`📩 SMS Sent to Agent: (${agent.phone}) for group ${group.name}`);
         }
 

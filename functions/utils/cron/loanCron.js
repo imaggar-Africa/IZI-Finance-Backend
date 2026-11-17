@@ -98,7 +98,18 @@ async function checkLoansAndSendReminders(specificLoanId = null) {
             ? `IziFinance Late Payment Notice\nHello ${borrowerName}, your loan is overdue.\nCurrent balance: KES ${balanceText}.\nPlease pay immediately. - IziFinance`
             : `IziFinance Reminder\nHello ${borrowerName}, your current loan balance is KES ${balanceText}, due on ${dueDateFormatted}.\nPlease repay on time to avoid penalties. - IziFinance`;
 
-        await sendSMS(borrowerPhone, messageText);
+        await sendSMS(borrowerPhone, messageText, {
+          job: "loan-reminder",
+          template:
+            statusNow === "overdue"
+              ? "loan_overdue_current_balance"
+              : "loan_active_current_balance",
+          meta: {
+            loanId: String(loan._id),
+            balanceKes: currentBalance,
+            status: statusNow,
+          },
+        });
         smsSentCount++;
 
         loan.lastReminderSentAt = now;

@@ -203,6 +203,12 @@ const sendSMSDirect = async (smsRecord) => {
       cost: recipient.cost,
       messageId: recipient.messageId,
     });
+    console.log("[SMS_TEMPLATE]", {
+      job: "(deliver)",
+      template: "provider_sent",
+      to: smsRecord.phoneNumber,
+      message: smsRecord.message,
+    });
     return {
       success: true,
       smsId: smsRecord._id,
@@ -245,10 +251,22 @@ const sendSMSDirect = async (smsRecord) => {
   }
 };
 
+function logSmsTemplate(normalizedPhone, message, context = {}) {
+  const entry = {
+    job: context.job || "(app)",
+    template: context.template || "(unspecified)",
+    to: normalizedPhone,
+    message,
+    ...(context.meta && typeof context.meta === "object" ? { meta: context.meta } : {}),
+  };
+  console.log("[SMS_TEMPLATE]", entry);
+}
+
 // ------------------------------
 // Send SMS function (called by application)
+// context: { job, template, meta } — logged for cron / ops review
 // ------------------------------
-const sendSMS = async (phoneNumber, message) => {
+const sendSMS = async (phoneNumber, message, context = {}) => {
   try {
     const normalizedPhone = normalizePhone(phoneNumber);
 
@@ -267,9 +285,19 @@ const sendSMS = async (phoneNumber, message) => {
     });
 
     if (existing) {
+      console.log("[SMS_TEMPLATE]", {
+        ...context,
+        job: context.job || "(app)",
+        template: context.template || "(unspecified)",
+        to: normalizedPhone,
+        message,
+        skipped: "duplicate_within_2min",
+      });
       console.log(`⚠️ [SMS DUP SKIPPED] Duplicate SMS within 2 minutes for ${normalizedPhone}`);
       return { success: true, message: "Duplicate SMS skipped", smsId: existing._id };
     }
+
+    logSmsTemplate(normalizedPhone, message, context);
 
     // 1. Store SMS in database
     const smsRecord = await SmsQueue.create({
@@ -438,4 +466,5 @@ module.exports = {
   processSmsQueueRetry,
   drainSmsQueueForServerless,
   isInsufficientBalanceError,
+  logSmsTemplate,
 };
