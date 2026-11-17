@@ -22,6 +22,11 @@ npm run vercel:dev
 
 - All HTTP routes go through the same Express app as Firebase (`functions/app.js`).
 - Health: `/healthz`, `/ping`, `/version`
+- **Clear stale SMS** (live Mongo `sms_queue`, requires `CRON_SECRET` on Vercel):
+  - Preview: `https://vercel-izi-finance-backend.vercel.app/api/admin/clear-sms-queue?token=YOUR_CRON_SECRET&dry=1`
+  - Delete Pending / Waiting for Balance / Processing: `...?token=YOUR_CRON_SECRET`
+  - Also delete Failed: add `&failed=1`
+  - Use **HTTPS only**; token appears in browser history—rotate `CRON_SECRET` if leaked.
 
 Update M-Pesa callback URLs to your Vercel domain after the first deploy.
 

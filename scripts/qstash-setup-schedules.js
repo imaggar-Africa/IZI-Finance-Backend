@@ -13,15 +13,15 @@ const { Client } = require("@upstash/qstash");
 
 const DEFAULT_BASE = "https://vercel-izi-finance-backend.vercel.app";
 
-/** All Vercel QStash jobs — every 10 minutes (Nairobi). Use --force after changing. */
-const EVERY_10_MIN = "CRON_TZ=Africa/Nairobi */10 * * * *";
+/** Production crons (Africa/Nairobi) — matches functions/index.js onSchedule */
+const NAIROBI = "CRON_TZ=Africa/Nairobi";
 
 const JOB_SCHEDULES = [
-  { slug: "loan-reminder", cron: EVERY_10_MIN },
-  { slug: "reconciliation", cron: EVERY_10_MIN },
-  { slug: "group-health", cron: EVERY_10_MIN },
-  { slug: "monthly-group-repayment", cron: EVERY_10_MIN },
-  { slug: "credit-score-recovery", cron: EVERY_10_MIN },
+  { slug: "loan-reminder", cron: `${NAIROBI} 0 18 * * *` },
+  { slug: "reconciliation", cron: `${NAIROBI} 0 18 * * *` },
+  { slug: "group-health", cron: `${NAIROBI} 0 0 1 * *` },
+  { slug: "monthly-group-repayment", cron: `${NAIROBI} 0 1 1 * *` },
+  { slug: "credit-score-recovery", cron: `${NAIROBI} 0 0 1 * *` },
 ];
 
 /** Slugs removed from QStash — deleted on each `npm run qstash:schedules` run. */
@@ -105,7 +105,11 @@ async function main() {
     ...JOB_SCHEDULES.map((j) => destination(base, j.slug)),
     ...REMOVED_SLUGS.map((s) => destination(base, s)),
   ]);
-  const orphans = (existing || []).filter((s) => !allowedDests.has(s.destination));
+  const orphans = (existing || []).filter(
+    (s) =>
+      !allowedDests.has(s.destination) ||
+      !String(s.destination || "").startsWith(base + "/")
+  );
   if (orphans.length) {
     console.warn(`\nOrphan schedules (${orphans.length}) — old projects or duplicates:`);
     for (const s of orphans) {

@@ -10,17 +10,13 @@ Use **one QStash region** for schedules and Vercel signing keys (EU **or** US). 
 
 | Slug | Path | Cron (Africa/Nairobi) |
 |------|------|-------------------------|
-| All jobs below | `/api/cron/{slug}` | **Every 10 minutes** (`*/10 * * * *`) |
+| `loan-reminder` | `/api/cron/loan-reminder` | Daily **18:00** (`0 18 * * *`) |
+| `reconciliation` | `/api/cron/reconciliation` | Daily **18:00** |
+| `group-health` | `/api/cron/group-health` | **1st** of month **00:00** (`0 0 1 * *`) |
+| `monthly-group-repayment` | `/api/cron/monthly-group-repayment` | **1st** of month **01:00** (`0 1 1 * *`) |
+| `credit-score-recovery` | `/api/cron/credit-score-recovery` | **1st** of month **00:00** |
 
-| Slug | Path |
-|------|------|
-| `loan-reminder` | `/api/cron/loan-reminder` |
-| `reconciliation` | `/api/cron/reconciliation` |
-| `group-health` | `/api/cron/group-health` |
-| `monthly-group-repayment` | `/api/cron/monthly-group-repayment` |
-| `credit-score-recovery` | `/api/cron/credit-score-recovery` |
-
-**Warning:** `loan-reminder` / `reconciliation` every 10 minutes can send SMS or run heavy work often — use for **testing** only; restore production crons before go-live.
+Clear stale test SMS rows locally: `npm run sms:clear` (dry-run), `npm run sms:clear -- --yes`.
 
 ## 1. Upstash Console
 

@@ -82,6 +82,8 @@ const loanSchema = new mongoose.Schema({
   // 🔹 Add this field for reminders
   lastReminderSent: { type: Date, default: null },
   lastReminderSentAt: { type: Date, default: null },
+  /** Balance (KES) included in the last reminder SMS — audit in DB */
+  lastReminderBalance: { type: Number, default: null },
   penaltyAmount: { type: Number, default: 0 },
   penaltyApplied: { type: Boolean, default: false },
   penaltyAppliedAt: { type: Date, default: null },

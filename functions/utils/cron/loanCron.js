@@ -5,8 +5,20 @@ const { applyScoreRecovery } = require("../creditScore");
 const Customer = require("../../models/customer");
 const Transaction = require("../../models/Transaction");
 
+function nairobiDateKey(date = new Date()) {
+  return date.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+}
 
-// ⏰ Runs every day at 6 AM and 6 PM (Kenya/Nairobi time)
+function formatKes(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "0.00";
+  return n.toLocaleString("en-KE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+// ⏰ Runs daily 6 PM Nairobi (QStash / Firebase)
 async function checkLoansAndSendReminders(specificLoanId = null) {
   const startTime = Date.now();
   console.log(
@@ -16,6 +28,7 @@ async function checkLoansAndSendReminders(specificLoanId = null) {
   try {
     const filter = {
       status: { $in: ["active", "overdue"] },
+      loanRequestStatus: "approved",
       balance: { $gt: 0 },
     };
     if (specificLoanId) {
@@ -52,30 +65,55 @@ async function checkLoansAndSendReminders(specificLoanId = null) {
       }
 
       const lastReminder = loan.lastReminderSentAt || loan.lastReminderSent;
-      // 20-hour window prevents Cloud Scheduler jitter from skipping daily reminders
-      const shouldSendReminder =
-        !lastReminder ||
-        now - new Date(lastReminder) >= 20 * 60 * 60 * 1000;
+      const todayKey = nairobiDateKey(now);
+      const lastKey = lastReminder ? nairobiDateKey(new Date(lastReminder)) : null;
+      const shouldSendReminder = !lastReminder || lastKey !== todayKey;
 
-      if (shouldSendReminder) {
-        try {
-          const borrowerName = loan.borrowerId?.fullName || loan.fullName || "Valued Customer";
-          const dueDateFormatted = loan.dueDate ? new Date(loan.dueDate).toDateString() : "the due date";
-          const messageText =
-            loan.status === "overdue"
-              ? `IziFinance Late Payment Notice\nHello ${borrowerName}, your loan is overdue.\nAmount Due: KES ${loan.balance}.\n\nPlease pay immediately.`
-              : `IziFinance Reminder\nHello ${borrowerName}, your loan of KES ${loan.balance} is due on ${dueDateFormatted}.\nPlease repay on time to avoid penalties.`;
+      if (!shouldSendReminder) {
+        console.log(
+          `[LOAN_REMINDER_CRON_LOGIC] Skip loan ${loan._id}: reminder already sent Nairobi date ${lastKey}`
+        );
+        continue;
+      }
 
-          await sendSMS(borrowerPhone, messageText);
-          smsSentCount++;
+      try {
+        const refreshed = await Loan.findById(loan._id).select(
+          "balance status dueDate borrowerId"
+        );
+        const currentBalance = Number(refreshed?.balance ?? loan.balance) || 0;
+        if (currentBalance <= 0) continue;
 
-          loan.lastReminderSentAt = now;
-          loan.lastReminderSent = now;
-          await loan.save();
-          console.log(`[LOAN_REMINDER_CRON_LOGIC] 📤 Reminder queued for loan ${loan._id} to ${borrowerPhone}`);
-        } catch (err) {
-          console.error("[LOAN_REMINDER_CRON_LOGIC] SMS sending failed for loan:", loan._id, err.message);
-        }
+        const borrowerName =
+          loan.borrowerId?.fullName || loan.fullName || "Valued Customer";
+        const balanceText = formatKes(currentBalance);
+        const dueDateFormatted = loan.dueDate
+          ? new Date(loan.dueDate).toLocaleDateString("en-KE", {
+              timeZone: "Africa/Nairobi",
+            })
+          : "the due date";
+        const statusNow = refreshed?.status || loan.status;
+
+        const messageText =
+          statusNow === "overdue"
+            ? `IziFinance Late Payment Notice\nHello ${borrowerName}, your loan is overdue.\nCurrent balance: KES ${balanceText}.\nPlease pay immediately. - IziFinance`
+            : `IziFinance Reminder\nHello ${borrowerName}, your current loan balance is KES ${balanceText}, due on ${dueDateFormatted}.\nPlease repay on time to avoid penalties. - IziFinance`;
+
+        await sendSMS(borrowerPhone, messageText);
+        smsSentCount++;
+
+        loan.lastReminderSentAt = now;
+        loan.lastReminderSent = now;
+        loan.lastReminderBalance = currentBalance;
+        await loan.save();
+        console.log(
+          `[LOAN_REMINDER_CRON_LOGIC] 📤 Reminder queued loan ${loan._id} → ${borrowerPhone} balance KES ${balanceText}`
+        );
+      } catch (err) {
+        console.error(
+          "[LOAN_REMINDER_CRON_LOGIC] SMS sending failed for loan:",
+          loan._id,
+          err.message
+        );
       }
     }
 
