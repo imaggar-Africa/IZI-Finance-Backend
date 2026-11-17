@@ -77,20 +77,19 @@ const startWorker = async () => {
 
       console.log(`📨 [SMS WORKER] Starting execution for SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber}`);
       
-      try {
-        // Perform the direct sending using the shared utility
-        const result = await sendSMSDirect(smsRecord);
-        console.log(`✅ [SMS WORKER SUCCESS] Delivered SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber} | Result: ${JSON.stringify(result)}`);
-        return {
-          success: true,
-          smsId: smsRecord._id,
-          status: smsRecord.status,
-          result
-        };
-      } catch (err) {
-        console.error(`❌ [SMS WORKER ERROR] Failed to send SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber} | Error: ${err.message}`);
-        throw err;
+      const result = await sendSMSDirect(smsRecord);
+      if (!result.success) {
+        const msg = result.code || result.providerStatus || result.error || "SMS_FAILED";
+        console.error(`❌ [SMS WORKER] SMS ID: ${smsRecord._id} | ${msg}`);
+        throw new Error(msg);
       }
+      console.log(`✅ [SMS WORKER SUCCESS] Delivered SMS ID: ${smsRecord._id} | To: ${smsRecord.phoneNumber}`);
+      return {
+        success: true,
+        smsId: smsRecord._id,
+        status: smsRecord.status,
+        result,
+      };
     },
     {
       connection: bullRedis,

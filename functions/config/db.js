@@ -19,18 +19,14 @@ const connectDB = async (mongoUri) => {
   }
 
   try {
-    // Use unified topology and modern options
-    await mongoose.connect(uri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(uri);
     console.log('✅ MongoDB connected');
   } catch (err) {
     console.error('❌ MongoDB connection error:', err.message);
     // Optional: Retry once after a short delay
     await new Promise((res) => setTimeout(res, 1000));
     try {
-      await mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+      await mongoose.connect(uri);
       console.log('✅ MongoDB connected on retry');
     } catch (retryErr) {
       console.error('❌ MongoDB retry failed:', retryErr.message);

@@ -74,58 +74,153 @@ const sendSMSDirect = async (smsRecord) => {
   const attemptNumber = smsRecord.retryCount + 1;
   smsRecord.lastAttemptAt = new Date();
 
+  const pushRetryLog = (entry) => {
+    if (!smsRecord.retryLogs) smsRecord.retryLogs = [];
+    smsRecord.retryLogs.push(entry);
+  };
+
   try {
     const result = await smsClient.send(payload);
-    console.log(`📩 Africa’s Talking FULL response for SMS ID: ${smsRecord._id}`);
-    console.log(JSON.stringify(result, null, 2));
-
-    const recipient = result?.SMSMessageData?.Recipients?.[0];
+    const messageData = result?.SMSMessageData || {};
+    const recipient = messageData.Recipients?.[0];
 
     if (!recipient) {
-      throw new Error("NO_RECIPIENT_RESPONSE");
+      const errDetail = messageData.Message || "NO_RECIPIENT_RESPONSE";
+      smsRecord.errorDetails = errDetail;
+      smsRecord.status = "Pending";
+      smsRecord.retryCount = attemptNumber;
+      pushRetryLog({
+        attempt: attemptNumber,
+        status: "Pending",
+        error: errDetail,
+        timestamp: new Date(),
+      });
+      await smsRecord.save();
+      console.warn("[SMS_AT]", {
+        smsId: String(smsRecord._id),
+        success: false,
+        code: "NO_RECIPIENT_RESPONSE",
+        providerMessage: errDetail,
+      });
+      return {
+        success: false,
+        code: "NO_RECIPIENT_RESPONSE",
+        smsId: smsRecord._id,
+        providerMessage: errDetail,
+      };
     }
 
-    if (recipient.status !== "Success") {
-      // Check if recipient status indicates insufficient balance
-      if (recipient.status === "InsufficientBalance" || recipient.status.toLowerCase().includes("balance")) {
-        throw new Error("InsufficientBalance");
+    const providerStatus = recipient.status;
+    const statusCode = recipient.statusCode;
+    const providerMessage = messageData.Message;
+
+    if (providerStatus !== "Success") {
+      const isBalance =
+        providerStatus === "InsufficientBalance" ||
+        String(providerStatus).toLowerCase().includes("balance");
+
+      smsRecord.errorDetails = JSON.stringify({
+        providerStatus,
+        statusCode,
+        providerMessage,
+        number: recipient.number,
+      });
+
+      if (isBalance) {
+        smsRecord.status = "Waiting for Balance";
+        pushRetryLog({
+          attempt: attemptNumber,
+          status: "Waiting for Balance",
+          error: providerStatus,
+          timestamp: new Date(),
+        });
+        await smsRecord.save();
+        console.warn("[SMS_AT]", {
+          smsId: String(smsRecord._id),
+          success: false,
+          code: "INSUFFICIENT_BALANCE",
+          providerStatus,
+          statusCode,
+          providerMessage,
+          phone: recipient.number,
+        });
+        return {
+          success: false,
+          code: "INSUFFICIENT_BALANCE",
+          smsId: smsRecord._id,
+          dbStatus: "Waiting for Balance",
+          providerStatus,
+          statusCode,
+          providerMessage,
+          phone: recipient.number,
+        };
       }
-      throw new Error(`AT_STATUS_${recipient.status}`);
+
+      smsRecord.retryCount = attemptNumber;
+      smsRecord.status = smsRecord.retryCount >= 5 ? "Failed" : "Pending";
+      pushRetryLog({
+        attempt: attemptNumber,
+        status: smsRecord.status,
+        error: providerStatus,
+        timestamp: new Date(),
+      });
+      await smsRecord.save();
+      console.warn("[SMS_AT]", {
+        smsId: String(smsRecord._id),
+        success: false,
+        code: "PROVIDER_REJECTED",
+        providerStatus,
+        statusCode,
+        providerMessage,
+        phone: recipient.number,
+        dbStatus: smsRecord.status,
+      });
+      return {
+        success: false,
+        code: "PROVIDER_REJECTED",
+        smsId: smsRecord._id,
+        dbStatus: smsRecord.status,
+        providerStatus,
+        statusCode,
+        providerMessage,
+        phone: recipient.number,
+      };
     }
 
-    // Success
     smsRecord.status = "Sent";
     smsRecord.errorDetails = null;
-    smsRecord.retryLogs.push({
+    pushRetryLog({
       attempt: attemptNumber,
       status: "Sent",
       timestamp: new Date(),
     });
 
     await smsRecord.save();
-    console.log(`✅ SMS SENT SUCCESSFULLY | ID: ${smsRecord._id} | To: ${recipient.number}`);
-    return { success: true, recipient };
+    console.log("[SMS_AT]", {
+      smsId: String(smsRecord._id),
+      success: true,
+      phone: recipient.number,
+      cost: recipient.cost,
+      messageId: recipient.messageId,
+    });
+    return {
+      success: true,
+      smsId: smsRecord._id,
+      recipient,
+      providerMessage,
+    };
   } catch (err) {
     const isBalanceError = isInsufficientBalanceError(err);
-    const newStatus = isBalanceError ? "Waiting for Balance" : "Pending";
-
     smsRecord.errorDetails = err.message;
-    
+
     if (isBalanceError) {
       smsRecord.status = "Waiting for Balance";
-      console.warn(`⚠️ SMS INSUBALANCE | ID: ${smsRecord._id} | Status: Waiting for Balance`);
     } else {
       smsRecord.retryCount = attemptNumber;
-      if (smsRecord.retryCount >= 5) {
-        smsRecord.status = "Failed";
-        console.error(`❌ SMS MAX RETRIES REACHED | ID: ${smsRecord._id} | Status: Failed`);
-      } else {
-        smsRecord.status = "Pending";
-        console.warn(`⚠️ SMS ATTEMPT ${attemptNumber} FAILED | ID: ${smsRecord._id} | Status: Pending | Error: ${err.message}`);
-      }
+      smsRecord.status = smsRecord.retryCount >= 5 ? "Failed" : "Pending";
     }
 
-    smsRecord.retryLogs.push({
+    pushRetryLog({
       attempt: attemptNumber,
       status: smsRecord.status,
       error: err.message,
@@ -133,7 +228,20 @@ const sendSMSDirect = async (smsRecord) => {
     });
 
     await smsRecord.save();
-    throw err;
+    console.error("[SMS_AT]", {
+      smsId: String(smsRecord._id),
+      success: false,
+      code: isBalanceError ? "INSUFFICIENT_BALANCE" : "SEND_ERROR",
+      error: err.message,
+      dbStatus: smsRecord.status,
+    });
+    return {
+      success: false,
+      code: isBalanceError ? "INSUFFICIENT_BALANCE" : "SEND_ERROR",
+      smsId: smsRecord._id,
+      dbStatus: smsRecord.status,
+      error: err.message,
+    };
   }
 };
 
@@ -263,6 +371,8 @@ async function drainSmsQueueForServerless(options = {}) {
   let sent = 0;
   let failed = 0;
   let skipped = 0;
+  let waitingForBalance = 0;
+  const errors = [];
 
   for (const sms of pending) {
     if (Date.now() - start > maxMs) {
@@ -281,18 +391,43 @@ async function drainSmsQueueForServerless(options = {}) {
       continue;
     }
 
-    try {
-      await sendSMSDirect(claimed);
+    const outcome = await sendSMSDirect(claimed);
+    if (outcome.success) {
       sent++;
-    } catch (err) {
-      failed++;
+      continue;
+    }
+    const errEntry = {
+      smsId: String(claimed._id),
+      phone: claimed.phoneNumber,
+      code: outcome.code,
+      providerStatus: outcome.providerStatus,
+      statusCode: outcome.statusCode,
+      providerMessage: outcome.providerMessage,
+      dbStatus: outcome.dbStatus,
+    };
+    if (outcome.code === "INSUFFICIENT_BALANCE") {
+      waitingForBalance++;
+      errors.push(errEntry);
       console.warn(
-        `[SMS_DRAIN] Send failed ID ${claimed._id}: ${err.message}`
+        "[SMS_DRAIN] Stopping: Africa's Talking INSUFFICIENT_BALANCE (top up SMS wallet)"
       );
+      break;
+    }
+    failed++;
+    errors.push(errEntry);
+    if (errors.length <= 5) {
+      console.warn("[SMS_DRAIN] provider error", errEntry);
     }
   }
 
-  const summary = { sent, failed, skipped, examined: pending.length };
+  const summary = {
+    sent,
+    failed,
+    waitingForBalance,
+    skipped,
+    examined: pending.length,
+    ...(errors.length ? { errors: errors.slice(0, 10) } : {}),
+  };
   console.log(`[SMS_DRAIN] Done in ${Date.now() - start}ms`, summary);
   return summary;
 }

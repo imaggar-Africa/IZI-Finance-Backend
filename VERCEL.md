@@ -33,7 +33,7 @@ Firebase `onSchedule` for the same five jobs is **disabled** by default (`ENABLE
 
 ## Limitations on Vercel
 
-- **SMS BullMQ worker** does not run in serverless by default. Set `ENABLE_SMS_WORKER=true` only if you accept a long-lived worker on a plan that supports it; otherwise keep the worker on Firebase or a separate process.
+- **SMS**: Post-cron drain runs only on jobs listed in `CRON_SMS_DRAIN_ON` (default `reconciliation`) so five parallel crons do not each hit Africa’s Talking 25×. `CRON_SMS_DRAIN=false` disables. Tunes: `CRON_SMS_DRAIN_LIMIT` (default 25), `CRON_SMS_DRAIN_MAX_MS` (default 50000). Provider errors return in `smsDrain.errors` with `code`, `statusCode`, `providerStatus`. **`INSUFFICIENT_BALANCE` / statusCode 405** = top up Africa’s Talking SMS wallet. Long-lived **BullMQ worker** still runs on Firebase `api`.
 - **Puppeteer / PDF** may need extra setup (e.g. `@sparticuz/chromium`) for serverless; test report/PDF routes after deploy.
 - **Hobby plan**: `memory` is capped at **2048 MB** and `maxDuration` at **60s** in `vercel.json`. Upgrade to Pro for more memory/time; use Firebase for long PDF/cron jobs if needed.
 

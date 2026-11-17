@@ -2,30 +2,25 @@
 
 Production API: `https://vercel-izi-finance-backend.vercel.app` (override with `CRON_BASE_URL`).
 
-Firebase `onSchedule` jobs in [`functions/index.js`](functions/index.js) are **unchanged** — the same work may also run on Firebase. QStash is the scheduler for the **Vercel** deployment.
+Use **one QStash region** for schedules and Vercel signing keys (EU **or** US). If you switch regions, run `npm run qstash:schedules -- --force` and **pause** schedules in the old region’s Upstash console.
+
+**Firebase:** The five matching `onSchedule` exports in [`functions/index.js`](functions/index.js) are **off** unless you set `ENABLE_FIREBASE_SCHEDULED_CRONS=true` on Firebase and redeploy functions. Production crons for these jobs are **QStash → Vercel only**.
 
 ## Jobs
 
 | Slug | Path | Cron (Africa/Nairobi) |
 |------|------|-------------------------|
-| `loan-reminder` | `/api/cron/loan-reminder` | 18:00 daily |
-| `reconciliation` | `/api/cron/reconciliation` | 18:15 daily |
-| `group-health` | `/api/cron/group-health` | 00:00 on day 1 monthly |
-| `monthly-group-repayment` | `/api/cron/monthly-group-repayment` | 01:00 on day 1 monthly |
-| `credit-score-recovery` | `/api/cron/credit-score-recovery` | 00:30 on day 1 monthly |
-| `lender-cron-test` | `/api/cron/lender-cron-test` | **Every 5 min** (smoke test) |
+| All jobs below | `/api/cron/{slug}` | **Every 10 minutes** (`*/10 * * * *`) |
 
-### `lender-cron-test` (optional)
+| Slug | Path |
+|------|------|
+| `loan-reminder` | `/api/cron/loan-reminder` |
+| `reconciliation` | `/api/cron/reconciliation` |
+| `group-health` | `/api/cron/group-health` |
+| `monthly-group-repayment` | `/api/cron/monthly-group-repayment` |
+| `credit-score-recovery` | `/api/cron/credit-score-recovery` |
 
-SMS **lenders only** (`User` with `role: "lender"`). Safe to push without spamming:
-
-- Without `CRON_TEST_SMS=true` → **dry run** (200, no SMS).
-- `CRON_TEST_SMS=true` → sends Africa’s Talking SMS to all lenders with valid phones.
-- On **Vercel**, SMS uses **direct** send (or set `CRON_TEST_SMS_DIRECT=true`); without that, `sendSMS` only **queues** in Mongo/BullMQ and needs the Firebase SMS worker.
-- `CRON_TEST_LENDER_PHONES=+254...,+254...` → limit to those numbers (recommended while testing).
-- Response / Vercel logs: `[lender-cron-test]` and `sentTo` / `wouldSendTo` (dry run) list each mobile.
-
-Pause or delete this schedule in Upstash when you finish testing.
+**Warning:** `loan-reminder` / `reconciliation` every 10 minutes can send SMS or run heavy work often — use for **testing** only; restore production crons before go-live.
 
 ## 1. Upstash Console
 
@@ -47,6 +42,22 @@ Pause or delete this schedule in Upstash when you finish testing.
 
 Redeploy after changing env vars.
 
+## Fresh start (new QStash project)
+
+1. **Upstash** → use **one** US (or EU) QStash project → Quickstart: copy **token + both signing keys**.
+2. **Old projects** (every other account/team): **Schedules** → delete or pause anything pointing at `vercel-izi-finance-backend.vercel.app` (the CLI cannot touch other accounts).
+3. **`.env`**: `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, `CRON_BASE_URL`.
+4. **Vercel Production**: same **two signing keys** + `CRON_BASE_URL` → **Redeploy**.
+5. Wipe and recreate schedules on the **new** token:
+
+```bash
+npm run qstash:reset
+```
+
+6. **Run now** on `group-health` in Upstash → expect **200**.
+
+Optional: **QStash → Settings → Rotate signing keys**, then update Vercel + `.env` again and redeploy.
+
 ## 3. Create schedules (CLI)
 
 Local `.env` or shell:
@@ -61,6 +72,12 @@ Recreate all (delete existing matching destinations first):
 
 ```bash
 npm run qstash:schedules -- --force
+```
+
+Delete **every** schedule on the current token, then create the five jobs:
+
+```bash
+npm run qstash:reset
 ```
 
 ## 3b. Create schedules (Console)
