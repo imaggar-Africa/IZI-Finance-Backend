@@ -1,7 +1,7 @@
 /**
- * Clear stale sms_queue rows (browser or curl). Requires CRON_SECRET.
- * GET (Chrome): /api/admin/clear-sms-queue?token=YOUR_CRON_SECRET
- * Preview only: add &dry=1 . Include Failed: add &failed=1
+ * Clear stale sms_queue rows (browser or curl). No token (set SMS_CLEAR_DISABLED=true to turn off).
+ * GET: /api/admin/clear-sms-queue
+ * Preview: &dry=1 | Include Failed: &failed=1
  */
 const path = require("path");
 
@@ -46,15 +46,6 @@ function ensureInit() {
   return initPromise;
 }
 
-function getToken(req) {
-  const auth = req.headers?.authorization || "";
-  if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
-  const q = req.query || {};
-  if (q.token) return String(q.token).trim();
-  if (q.secret) return String(q.secret).trim();
-  return "";
-}
-
 function wantsHtml(req) {
   const accept = req.headers?.accept || "";
   return accept.includes("text/html");
@@ -69,19 +60,8 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const cronSecret = process.env.CRON_SECRET?.trim();
-  const token = getToken(req);
-
-  if (!cronSecret) {
-    res.status(503).json({ error: "CRON_SECRET not configured on server" });
-    return;
-  }
-
-  if (!token || token !== cronSecret) {
-    res.status(401).json({
-      error: "Unauthorized",
-      hint: "Use ?token=CRON_SECRET or Authorization: Bearer …",
-    });
+  if (process.env.SMS_CLEAR_DISABLED === "true") {
+    res.status(404).json({ error: "Not found" });
     return;
   }
 
@@ -90,6 +70,11 @@ module.exports = async (req, res) => {
     req.query?.failed === "1" || req.query?.failed === "true";
 
   try {
+    console.warn("[clear-sms-queue] invoked", {
+      dryRun,
+      includeFailed,
+      ip: req.headers["x-forwarded-for"] || req.headers["x-real-ip"],
+    });
     await ensureInit();
     const result = await clearStaleSmsQueue({ dryRun, includeFailed });
 
