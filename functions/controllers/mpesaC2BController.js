@@ -17,6 +17,7 @@ const AgentCommission = require("../models/AgentCommission");
 const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
 const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditScore");
+const { notifyUser } = require("../utils/notifyUser");
 
 exports.registerC2B = async (req, res) => {
   try {
@@ -380,15 +381,14 @@ exports.confirmationHandler = async (req, res) => {
         `Dear ${customer.fullName}, your group repayment of KES ${Amount} for ${group.name} was received. Balance: KES ${member.remaining_balance}. Ref: ${MpesaTransactionId}`
       );
 
-      // 🔔 Add Push Notification for Group Repayment
-      await Notification.create({
+      await notifyUser({
         userId: customer._id,
         userModel: "Customer",
         title: "Group Repayment Received",
         message: `KES ${Amount} repaid for ${group.name}. Balance: KES ${member.remaining_balance}`,
-        type: "repayment"
+        type: "repayment",
+        context: "c2b_group_repayment",
       });
-      console.log(`🔔 Push Notification Sent to Member: ${customer.fullName} for C2B group payment`);
 
       return res.status(200).json({
         ResultCode: 0,
@@ -429,6 +429,19 @@ exports.confirmationHandler = async (req, res) => {
         customer.phone,
         `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${updatedLoan ? updatedLoan.balance : 'unknown'}. Ref: ${MpesaTransactionId}`
       );
+
+      const remaining = updatedLoan ? updatedLoan.balance : null;
+      await notifyUser({
+        userId: customer._id,
+        userModel: "Customer",
+        title: "Repayment Received",
+        message:
+          remaining != null
+            ? `KES ${Amount} received. Remaining balance: KES ${remaining}.`
+            : `KES ${Amount} repayment received. Ref: ${MpesaTransactionId}`,
+        type: "repayment",
+        context: "c2b_loan_repayment",
+      });
 
       // Agent SMS if fully paid (commission already handled in repaymentService)
       if (updatedLoan.balance <= 0 && updatedLoan.requestedByAgentId) {

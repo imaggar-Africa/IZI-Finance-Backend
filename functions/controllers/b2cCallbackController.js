@@ -14,6 +14,7 @@ const GroupMember = require("../models/GroupMember");
 const Group = require("../models/Group");
 const { getB2CCharge } = require("../utils/mpesaCharges");
 const groupMonthlyPaymentModel = require("../models/groupMonthlyPaymentModel");
+const { notifyUser } = require("../utils/notifyUser");
 
 
 
@@ -471,14 +472,14 @@ exports.b2cCallback = async (req, res) => {
               `Dear Lender, your monthly repayment for group ${group?.name || "Group"} of KES ${transaction.amount} has been successfully sent to your M-Pesa. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
             );
 
-            // 🔔 Also send Push Notification
-            const { sendPushToUser } = require("../utils/expoPush");
-            await sendPushToUser(
-              lender._id,
-              "User",
-              "Monthly Payment Received",
-              `KES ${transaction.amount} from group ${group?.name} has been disbursed to your M-Pesa.`
-            );
+            await notifyUser({
+              userId: lender._id,
+              userModel: "User",
+              title: "Monthly Payment Received",
+              message: `KES ${transaction.amount} from group ${group?.name} has been disbursed to your M-Pesa.`,
+              type: "repayment",
+              context: "b2c_monthly_group_repayment",
+            });
           });
       }
     }
@@ -516,6 +517,27 @@ exports.b2cCallback = async (req, res) => {
         transaction.balanceAfter = balanceAfter;
 
         await customer.save({ session });
+
+        const customerId = customer._id;
+        const customerName = customer.fullName || "Customer";
+        const custWithdrawalAmount = withdrawalAmount;
+        const custBalanceAfter = balanceAfter;
+        const custRef = transaction.transactionId || transaction._id;
+
+        postCommitTasks.push(async () => {
+          await notifyUser({
+            userId: customerId,
+            userModel: "Customer",
+            title: "Savings Withdrawal Successful",
+            message: `KES ${custWithdrawalAmount} sent to your M-Pesa. New savings balance: KES ${custBalanceAfter}.`,
+            type: "withdraw",
+            context: "b2c_customer_withdrawal",
+          });
+          await sendSMS(
+            customer.phone,
+            `Dear ${customerName}, your savings withdrawal of KES ${custWithdrawalAmount} was processed. New balance: KES ${custBalanceAfter}. REF: ${custRef}\n- IziFinance`
+          );
+        });
       }
     }
 
@@ -547,28 +569,28 @@ exports.b2cCallback = async (req, res) => {
 
         await user.save({ session });
 
-        // Trigger Notifications
-        try {
-          const profile = await Profile.findOne({ userId: user._id }).session(session);
-          const userName = profile?.fullName || "User";
+        const profile = await Profile.findOne({ userId: user._id }).session(session);
+        const userName = profile?.fullName || "User";
+        const userId = user._id;
+        const userPhone = user.phone;
+        const wAmount = withdrawalAmount;
+        const wBalanceAfter = balanceAfter;
+        const wRef = transaction.transactionId || transaction._id;
 
-          await Notification.create([{
-            userId: user._id,
+        postCommitTasks.push(async () => {
+          await notifyUser({
+            userId,
             userModel: "User",
             title: "Withdrawal Successful",
-            message: `KES ${withdrawalAmount} has been withdrawn from your wallet.`,
+            message: `KES ${wAmount} withdrawn from your wallet. New balance: KES ${wBalanceAfter}.`,
             type: "withdraw",
-          }], { session });
-
-          postCommitTasks.push(async () => {
-            await sendSMS(
-              user.phone,
-              `Dear ${userName}, your withdrawal of KES ${withdrawalAmount} has been processed successfully. \nNew wallet balance: KES ${balanceAfter}. \nREF: ${transaction.transactionId || transaction._id}\n- IziFinance`
-            );
+            context: "b2c_user_withdrawal",
           });
-        } catch (notifErr) {
-          console.error('[B2C_CALLBACK] User withdrawal notification error:', notifErr);
-        }
+          await sendSMS(
+            userPhone,
+            `Dear ${userName}, your withdrawal of KES ${wAmount} has been processed successfully. \nNew wallet balance: KES ${wBalanceAfter}. \nREF: ${wRef}\n- IziFinance`
+          );
+        });
       }
     }
 
@@ -605,33 +627,40 @@ exports.b2cCallback = async (req, res) => {
         }
       }
 
+      const agentId = agent?._id;
+      const agentName = agent?.name || "Agent";
+      const agentPhone = agent?.phone;
+      const agentWallet = agent?.walletBalance;
+      const txAmount = transaction.amount;
+      const txRef = transaction.transactionId || transaction._id;
+      const lenderForNotify = withdrawalRequest?.lenderId;
+
       postCommitTasks.push(async () => {
-        if (agent) {
-          // Notify Agent
-          await Notification.create({
-            userId: agent._id,
-            userModel: "Agent",
-            title: "Withdrawal Successful",
-            message: `Your withdrawal of KES ${transaction.amount} has been processed successfully.`,
-            type: "withdraw",
+        if (!agentId) return;
+
+        await notifyUser({
+          userId: agentId,
+          userModel: "Agent",
+          title: "Withdrawal Successful",
+          message: `KES ${txAmount} withdrawn successfully. New wallet balance: KES ${agentWallet}.`,
+          type: "withdraw",
+          context: "b2c_agent_withdrawal",
+        });
+
+        await sendSMS(
+          agentPhone,
+          `Dear ${agentName}, your withdrawal of KES ${txAmount} has been processed successfully. \nNew wallet balance: KES ${agentWallet}. \nREF: ${txRef}\nFunds are on the way to your M-Pesa.\n- IziFinance`
+        );
+
+        if (lenderForNotify?._id) {
+          await notifyUser({
+            userId: lenderForNotify._id,
+            userModel: "User",
+            title: "Agent Withdrawal Processed",
+            message: `Agent ${agentName} has successfully withdrawn KES ${txAmount}.`,
+            type: "agent_withdrawal",
+            context: "b2c_agent_withdrawal_lender",
           });
-
-          await sendSMS(
-            agent.phone,
-            `Dear ${agent.name || "Agent"}, your withdrawal of KES ${transaction.amount} has been processed successfully. \nNew wallet balance: KES ${agent.walletBalance}. \nREF: ${transaction.transactionId || transaction._id}\nFunds are on the way to your M-Pesa.\n- IziFinance`
-          );
-
-          // Notify Lender
-          const lender = withdrawalRequest?.lenderId;
-          if (lender) {
-            await Notification.create({
-              userId: lender._id,
-              userModel: "User",
-              title: "Agent Withdrawal Processed",
-              message: `Agent ${agent.name || "Agent"} has successfully withdrawn KES ${transaction.amount}.`,
-              type: "agent_withdrawal",
-            });
-          }
         }
       });
     }
@@ -647,7 +676,16 @@ exports.b2cCallback = async (req, res) => {
 
     // Execute post-commit tasks
     if (postCommitTasks.length > 0) {
-      await Promise.all(postCommitTasks.map(fn => fn().catch(e => console.error("Post-commit task error:", e))));
+      await Promise.all(
+        postCommitTasks.map((fn) =>
+          fn().catch((e) =>
+            console.error("[B2C_CALLBACK] post_commit_error", {
+              error: e.message,
+              stack: e.stack,
+            })
+          )
+        )
+      );
     }
 
     return res.status(200).json({

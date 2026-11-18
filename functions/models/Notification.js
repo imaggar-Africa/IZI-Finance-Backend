@@ -27,6 +27,7 @@ const NotificationSchema = new mongoose.Schema({
       "general",
       "loan_rejected",
       "withdrawal_reject",
+      "agent_withdrawal",
     ],
     default: "general"
   },
@@ -40,22 +41,31 @@ const NotificationSchema = new mongoose.Schema({
 
 // ⚡ Trigger Expo Push Notification on creation
 NotificationSchema.post("save", async function (doc) {
-  console.log(`🔔 Notification Hook fired for [${doc.title}] - User: ${doc.userId} (${doc.userModel})`);
+  const meta = {
+    notificationId: String(doc._id),
+    userId: String(doc.userId),
+    userModel: doc.userModel,
+    type: doc.type,
+    title: doc.title,
+  };
+  console.log("[NOTIFY] push_hook", meta);
   try {
     const result = await sendPushToUser(
       doc.userId,
       doc.userModel,
       doc.title,
       doc.message,
-      { type: doc.type }
+      { type: doc.type },
+      `notification_hook:${doc.type}`
     );
-    if (!result) {
-      console.warn(`⚠️ No Push Token found for User: ${doc.userId}. Push notification skipped.`);
-    } else {
-      console.log(`✅ Push Sent Successfully for [${doc.title}]`);
+    if (!result?.ok) {
+      console.warn("[NOTIFY_PUSH] hook_skipped", {
+        ...meta,
+        reason: result?.reason || "unknown",
+      });
     }
   } catch (err) {
-    console.error("❌ Push Error in Notification Model Hook:", err.message);
+    console.error("[NOTIFY_PUSH] hook_error", { ...meta, error: err.message });
   }
 });
 
