@@ -28,7 +28,16 @@ npm run vercel:dev
   - Also delete Failed: add `&failed=1`
   - Disable endpoint: Vercel env `SMS_CLEAR_DISABLED=true` → 404
 
-Update M-Pesa callback URLs to your Vercel domain after the first deploy.
+Update M-Pesa callback URLs to your Vercel domain after the first deploy:
+
+| Env var | Example (production) |
+|---------|----------------------|
+| `MPESA_CONFIRM_URL` | `https://vercel-izi-finance-backend.vercel.app/api/c2b/confirm` |
+| `MPESA_VALIDATE_URL` | `https://vercel-izi-finance-backend.vercel.app/api/c2b/validate` |
+
+Then **re-register** C2B so Safaricom replaces the old URLs (no separate unregister). See [C2B.md](C2B.md): `npm run c2b:register` or `POST /api/c2b/register` on the deployed app. Until then, paybill payments still hit the previous host and **Vercel logs will not show** `[C2B_CONFIRM]`.
+
+**Paybill account number** must be the borrower’s **National ID** (`Customer.idNumber`), not the paybill shortcode. The SMS from Safaricom (`Confirmed. Ksh… sent to … for account …`) is **only M-Pesa’s receipt**, not an IziFinance app notification.
 
 ## Crons vs Firebase
 

@@ -1,5 +1,8 @@
 // controllers/c2bController.js
-const mongoose = require("mongoose");
+const {
+  mongoose,
+  waitForMongoReady,
+} = require("../config/db");
 const Loan = require("../models/Loan");
 const Transaction = require("../models/Transaction");
 const Customer = require("../models/customer");
@@ -18,6 +21,23 @@ const AgentModel = require("../models/AgentModel");
 const Profile = require("../models/Profile");
 const { getRepaymentScoreDelta, updateCreditScore } = require("../utils/creditScore");
 const { notifyUser } = require("../utils/notifyUser");
+const {
+  resolveCustomerFromC2b,
+  resolveActiveLoanForCustomer,
+  resolveGroupMember,
+  resolveC2bCallbackUrls,
+} = require("../utils/c2bResolve");
+
+async function closeC2bSession(session, commit) {
+  try {
+    if (session.inTransaction()) {
+      if (commit) await session.commitTransaction();
+      else await session.abortTransaction();
+    }
+  } finally {
+    session.endSession();
+  }
+}
 
 exports.registerC2B = async (req, res) => {
   try {
@@ -32,19 +52,15 @@ exports.registerC2B = async (req, res) => {
         ? "https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl"
         : "https://sandbox.safaricom.co.ke/mpesa/c2b/v2/registerurl";
 
-    // 🔥 Hardcoded fallback URLs
-    const fallbackValidateUrl =
-      "https://api-qqxc6zwzmq-uc.a.run.app/api/c2b/validate";
-
-    const fallbackConfirmUrl =
-      "https://api-qqxc6zwzmq-uc.a.run.app/api/c2b/confirm";
-
-    // 🔥 Use secret → otherwise fallback
     const shortCode = (global.config.mpesaShortcode || "").trim();
-    const validateUrl =
-      (global.config.mpesaC2bValidateUrl || fallbackValidateUrl).trim();
-    const confirmUrl =
-      (global.config.mpesaC2bConfirmUrl || fallbackConfirmUrl).trim();
+    const { validateUrl, confirmUrl, source } = resolveC2bCallbackUrls(
+      global.config
+    );
+    console.log("[C2B_REGISTER] callback_urls", {
+      source,
+      validateUrl,
+      confirmUrl,
+    });
 
     // ---- Validations ----
     if (!shortCode || shortCode.length < 5) {
@@ -68,8 +84,9 @@ exports.registerC2B = async (req, res) => {
       });
     }
 
+    const shortCodeNum = parseInt(shortCode, 10);
     const payload = {
-      ShortCode: shortCode,
+      ShortCode: Number.isNaN(shortCodeNum) ? shortCode : shortCodeNum,
       ResponseType: "Completed",
       ConfirmationURL: confirmUrl,
       ValidationURL: validateUrl,
@@ -81,10 +98,34 @@ exports.registerC2B = async (req, res) => {
       payload,
     });
 
-    const { data } = await axios.post(url, payload, {
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 20000,
+    const { data, status } = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 25000,
+      validateStatus: () => true,
     });
+
+    if (status < 200 || status >= 300) {
+      const saf = data || {};
+      console.error("[C2B_REGISTER] failed", { status, ...saf });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to register C2B URLs with Safaricom",
+        environment: mode.toUpperCase(),
+        registered: {
+          ShortCode: shortCode,
+          ConfirmationURL: confirmUrl,
+          ValidationURL: validateUrl,
+        },
+        error: saf,
+        hint:
+          saf.errorCode === "500.003.1001"
+            ? "On LIVE: delete existing URLs in Daraja → Self Service → URL Management for this paybill, then register again."
+            : undefined,
+      });
+    }
 
     return res.json({
       success: true,
@@ -99,7 +140,7 @@ exports.registerC2B = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error("❌ Register Error:", err.response?.data || err.message);
+    console.error("[C2B_REGISTER] error", err.response?.data || err.message);
 
     return res.status(500).json({
       success: false,
@@ -115,10 +156,17 @@ exports.registerC2B = async (req, res) => {
 // ---------------- VALIDATION ----------------
 exports.validationHandler = async (req, res) => {
   try {
-    console.log("📩 Validation Callback:", req.body);
-
+    await waitForMongoReady();
     const billRefNumber = (req.body?.BillRefNumber || "").trim();
     const amount = Number(req.body?.TransAmount || 0);
+    const msisdn = req.body?.MSISDN;
+
+    console.log("[C2B_VALIDATE]", {
+      BillRefNumber: billRefNumber,
+      TransAmount: amount,
+      MSISDN: msisdn,
+      TransID: req.body?.TransID,
+    });
 
     if (!billRefNumber) {
       return res.status(200).json({
@@ -127,78 +175,74 @@ exports.validationHandler = async (req, res) => {
       });
     }
 
-    // 1️⃣ Find Customer by National ID
-    const customer = await Customer.findOne({ idNumber: billRefNumber });
+    const { customer, matchedBy } = await resolveCustomerFromC2b(
+      billRefNumber,
+      msisdn,
+      null
+    );
 
-    // -------------------------
-    // CUSTOMER NOT FOUND
-    // -------------------------
     if (!customer) {
-      console.warn("⚠️ Customer not found. No SMS sent (MSISDN is hashed).");
-
+      console.warn("[C2B_VALIDATE] customer_not_found", { billRefNumber, msisdn });
       return res.status(200).json({
-        ResultCode: 0,  // Always ACCEPT money
-        ResultDesc: "Customer not found — Payment accepted"
+        ResultCode: 0,
+        ResultDesc: "Customer not found — Payment accepted",
       });
     }
 
-    // 2️⃣ Find Loan linked to this customer and ID
-    const loan = await Loan.findOne({
-      borrowerId: customer._id,
-      status: { $in: ["active", "overdue"] },
-      billRefNumber: billRefNumber
+    console.log("[C2B_VALIDATE] customer_resolved", {
+      customerId: String(customer._id),
+      matchedBy,
     });
-    // 👉 Block payments for loans that are still pending approval
+
+    const loan = await resolveActiveLoanForCustomer(
+      customer,
+      billRefNumber,
+      null
+    );
+
     if (loan && loan.loanRequestStatus === "processing") {
-      console.warn(`⚠️ Loan ${loan._id} is pending. Rejecting C2B validation.`);
+      console.warn("[C2B_VALIDATE] loan_processing_reject", { loanId: String(loan._id) });
       return res.status(200).json({
         ResultCode: 1,
         ResultDesc: "Loan pending – payment not accepted",
       });
     }
 
-    // -------------------------
-    // LOAN NOT FOUND → CHECK GROUP LOAN
-    // -------------------------
     if (!loan) {
-      const member = await GroupMember.findOne({
-        borrowerId: customer._id,
-        remaining_balance: { $gt: 0 }
-      });
-
+      const member = await resolveGroupMember(customer, null);
       if (!member) {
-        console.warn("⚠️ No individual or group loan found for this customer");
-
-        await sendSMS(
-          customer.phone,
-          `Thank you ${customer.fullName} for making a payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
-        );
-
+        console.warn("[C2B_VALIDATE] no_active_loan", {
+          customerId: String(customer._id),
+        });
+        if (customer.phone) {
+          await sendSMS(
+            customer.phone,
+            `Thank you ${customer.fullName} for your payment to IziFinance. No active loan was found. Use your National ID as the paybill account number. Contact support if needed.`
+          );
+        }
         return res.status(200).json({
-          ResultCode: 0, // STILL accept payment
-          ResultDesc: "Loan not found — Payment accepted"
+          ResultCode: 0,
+          ResultDesc: "Loan not found — Payment accepted",
         });
       }
     }
 
-    // -------------------------
-    // LOAN FOUND → VALIDATION SUCCESS
-    // -------------------------
-    await sendSMS(
-      customer.phone,
-      `Hello ${customer.fullName}, your payment of KES ${amount} has been validated successfully.`
-    );
+    if (customer.phone) {
+      await sendSMS(
+        customer.phone,
+        `Hello ${customer.fullName}, your payment of KES ${amount} to IziFinance was validated. Ref will be sent after confirmation.`
+      );
+    }
 
     return res.status(200).json({
       ResultCode: 0,
-      ResultDesc: "Validation Passed"
+      ResultDesc: "Validation Passed",
     });
-
   } catch (error) {
-    console.error("❌ Validation Error:", error);
+    console.error("[C2B_VALIDATE] error", { error: error.message });
     return res.status(200).json({
       ResultCode: 1,
-      ResultDesc: "Server Error"
+      ResultDesc: "Server Error",
     });
   }
 };
@@ -246,79 +290,109 @@ const handleAgentFullRepaymentCommission = async (loan, transaction, session) =>
 };
 
 exports.confirmationHandler = async (req, res) => {
-  console.log("💰 Payment Confirmation Callback:", req.body);
+  const BillRefNumber = req.body?.BillRefNumber?.trim();
+  const Amount = Number(req.body?.TransAmount) || 0;
+  const MpesaTransactionId = req.body?.TransID;
+  const msisdn = req.body?.MSISDN;
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  console.log("[C2B_CONFIRM] received", {
+    BillRefNumber,
+    TransAmount: Amount,
+    TransID: MpesaTransactionId,
+    MSISDN: msisdn,
+  });
 
+  let session;
   try {
-    const BillRefNumber = req.body?.BillRefNumber?.trim();
-    const Amount = Number(req.body?.TransAmount) || 0;
-    const MpesaTransactionId = req.body?.TransID;
-
+    await waitForMongoReady();
+    session = await mongoose.startSession();
+    session.startTransaction();
     if (!BillRefNumber || !Amount) {
+      await closeC2bSession(session, false);
       return res.status(200).json({
         ResultCode: 1,
-        ResultDesc: "Missing BillRef or Amount"
+        ResultDesc: "Missing BillRef or Amount",
       });
     }
 
-    // 1️⃣ FIND CUSTOMER
-    const customer = await Customer.findOne({ idNumber: BillRefNumber }).session(session);
+    const { customer, matchedBy } = await resolveCustomerFromC2b(
+      BillRefNumber,
+      msisdn,
+      session
+    );
 
     if (!customer) {
-      console.warn("⚠️ Customer not found. NO SMS sent (MSISDN is hashed in sandbox).");
-
+      console.warn("[C2B_CONFIRM] customer_not_found", {
+        BillRefNumber,
+        MSISDN: msisdn,
+        TransID: MpesaTransactionId,
+        hint: "Paybill account must be customer National ID (idNumber), not paybill number",
+      });
+      await closeC2bSession(session, false);
       return res.status(200).json({
         ResultCode: 0,
-        ResultDesc: "Customer not found – Payment accepted"
+        ResultDesc: "Customer not found – Payment accepted",
       });
     }
 
-    // Disable mongoose validation for customer during C2B to avoid required field errors (e.g. livePhoto, frontID, backID)
-    customer.set('validateBeforeSave', false);
+    console.log("[C2B_CONFIRM] customer_resolved", {
+      customerId: String(customer._id),
+      matchedBy,
+    });
 
-    // 2️⃣ FIND LOAN FOR THIS CUSTOMER
-    const loan = await Loan.findOne({
-      borrowerId: customer._id,
-      status: { $in: ["active", "overdue"] },
-      billRefNumber: BillRefNumber
-    }).session(session);
-    // 👉 Ensure pending loans are not processed
+    customer.set("validateBeforeSave", false);
+
+    const loan = await resolveActiveLoanForCustomer(
+      customer,
+      BillRefNumber,
+      session
+    );
+
     if (loan && loan.status === "pending") {
-      console.warn(`⚠️ Loan ${loan._id} is pending. Rejecting C2B confirmation.`);
-      await session.abortTransaction();
-      session.endSession();
+      console.warn("[C2B_CONFIRM] loan_pending_reject", {
+        loanId: String(loan._id),
+      });
+      await closeC2bSession(session, false);
       return res.status(200).json({
         ResultCode: 1,
         ResultDesc: "Loan pending – payment not accepted",
       });
     }
 
-    // 3️⃣ IF LOAN NOT FOUND → CHECK GROUP LOAN
     if (!loan) {
-      const member = await GroupMember.findOne({
-        borrowerId: customer._id,
-        remaining_balance: { $gt: 0 }
-      }).session(session);
+      const member = await resolveGroupMember(customer, session);
 
       if (!member) {
-        console.warn("⚠️ No active loan found for this customer. Sending SMS.");
+        console.warn("[C2B_CONFIRM] no_active_loan", {
+          customerId: String(customer._id),
+          Amount,
+          TransID: MpesaTransactionId,
+        });
 
-        await sendSMS(
-          customer.phone,
-          `Thank you ${customer.fullName} for your payment to IziFinance. No active loan was found. Please contact support to confirm your balance.`
-        );
+        await closeC2bSession(session, true);
 
-        await session.commitTransaction();
-        session.endSession();
+        if (customer.phone) {
+          await sendSMS(
+            customer.phone,
+            `Thank you ${customer.fullName} for your payment of KES ${Amount} to IziFinance (Ref: ${MpesaTransactionId}). No active loan was matched. Use your National ID as the paybill account number. Contact support to allocate this payment.`
+          );
+        }
+
+        await notifyUser({
+          userId: customer._id,
+          userModel: "Customer",
+          title: "Payment Received",
+          message: `KES ${Amount} received (Ref: ${MpesaTransactionId}). We could not match an active loan. Support will review.`,
+          type: "general",
+          context: "c2b_unmatched_loan",
+        });
+
         return res.status(200).json({
           ResultCode: 0,
-          ResultDesc: "Loan not found – Payment accepted"
+          ResultDesc: "Loan not found – Payment accepted",
         });
       }
 
-      // 4️⃣ GROUP LOAN MEMBER FOUND → PROCESS REPAYMENT
       const group = await Group.findById(member.groupId).session(session);
       if (!group) throw new Error("Group not found");
 
@@ -329,7 +403,6 @@ exports.confirmationHandler = async (req, res) => {
       group.remaining_loan_balance -= Amount;
       if (group.remaining_loan_balance < 0) group.remaining_loan_balance = 0;
 
-      // Credit Lender Wallet
       const lender = await User.findById(group.lenderId).session(session);
       if (lender) {
         lender.walletBalance += Amount;
@@ -339,7 +412,6 @@ exports.confirmationHandler = async (req, res) => {
       await member.save({ session });
       await group.save({ session });
 
-      // Record Transaction
       const transaction = new Transaction({
         type: "group member repayment",
         userId: customer._id,
@@ -350,22 +422,21 @@ exports.confirmationHandler = async (req, res) => {
         status: "successful",
         phone: req.body?.MSISDN || customer.phone || "Unknown",
         accountReference: BillRefNumber,
-        description: `C2B Group Repayment - ${group.name}`
+        description: `C2B Group Repayment - ${group.name}`,
       });
 
-      // 🔥 Update GroupLoanRequest Repayments Array
       const GroupLoanRequest = require("../models/GroupLoanRequest");
       const activeRequest = await GroupLoanRequest.findOne({
         groupId: group._id,
         borrowerId: customer._id,
-        status: "approved"
+        status: "approved",
       }).session(session);
 
       if (activeRequest) {
         activeRequest.repayments.push({
           transactionId: transaction._id,
           amount: Amount,
-          date: new Date()
+          date: new Date(),
         });
         await activeRequest.save({ session });
         transaction.groupLoanRequestId = activeRequest._id;
@@ -392,11 +463,15 @@ exports.confirmationHandler = async (req, res) => {
 
       return res.status(200).json({
         ResultCode: 0,
-        ResultDesc: "Group payment processed successfully"
+        ResultDesc: "Group payment processed successfully",
       });
     }
 
-    // 5️⃣ NORMAL LOAN FOUND → PROCESS REPAYMENT
+    if (loan && !loan.billRefNumber) {
+      loan.billRefNumber = customer.idNumber || BillRefNumber;
+      await loan.save({ session, validateBeforeSave: false });
+    }
+
     const transaction = new Transaction({
       type: "repayment",
       userId: customer._id,
@@ -407,74 +482,88 @@ exports.confirmationHandler = async (req, res) => {
       status: "pending",
       phone: req.body?.MSISDN || customer.phone || "Unknown",
       accountReference: BillRefNumber,
-      description: `C2B Loan Repayment via Paybill - Ref: ${BillRefNumber}`
+      description: `C2B Loan Repayment via Paybill - Ref: ${BillRefNumber}`,
     });
 
-      const { processRepayment } = require("../utils/repaymentService");
-      await processRepayment(transaction, Amount, MpesaTransactionId, session);
+    const { processRepayment } = require("../utils/repaymentService");
+    await processRepayment(transaction, Amount, MpesaTransactionId, session);
 
-      await session.commitTransaction();
-      session.endSession();
+    await session.commitTransaction();
+    session.endSession();
 
-      // Fetch the updated loan after committing the transaction
-      const updatedLoan = await Loan.findById(loan._id);
-      if (updatedLoan) {
-        console.log(`ℹ️ [C2B_CONFIRMATION] Loan successfully updated. Loan ID: ${updatedLoan._id}, Previous Balance: ${loan.balance}, New Balance: ${updatedLoan.balance}`);
-      } else {
-        console.warn(`⚠️ [C2B_CONFIRMATION] Fetching updated loan failed for Loan ID: ${loan._id}`);
-      }
-
-      // Send SMS Notification to Customer
-      await sendSMS(
-        customer.phone,
-        `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${updatedLoan ? updatedLoan.balance : 'unknown'}. Ref: ${MpesaTransactionId}`
-      );
-
-      const remaining = updatedLoan ? updatedLoan.balance : null;
-      await notifyUser({
-        userId: customer._id,
-        userModel: "Customer",
-        title: "Repayment Received",
-        message:
-          remaining != null
-            ? `KES ${Amount} received. Remaining balance: KES ${remaining}.`
-            : `KES ${Amount} repayment received. Ref: ${MpesaTransactionId}`,
-        type: "repayment",
-        context: "c2b_loan_repayment",
+    const updatedLoan = await Loan.findById(loan._id);
+    if (updatedLoan) {
+      console.log("[C2B_CONFIRM] loan_updated", {
+        loanId: String(updatedLoan._id),
+        newBalance: updatedLoan.balance,
       });
+    }
 
-      // Agent SMS if fully paid (commission already handled in repaymentService)
-      if (updatedLoan.balance <= 0 && updatedLoan.requestedByAgentId) {
-        const agent = await AgentModel.findById(updatedLoan.requestedByAgentId);
-        if (agent) {
-          await sendSMS(
-            agent.phone,
-            `🎉 Borrower ${customer.fullName} has fully repaid their loan. Your commission has been recorded.`
-          );
-        }
-        // No need to call handleAgentFullRepaymentCommission here as it is handled in repaymentService
+    await sendSMS(
+      customer.phone,
+      `Dear ${customer.fullName}, your repayment of KES ${Amount} was received. Remaining balance: KES ${updatedLoan ? updatedLoan.balance : "unknown"}. Ref: ${MpesaTransactionId}`
+    );
+
+    const remaining = updatedLoan ? updatedLoan.balance : null;
+    await notifyUser({
+      userId: customer._id,
+      userModel: "Customer",
+      title: "Repayment Received",
+      message:
+        remaining != null
+          ? `KES ${Amount} received. Remaining balance: KES ${remaining}. Ref: ${MpesaTransactionId}`
+          : `KES ${Amount} repayment received. Ref: ${MpesaTransactionId}`,
+      type: "repayment",
+      context: "c2b_loan_repayment",
+    });
+
+    console.log("[C2B_CONFIRM] repayment_ok", {
+      customerId: String(customer._id),
+      loanId: String(loan._id),
+      amount: Amount,
+      remainingBalance: remaining,
+      TransID: MpesaTransactionId,
+    });
+
+    if (updatedLoan?.balance <= 0 && updatedLoan.requestedByAgentId) {
+      const agent = await AgentModel.findById(updatedLoan.requestedByAgentId);
+      if (agent) {
+        await sendSMS(
+          agent.phone,
+          `🎉 Borrower ${customer.fullName} has fully repaid their loan. Your commission has been recorded.`
+        );
       }
+    }
 
     return res.status(200).json({
       ResultCode: 0,
-      ResultDesc: "Payment processed successfully"
+      ResultDesc: "Payment processed successfully",
     });
-
   } catch (error) {
-    console.error("❌ Confirmation Error:", error);
-    console.error("❌ C2B Confirmation Failed details:", {
+    console.error("[C2B_CONFIRM] error", {
       message: error.message,
       stack: error.stack,
-      requestBody: req.body
+      BillRefNumber,
+      TransID: MpesaTransactionId,
+      body: req.body,
     });
 
-    await session.abortTransaction();
-    session.endSession();
+    if (session) {
+      await closeC2bSession(session, false);
+    }
 
-    return res.status(200).json({
-      ResultCode: 1,
-      ResultDesc: "Transaction failed"
-    });
+    if (!res.headersSent) {
+      const transient =
+        /not ready|buffering timed out|MongoNetworkError|ETIMEOUT/i.test(
+          error.message
+        );
+      return res.status(200).json({
+        ResultCode: transient ? 1 : 1,
+        ResultDesc: transient
+          ? "Server busy — Safaricom may retry"
+          : "Transaction failed",
+      });
+    }
   }
 };
 

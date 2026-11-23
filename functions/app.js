@@ -138,6 +138,17 @@ async function initializeApp(secrets = {}) {
   if (config.mongoUri && !process.env.MONGO_URI) {
     process.env.MONGO_URI = config.mongoUri;
   }
+  const mongoUri = (
+    config.mongoUri ||
+    process.env.MONGO_URI ||
+    process.env.DATABASE_URL ||
+    ""
+  ).trim();
+  if (process.env.IZI_RUNTIME === "vercel" && !mongoUri) {
+    const err = new Error("MONGO_URI is required on Vercel");
+    err.initStep = "db:config";
+    throw err;
+  }
   console.log("Initializing DB and Redis");
 
   try {

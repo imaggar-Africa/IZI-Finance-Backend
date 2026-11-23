@@ -16,6 +16,7 @@
     "qstash:reset": "node scripts/qstash-setup-schedules.js --wipe-all --prune-orphans",
     "sms:clear": "node scripts/clear-sms-queue.js",
     "qstash:smoke": "node scripts/qstash-smoke.js",
+    "c2b:register": "node scripts/register-mpesa-c2b.js",
     "cron:local": "node scripts/cron-local-run.js",
     "sync:vercel-api-deps": "node scripts/sync-vercel-api-deps.js",
     "test": "echo \"Error: no test specified\" && exit 1"

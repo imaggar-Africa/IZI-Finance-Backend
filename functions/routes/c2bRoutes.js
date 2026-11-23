@@ -3,10 +3,20 @@ const express = require("express");
 const { registerC2B, simulatePayment, validationHandler, confirmationHandler } = require("../controllers/mpesaC2BController");
 const router = express.Router();
 
-// Import the controller
-// PUBLIC MPESA CALLBACKS
-router.post("/validate", validationHandler);
-router.post("/confirm", confirmationHandler);
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch((err) => {
+    console.error("[C2B_ROUTE] unhandled", { path: req.path, error: err.message });
+    if (!res.headersSent) {
+      res.status(200).json({
+        ResultCode: 1,
+        ResultDesc: "Internal error",
+      });
+    }
+  });
+
+// PUBLIC MPESA CALLBACKS (must return 200 JSON for Safaricom)
+router.post("/validate", asyncHandler(validationHandler));
+router.post("/confirm", asyncHandler(confirmationHandler));
 
 // DEV ACTIONS
 router.post("/register", registerC2B);
