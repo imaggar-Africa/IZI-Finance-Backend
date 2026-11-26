@@ -64,16 +64,18 @@ async function checkLoansAndSendReminders(specificLoanId = null) {
         continue;
       }
 
+      // Resend allowed: "already sent today" no longer blocks (fixes queued-but-not-delivered).
+      // Dedup: sendSMS skips identical Pending/Sent within 2 minutes.
+      // lastReminderSentAt is updated only after Africa's Talking OK (see sms.js drain).
       const lastReminder = loan.lastReminderSentAt || loan.lastReminderSent;
-      const todayKey = nairobiDateKey(now);
-      const lastKey = lastReminder ? nairobiDateKey(new Date(lastReminder)) : null;
-      const shouldSendReminder = !lastReminder || lastKey !== todayKey;
-
-      if (!shouldSendReminder) {
-        console.log(
-          `[LOAN_REMINDER_CRON_LOGIC] Skip loan ${loan._id}: reminder already sent Nairobi date ${lastKey}`
-        );
-        continue;
+      if (lastReminder) {
+        const lastKey = nairobiDateKey(new Date(lastReminder));
+        const todayKey = nairobiDateKey(now);
+        if (lastKey === todayKey) {
+          console.log(
+            `[LOAN_REMINDER_CRON_LOGIC] Resending loan ${loan._id} (last marked ${lastKey}; will update after AT send)`
+          );
+        }
       }
 
       try {
@@ -112,12 +114,8 @@ async function checkLoansAndSendReminders(specificLoanId = null) {
         });
         smsSentCount++;
 
-        loan.lastReminderSentAt = now;
-        loan.lastReminderSent = now;
-        loan.lastReminderBalance = currentBalance;
-        await loan.save();
         console.log(
-          `[LOAN_REMINDER_CRON_LOGIC] 📤 Reminder queued loan ${loan._id} → ${borrowerPhone} balance KES ${balanceText}`
+          `[LOAN_REMINDER_CRON_LOGIC] 📤 Reminder queued loan ${loan._id} → ${borrowerPhone} balance KES ${balanceText} (loan marked sent only after Africa's Talking OK)`
         );
       } catch (err) {
         console.error(

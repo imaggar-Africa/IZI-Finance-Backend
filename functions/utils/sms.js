@@ -2,6 +2,7 @@ const africastalking = require("africastalking");
 const { normalizePhone } = require("./normalizePhone");
 const smsQueue = require("../queues/sms.queue");
 const SmsQueue = require("../models/SmsQueue");
+const Loan = require("../models/Loan");
 
 // ------------------------------
 // AfricasTalking SMS client
@@ -48,6 +49,21 @@ const isInsufficientBalanceError = (err) => {
     errMsg.includes("funds")
   );
 };
+
+async function markLoanReminderSentIfApplicable(smsRecord) {
+  if (smsRecord.job !== "loan-reminder" || !smsRecord.loanId) return;
+  const now = new Date();
+  await Loan.findByIdAndUpdate(smsRecord.loanId, {
+    lastReminderSentAt: now,
+    lastReminderSent: now,
+    ...(smsRecord.balanceKes != null
+      ? { lastReminderBalance: smsRecord.balanceKes }
+      : {}),
+  });
+  console.log("[LOAN_REMINDER_CRON_LOGIC] Marked reminder sent after AT OK", {
+    loanId: String(smsRecord.loanId),
+  });
+}
 
 // ------------------------------
 // Send SMS directly to provider
@@ -196,6 +212,11 @@ const sendSMSDirect = async (smsRecord) => {
     });
 
     await smsRecord.save();
+    try {
+      await markLoanReminderSentIfApplicable(smsRecord);
+    } catch (markErr) {
+      console.warn("[SMS_AT] loan reminder mark failed:", markErr.message);
+    }
     console.log("[SMS_AT]", {
       smsId: String(smsRecord._id),
       success: true,
@@ -300,10 +321,17 @@ const sendSMS = async (phoneNumber, message, context = {}) => {
     logSmsTemplate(normalizedPhone, message, context);
 
     // 1. Store SMS in database
+    const meta = context.meta && typeof context.meta === "object" ? context.meta : {};
     const smsRecord = await SmsQueue.create({
       phoneNumber: normalizedPhone,
       message,
       status: "Pending",
+      job: context.job || null,
+      loanId: meta.loanId || null,
+      balanceKes:
+        meta.balanceKes != null && Number.isFinite(Number(meta.balanceKes))
+          ? Number(meta.balanceKes)
+          : null,
     });
 
     console.log(`📥 [SMS STORED] | ID: ${smsRecord._id} | To: ${normalizedPhone}`);

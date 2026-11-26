@@ -27,6 +27,13 @@ const SmsQueueSchema = new mongoose.Schema(
     errorDetails: {
       type: String,
     },
+    job: { type: String, default: null },
+    loanId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Loan",
+      default: null,
+    },
+    balanceKes: { type: Number, default: null },
     retryLogs: [
       {
         attempt: { type: Number, required: true },
