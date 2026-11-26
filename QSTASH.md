@@ -34,7 +34,10 @@ Clear stale test SMS rows locally: `npm run sms:clear` (dry-run), `npm run sms:c
 | `CRON_BASE_URL` | Yes | Public origin used in signature verify (`https://vercel-izi-finance-backend.vercel.app`) |
 | `CRON_SECRET` | Optional | Manual `curl` with `Authorization: Bearer …` |
 | `QSTASH_TOKEN` | No on Vercel | Only for local `npm run qstash:schedules` |
-| All app secrets | Yes | `MONGO_URI`, M-Pesa, JWT, etc. — cron handlers call `initializeApp()` |
+| `CRON_SMS_DRAIN_ON` | Recommended | Comma jobs that send queued SMS after run (see `.env` / `VERCEL.md`) |
+| `CRON_SMS_PURGE_ON` | Recommended | Comma jobs that delete stuck `Pending` **before** run |
+| `CRON_SMS_*` | Optional | `CRON_SMS_DRAIN_LIMIT`, `CRON_SMS_DRAIN_LIMIT_LOAN_REMINDER`, `CRON_SMS_PURGE_MAX_AGE_MINUTES`, etc. |
+| All app secrets | Yes | `MONGO_URI`, `AT_*`, M-Pesa, JWT, etc. — cron handlers call `initializeApp()` |
 
 Redeploy after changing env vars.
 

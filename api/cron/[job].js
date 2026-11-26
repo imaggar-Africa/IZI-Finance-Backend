@@ -100,6 +100,41 @@ const jobs = {
   },
 };
 
+function smsCronSlugs() {
+  return (
+    process.env.CRON_SMS_DRAIN_ON ||
+    "loan-reminder,reconciliation,group-health,monthly-group-repayment"
+  )
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function purgeSmsBeforeCron(jobSlug) {
+  const onVercel =
+    process.env.VERCEL === "1" ||
+    process.env.VERCEL === "true" ||
+    process.env.IZI_RUNTIME === "vercel";
+  if (!onVercel || process.env.CRON_SMS_PURGE_PENDING === "false") {
+    return { skipped: true, reason: "SMS purge disabled or not on Vercel" };
+  }
+  const allowed =
+    process.env.CRON_SMS_PURGE_ON?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) || smsCronSlugs();
+  if (!allowed.includes(jobSlug)) {
+    return {
+      skipped: true,
+      reason: "SMS purge only on: " + allowed.join(", "),
+    };
+  }
+  const {
+    purgeOutstandingSmsBeforeCron,
+  } = require("../../functions/utils/clearSmsQueue");
+  console.log(`[SMS_PURGE] Before cron job="${jobSlug}"`);
+  return purgeOutstandingSmsBeforeCron();
+}
+
 async function drainSmsAfterCron(jobSlug) {
   const onVercel =
     process.env.VERCEL === "1" ||
@@ -108,18 +143,31 @@ async function drainSmsAfterCron(jobSlug) {
   if (!onVercel || process.env.CRON_SMS_DRAIN === "false") {
     return null;
   }
-  const allowed = (process.env.CRON_SMS_DRAIN_ON || "reconciliation")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const allowed = smsCronSlugs();
   if (!allowed.includes(jobSlug)) {
+    console.warn(
+      `[SMS_DRAIN] Skipped for job="${jobSlug}" (CRON_SMS_DRAIN_ON=${allowed.join(",")}). ` +
+        "Pending rows in sms_queue will not be sent until a drain job runs."
+    );
     return {
       skipped: true,
       reason: "SMS drain runs only on: " + allowed.join(", "),
     };
   }
   const { drainSmsQueueForServerless } = require("../../functions/utils/sms");
-  return drainSmsQueueForServerless();
+  const limitByJob = {
+    "loan-reminder": parseInt(
+      process.env.CRON_SMS_DRAIN_LIMIT_LOAN_REMINDER || "60",
+      10
+    ),
+    "group-health": parseInt(
+      process.env.CRON_SMS_DRAIN_LIMIT_GROUP_HEALTH || "40",
+      10
+    ),
+  };
+  const limit = limitByJob[jobSlug];
+  console.log(`[SMS_DRAIN] Running after cron job="${jobSlug}"${limit ? ` limit=${limit}` : ""}`);
+  return drainSmsQueueForServerless(limit ? { limit } : {});
 }
 
 module.exports = async (req, res) => {
@@ -147,6 +195,13 @@ module.exports = async (req, res) => {
 
   try {
     await ensureInit();
+    let smsPurge = null;
+    try {
+      smsPurge = await purgeSmsBeforeCron(job);
+    } catch (purgeErr) {
+      console.error(`[SMS_PURGE] Cron ${job} pre-purge error:`, purgeErr.message);
+      smsPurge = { error: purgeErr.message };
+    }
     const result = await handler();
     let smsDrain = null;
     try {
@@ -155,7 +210,7 @@ module.exports = async (req, res) => {
       console.error(`[SMS_DRAIN] Cron ${job} post-drain error:`, drainErr.message);
       smsDrain = { error: drainErr.message };
     }
-    res.status(200).json({ ...result, smsDrain });
+    res.status(200).json({ ...result, smsPurge, smsDrain });
   } catch (err) {
     console.error(`Cron job ${job} failed:`, err);
     res.status(500).json({ error: err.message, job });
